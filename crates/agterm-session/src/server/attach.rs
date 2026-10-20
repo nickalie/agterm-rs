@@ -26,7 +26,7 @@
 //!   writer waits for that until the client closes or detaches).
 //!
 //! Meanwhile the connection's own thread reads the client's input, resizes, reply metadata, delegated answers
-//! ([`Pane::answer`]) and its terminal's Kitty answers ([`Pane::relay`]), until it detaches or the connection ends;
+//! ([`Pane::answer`]) and its terminal's Kitty answers ([`Pane::complete`]), until it detaches or the connection ends;
 //! either detaches it and closes the connection.
 
 use std::sync::Arc;
@@ -183,17 +183,13 @@ fn read_messages(stream: &Stream, pane: &Pane, id: u64) -> Result<(), FramingErr
                     tracing::debug!(request, epoch, "a delegated reply nothing waits for was dropped");
                 }
             }
-            AttachClientMessage::Reply {
+            AttachClientMessage::KittyComplete {
+                id: barrier,
                 epoch,
-                generation,
                 data,
             } => {
-                if !pane.relay(id, epoch, generation, &data) {
-                    tracing::debug!(
-                        epoch,
-                        generation,
-                        "a reply of a client not owning the replies was dropped"
-                    );
+                if !pane.complete(id, barrier, epoch, &data) {
+                    tracing::debug!(barrier, epoch, "a Kitty completion nothing waits for was dropped");
                 }
             }
             AttachClientMessage::Detach => return Ok(()),
@@ -277,6 +273,7 @@ fn send_event(stream: &Stream, event: ClientEvent) -> Result<(), FramingError> {
         ClientEvent::Delegated { id, epoch, request } => {
             send(stream, &AttachServerMessage::DelegatedRequest { id, epoch, request })
         }
+        ClientEvent::KittyBarrier { id, epoch } => send(stream, &AttachServerMessage::KittyBarrier { id, epoch }),
         // handled by the writer itself
         ClientEvent::Overflowed { .. } | ClientEvent::Exit(_) => Ok(()),
     }

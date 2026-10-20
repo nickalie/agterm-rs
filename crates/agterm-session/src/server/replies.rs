@@ -21,22 +21,36 @@
 //!   or a denial when the owner changes, the owner falls behind or leaves, the program ends or no answer comes within
 //!   [`DELEGATION_WAIT`], is armed for the dispatch byte, which is fed alone, so Ghostty still parses, validates and
 //!   answers the read; then the held output goes on, scanned again. A pane's helper thread ends a request whose time
-//!   is up and writes what was answered off the PTY's thread.
+//!   is up.
 //! - **Kitty graphics** (APC G): the server's terminal keeps the protocol on, its storage bounded
 //!   ([`KITTY_STORAGE_LIMIT`]), so it places direct images as the clients do (the cursor moves past them, which the
 //!   protocol turned off would not), with its image media off, so a temporary file or shared memory is read once, by a
-//!   client that shows it; its own APC G answers are dropped, and the owner's terminal answers instead
-//!   ([`AttachClientMessage::Reply`](crate::protocol::AttachClientMessage)), only while it owns the replies. Neither
-//!   the formatter snapshot nor, at this pin, the binary snapshot carries images or glyph registrations, so an image
-//!   is not shown again to a client that attaches later.
+//!   client that shows it. An image sent that way (`t=f`, `t=t`, `t=s`) fails to load on the server's terminal, which
+//!   then places nothing: its cursor stays where the owner's moved away from (with the default `C=0`), so the server
+//!   answers CPR and DSR from there and later snapshots put the cursor there, until the program moves it again. Its
+//!   own APC G answers are dropped, and the owner's terminal answers instead: the scanner stops at the byte that runs
+//!   each command ([`vt::Stop::KittyGraphics`]), and the output up to it is followed by a barrier sent to the owner
+//!   alone ([`ClientEvent::KittyBarrier`](super::clients::ClientEvent), when its [`ReplyMetadata::kitty_graphics`]
+//!   says it shows them), which it completes with what its terminal answered
+//!   ([`AttachClientMessage::KittyComplete`](crate::protocol::AttachClientMessage)), even nothing. The output goes on
+//!   meanwhile; the server's replies to what follows wait behind the barrier, so the program reads the owner's answers
+//!   before the answers to its later queries (Kitty's detection sends a query, then DA1, and takes DA1 coming first as
+//!   no support). A barrier ends empty past [`KITTY_WAIT`], when the owner changes, falls behind, leaves or withdraws
+//!   `kitty_graphics`, or past [`HELD_LIMIT`] or [`BARRIER_LIMIT`]. Neither the formatter snapshot nor, at this pin,
+//!   the binary snapshot carries images or glyph registrations, so an image is not shown again to a client that
+//!   attaches later.
+//!
+//! Every reply, whichever thread makes it (a read of the PTY, a client's answer or completion, a resize, a deadline),
+//! is queued in the pane's [`Outlet`] under the pane's lock, in that lock's order; one thread, the pane's helper, takes
+//! them and writes them to the program, so it reads them in the order of its queries.
 //!
 //! # The reply owner
 //!
 //! The leader, else the first managed client attached ([`Lead::reply_owner`](super::lead::Lead::reply_owner)). Every
 //! client is told whether it owns the replies before its first snapshot, then on every change, in order with the
-//! output ([`ClientEvent::ReplyOwner`](super::clients::ClientEvent)), each change counted by a generation; a client's
-//! terminal answers only while it owns them, so no Kitty command is answered twice when the owner changes, though
-//! one answered by the leaving owner after the change is lost. Only the owner's [`ReplyMetadata`] counts, and a
+//! output ([`ClientEvent::ReplyOwner`](super::clients::ClientEvent)), each change counted by a generation; only the
+//! owner is sent Kitty barriers, and a change ends those waiting empty, so no Kitty command is answered twice, though
+//! one the leaving owner was still to answer goes unanswered. Only the owner's [`ReplyMetadata`] counts, and a
 //! client's is forgotten when it detaches.
 //!
 //! # What herdr's pane answered itself
@@ -76,14 +90,14 @@
 //! for DA1 and DA2, and no theme colours, clipboard reads or Kitty graphics: the pseudoconsole stands in their way,
 //! as it stands in front of a plain pane's program (`agterm-term` runs it on a pseudoconsole too).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use agterm_ghostty_vt as vt;
 use agterm_pty::ReadPause;
-use vt::{ReadCandidate, ReadScope};
+use vt::{ReadCandidate, ReadScope, Stop};
 
 use super::clients::ClientId;
 use super::pane::State;
@@ -113,6 +127,13 @@ pub const PARK_LOW: usize = 256 * 1024;
 /// The Kitty image storage of the server's terminal, per screen: it holds the direct images programs place, for
 /// their place in the grid, and nothing else reads them.
 pub const KITTY_STORAGE_LIMIT: u64 = 64 * 1024 * 1024;
+/// How long a Kitty barrier waits for the reply owner's completion before it ends empty (no user is asked: the owner's
+/// terminal answers as it processes the output).
+pub const KITTY_WAIT: Duration = Duration::from_secs(2);
+/// The server's replies held behind Kitty barriers, in bytes, past which every barrier waiting ends empty.
+pub const HELD_LIMIT: usize = 1024 * 1024;
+/// The Kitty barriers waiting (completed ones behind a waiting one included), past which every one ends empty.
+pub const BARRIER_LIMIT: usize = 4096;
 
 /// The introducer of a Kitty graphics answer.
 const KITTY_ANSWER: &[u8] = b"\x1b_G";
@@ -235,11 +256,88 @@ struct Armed {
     answer: Answer,
 }
 
-/// What the server's terminal's effects share with its pane: the replies they queue for the program, the clipboard
-/// answer armed for a dispatch byte, and the appearance a colour scheme query is answered with.
+/// A Kitty graphics command the reply owner's terminal answers ([`State::barrier`]): its answers go to the program in
+/// its place among the server's replies, which are held behind it until it and every barrier before it ended.
+#[derive(Debug)]
+struct Barrier {
+    id: u64,
+    /// The client it was sent to, in its epoch then.
+    client: ClientId,
+    epoch: u64,
+    deadline: Instant,
+    /// Its answers are dropped: the command was printed ([`Pane::print`](super::pane::Pane::print)), not the
+    /// program's.
+    discard: bool,
+    /// The owner's answers once it ended (empty when it ended otherwise); `None` while it waits.
+    answers: Option<Vec<u8>>,
+    /// The server's replies to what followed the command.
+    held: Vec<Vec<u8>>,
+}
+
+/// The replies for the program in order: those ready to be written, then the barriers waiting, each with the server's
+/// replies held behind it.
+#[derive(Debug, Default)]
+struct Sequence {
+    ready: Vec<Vec<u8>>,
+    barriers: VecDeque<Barrier>,
+    /// The bytes held behind barriers.
+    held: usize,
+    /// Replies are dropped (to bytes a print fed, which the program never asked about).
+    discard: bool,
+}
+
+impl Sequence {
+    fn push(&mut self, data: &[u8]) {
+        if self.discard {
+            return;
+        }
+        let Some(last) = self.barriers.back_mut() else {
+            self.ready.push(data.to_vec());
+            return;
+        };
+        last.held.push(data.to_vec());
+        self.held += data.len();
+        if self.held > HELD_LIMIT {
+            tracing::warn!(
+                held = self.held,
+                "too many replies wait for Kitty answers; the waiting barriers end empty"
+            );
+            self.end(|_| true);
+        }
+    }
+
+    /// End every waiting barrier `which` picks, empty; then make ready what ended.
+    fn end(&mut self, which: impl Fn(&Barrier) -> bool) {
+        for barrier in &mut self.barriers {
+            if barrier.answers.is_none() && which(barrier) {
+                barrier.answers = Some(Vec::new());
+            }
+        }
+        self.drain();
+    }
+
+    /// The barriers that ended, from the front up to the first one waiting, made ready with the replies they held.
+    fn drain(&mut self) {
+        while let Some(barrier) = self.barriers.pop_front() {
+            let Some(answers) = barrier.answers else {
+                self.barriers.push_front(barrier);
+                return;
+            };
+            if !answers.is_empty() && !barrier.discard {
+                self.ready.push(answers);
+            }
+            self.held -= barrier.held.iter().map(Vec::len).sum::<usize>();
+            self.ready.extend(barrier.held);
+        }
+    }
+}
+
+/// What the server's terminal's effects share with its pane: the replies they queue for the program in order with the
+/// reply owner's Kitty answers ([`Sequence`]), the clipboard answer armed for a dispatch byte, and the appearance a
+/// colour scheme query is answered with. The replies change under the pane's lock only.
 #[derive(Debug, Default)]
 pub struct Outlet {
-    replies: Mutex<Vec<Vec<u8>>>,
+    sequence: Mutex<Sequence>,
     armed: Mutex<Option<Armed>>,
     dark: AtomicBool,
 }
@@ -249,25 +347,70 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Outlet {
-    /// The replies queued, taken; only under the pane's lock, so they change only under it.
+    /// The replies ready to be written to the program, in order, taken. The pane's replies helper is the only one that
+    /// takes them, and writes each batch before it takes the next, so they reach the program in the order they were
+    /// made ready.
     pub fn take(&self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut *lock(&self.replies))
+        std::mem::take(&mut lock(&self.sequence).ready)
     }
 
-    /// Queue `data` for the program.
-    pub fn push(&self, data: &[u8]) {
-        lock(&self.replies).push(data.to_vec());
-    }
-
-    /// The replies queued.
+    /// Whether replies are ready to be written.
     #[must_use]
-    pub fn queued(&self) -> usize {
-        lock(&self.replies).len()
+    pub fn ready(&self) -> bool {
+        !lock(&self.sequence).ready.is_empty()
     }
 
-    /// Drop the replies queued after the first `len`.
-    pub fn truncate(&self, len: usize) {
-        lock(&self.replies).truncate(len);
+    /// Queue `data` for the program, behind every Kitty barrier waiting.
+    pub fn push(&self, data: &[u8]) {
+        lock(&self.sequence).push(data);
+    }
+
+    /// Drop the replies queued from now on (`true`), or queue them again (`false`).
+    pub fn discard(&self, discard: bool) {
+        lock(&self.sequence).discard = discard;
+    }
+
+    /// Hold the replies queued from now on behind `barrier`, until it ends.
+    fn open(&self, barrier: Barrier) {
+        let mut sequence = lock(&self.sequence);
+        if sequence.barriers.len() >= BARRIER_LIMIT {
+            tracing::warn!("too many Kitty barriers wait; they end empty");
+            sequence.end(|_| true);
+        }
+        sequence.barriers.push_back(barrier);
+    }
+
+    /// End the barrier `id`, sent to `client` in its epoch `epoch`, with the owner's `answers`; whether it waited.
+    fn complete(&self, id: u64, client: ClientId, epoch: u64, answers: Vec<u8>) -> bool {
+        let mut sequence = lock(&self.sequence);
+        let Some(barrier) = sequence.barriers.iter_mut().find(|barrier| {
+            barrier.id == id && barrier.client == client && barrier.epoch == epoch && barrier.answers.is_none()
+        }) else {
+            return false;
+        };
+        barrier.answers = Some(answers);
+        sequence.drain();
+        true
+    }
+
+    /// End the waiting barriers empty: every one (`None`), or those sent to `client`.
+    fn end(&self, client: Option<ClientId>) {
+        lock(&self.sequence).end(|barrier| client.is_none_or(|client| barrier.client == client));
+    }
+
+    /// End the waiting barriers whose time is up at `now`, empty.
+    fn expire(&self, now: Instant) {
+        lock(&self.sequence).end(|barrier| barrier.deadline <= now);
+    }
+
+    /// When the next waiting barrier is to end; `None` with none waiting.
+    fn deadline(&self) -> Option<Instant> {
+        lock(&self.sequence)
+            .barriers
+            .iter()
+            .filter(|barrier| barrier.answers.is_none())
+            .map(|barrier| barrier.deadline)
+            .min()
     }
 
     /// The appearance a colour scheme query is answered with from now on.
@@ -417,21 +560,24 @@ pub struct Replies {
     parked: Vec<u8>,
     pending: Option<Pending>,
     next_id: u64,
-    /// The program ended: every read is denied without asking.
+    /// The program ended: every read is denied without asking, and no Kitty barrier opens.
     denied: bool,
+    /// How long a clipboard read waits for the owner's answer.
     wait: Duration,
+    /// How long a Kitty barrier waits for the owner's completion.
+    kitty_wait: Duration,
 }
 
 impl Replies {
     /// The replies of a session whose creator `creator` owns them with `metadata`; the terminal answers with
-    /// [`Replies::facts`].
+    /// [`Replies::facts`]. A clipboard read waits `waits.0` for the owner's answer, a Kitty barrier `waits.1`.
     #[must_use]
     pub fn new(
         outlet: Arc<Outlet>,
         timer: Arc<Condvar>,
         creator: ClientId,
         metadata: ReplyMetadata,
-        wait: Duration,
+        (wait, kitty_wait): (Duration, Duration),
     ) -> Self {
         let facts = Facts::of(Some(&metadata));
         outlet.set_scheme(facts.color_scheme);
@@ -448,6 +594,7 @@ impl Replies {
             next_id: 1,
             denied: false,
             wait,
+            kitty_wait,
         }
     }
 
@@ -472,10 +619,14 @@ impl Replies {
         self.parked.len()
     }
 
-    /// When the waiting read is to be denied; `None` with none waiting.
+    /// When the waiting read is to be denied or the next Kitty barrier to end; `None` with neither waiting.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
-        self.pending.as_ref().map(|pending| pending.deadline)
+        let read = self.pending.as_ref().map(|pending| pending.deadline);
+        match (read, self.outlet.deadline()) {
+            (Some(read), Some(barrier)) => Some(read.min(barrier)),
+            (read, barrier) => read.or(barrier),
+        }
     }
 
     /// Whether the waiting read is to be denied now.
@@ -488,11 +639,14 @@ impl Replies {
 
     /// `bytes` were fed to the terminal outside the program's output (a print): the scanner follows them, so it
     /// stays in step with the terminal's parser; a read among them is not delegated (the terminal finds nothing
-    /// armed for it and denies it, to no program).
-    pub fn observe(&mut self, mut bytes: &[u8]) {
-        while let Some((at, _)) = self.scanner.find(bytes) {
+    /// armed for it and denies it, to no program). Whether they held a Kitty graphics command.
+    pub fn observe(&mut self, mut bytes: &[u8]) -> bool {
+        let mut kitty = false;
+        while let Some((at, stop)) = self.scanner.next(bytes) {
+            kitty |= stop == Stop::KittyGraphics;
             bytes = &bytes[at + 1..];
         }
+        kitty
     }
 
     fn cancel(&mut self) {
@@ -518,9 +672,19 @@ impl State {
     }
 
     /// Feed `bytes` up to the next clipboard read the owner is to answer, answering the others (denied) at once;
-    /// the dispatch byte of a delegated one and everything after it are held.
+    /// the dispatch byte of a delegated one and everything after it are held. A Kitty graphics command opens a barrier
+    /// right after the byte that runs it.
     fn pump(&mut self, mut bytes: &[u8]) {
-        while let Some((at, read)) = self.replies.scanner.find(bytes) {
+        while let Some((at, stop)) = self.replies.scanner.next(bytes) {
+            let read = match stop {
+                Stop::KittyGraphics => {
+                    self.feed(&bytes[..=at]);
+                    self.barrier(false);
+                    bytes = &bytes[at + 1..];
+                    continue;
+                }
+                Stop::Read(read) => read,
+            };
             self.feed(&bytes[..at]);
             let (byte, rest) = (bytes[at], &bytes[at + 1..]);
             if let Some(answer) = self.delegate(read) {
@@ -533,6 +697,56 @@ impl State {
             }
         }
         self.feed(bytes);
+    }
+
+    /// The output fed so far ended with a Kitty graphics command, which the reply owner's terminal answers: a barrier
+    /// sent to it, after that output, behind which the server's replies to what follows wait for its answers (dropped
+    /// when `discard`). None while no owner shows Kitty graphics, the owner would not get it before its resync, or
+    /// once the program ended.
+    pub(super) fn barrier(&mut self, discard: bool) {
+        let replies = &mut self.replies;
+        let shows = |owner: &ClientId| replies.metadata.get(owner).is_some_and(|m| m.kitty_graphics);
+        let Some(client) = replies.owner.filter(|owner| !replies.denied && shows(owner)) else {
+            return;
+        };
+        let id = replies.next_id;
+        replies.next_id += 1;
+        let Some(epoch) = self.clients.barrier(client, id) else {
+            return;
+        };
+        self.replies.outlet.open(Barrier {
+            id,
+            client,
+            epoch,
+            deadline: Instant::now() + self.replies.kitty_wait,
+            discard,
+            answers: None,
+            held: Vec::new(),
+        });
+        self.replies.timer.notify_all();
+    }
+
+    /// The client `client`'s completion of the Kitty barrier `id`, sent in its epoch `epoch`, with its terminal's
+    /// `answers`: taken, ending the barrier, only when that barrier was sent to it in that epoch, still waits, and the
+    /// client has not fallen behind since; answers that are not whole Kitty answers ([`is_kitty_reply`]) end it empty
+    /// and are dropped. Whether they were taken.
+    pub(super) fn complete(&mut self, client: ClientId, id: u64, epoch: u64, answers: &[u8]) -> bool {
+        if self.clients.epoch(client) != Some(epoch) || self.clients.overflowed(client) != Some(false) {
+            return false;
+        }
+        if !answers.is_empty() && !is_kitty_reply(answers) {
+            self.replies.outlet.complete(id, client, epoch, Vec::new());
+            return false;
+        }
+        self.replies.outlet.complete(id, client, epoch, answers.to_vec())
+    }
+
+    /// End what is due at `now`: the waiting read (denied) and the Kitty barriers whose time is up (empty).
+    pub(super) fn expire(&mut self, now: Instant) {
+        if self.replies.due(now) {
+            self.settle(Answer::Denied);
+        }
+        self.replies.outlet.expire(now);
     }
 
     /// The program's output `chunk` into the terminal and every client.
@@ -610,10 +824,11 @@ impl State {
     }
 
     /// The program ended: the waiting read and every later one are denied without asking, so its last output goes
-    /// through.
+    /// through, and the Kitty barriers end.
     pub(super) fn deny_from_now(&mut self) {
         self.replies.denied = true;
         self.settle(Answer::Denied);
+        self.replies.outlet.end(None);
     }
 
     /// The answer the client `client` gave to the request `id` in its epoch `epoch`: taken, ending the waiting read,
@@ -629,24 +844,8 @@ impl State {
         true
     }
 
-    /// Kitty graphics answers the client `client` relayed from its terminal in its epoch `epoch` under the ownership
-    /// report `generation`: queued for the program only while it owns the replies in that generation and that epoch,
-    /// has not fallen behind, and `data` is whole Kitty answers ([`is_kitty_reply`]).
-    pub(super) fn relay(&mut self, client: ClientId, epoch: u64, generation: u32, data: &[u8]) -> bool {
-        let owns = self.replies.owner == Some(client) && self.replies.generation == generation;
-        if !owns
-            || self.clients.epoch(client) != Some(epoch)
-            || self.clients.overflowed(client) != Some(false)
-            || !is_kitty_reply(data)
-        {
-            return false;
-        }
-        self.replies.outlet.push(data);
-        true
-    }
-
-    /// The client `client` fell behind: a read waiting for its answer is denied (by the helper thread), since the
-    /// request went with the output it was not sent.
+    /// The client `client` fell behind: a read waiting for its answer is denied (by the helper thread), and its Kitty
+    /// barriers end empty, since the request and the barriers went with the output it was not sent.
     pub(super) fn fell_behind(&mut self, client: ClientId) {
         if self
             .replies
@@ -656,12 +855,17 @@ impl State {
         {
             self.replies.cancel();
         }
+        self.replies.outlet.end(Some(client));
     }
 
-    /// The facts of the client `client` (attached) for the replies; they count while it owns them.
+    /// The facts of the client `client` (attached) for the replies; they count while it owns them. An owner that no
+    /// longer shows Kitty graphics ends its barriers empty.
     pub(super) fn remember(&mut self, client: ClientId, metadata: ReplyMetadata) {
         if self.lead.role(client).is_none() {
             return;
+        }
+        if !metadata.kitty_graphics {
+            self.replies.outlet.end(Some(client));
         }
         self.replies.metadata.insert(client, metadata);
         self.apply_facts();
@@ -675,8 +879,8 @@ impl State {
     }
 
     /// After a change of the lead: the reply owner it makes, told (the leaving owner and the new one), its facts
-    /// applied, a waiting read denied (by the helper thread) when the owner changed; the facts of clients gone
-    /// forgotten.
+    /// applied, a waiting read denied (by the helper thread) and the Kitty barriers ended empty when the owner
+    /// changed; the facts of clients gone forgotten.
     pub(super) fn refresh_owner(&mut self) {
         let lead = &self.lead;
         self.replies.metadata.retain(|id, _| lead.role(*id).is_some());
@@ -692,6 +896,8 @@ impl State {
             }
             self.replies.owner = owner;
             self.replies.cancel();
+            self.replies.outlet.end(None);
+            self.replies.timer.notify_all();
         }
         self.apply_facts();
     }
@@ -715,8 +921,7 @@ impl State {
                 self.replies.outlet.push(scheme(facts.color_scheme).report());
             }
         }
-        // what the terminal answered (a mode 2048 report too) is written by whoever lets go of the lock, or by the
-        // helper thread
+        // what the terminal answered (a mode 2048 report too) is written by the helper thread
         self.replies.timer.notify_all();
     }
 }
@@ -822,6 +1027,104 @@ mod tests {
                 .xtversion()
                 .is_some_and(|version| version.starts_with("ghostty "))
         );
+    }
+
+    fn barrier(id: u64, client: ClientId, deadline: Instant) -> Barrier {
+        Barrier {
+            id,
+            client,
+            epoch: 1,
+            deadline,
+            discard: false,
+            answers: None,
+            held: Vec::new(),
+        }
+    }
+
+    fn chunks(list: &[&[u8]]) -> Vec<Vec<u8>> {
+        list.iter().map(|chunk| chunk.to_vec()).collect()
+    }
+
+    #[test]
+    fn replies_wait_behind_barriers_and_go_in_order_once_those_before_them_ended() {
+        let outlet = Outlet::default();
+        let later = Instant::now() + Duration::from_secs(60);
+        outlet.push(b"a");
+        outlet.open(barrier(1, 7, later));
+        outlet.push(b"b");
+        outlet.open(barrier(2, 7, later));
+        outlet.push(b"c");
+        assert_eq!(outlet.take(), chunks(&[b"a"]));
+        assert_eq!(outlet.deadline(), Some(later));
+        // the second ends first: kept until the first ends
+        assert!(outlet.complete(2, 7, 1, b"K2".to_vec()));
+        assert!(!outlet.ready());
+        // another client's, another epoch's, an unknown barrier's, a second completion: refused
+        assert!(!outlet.complete(1, 8, 1, Vec::new()));
+        assert!(!outlet.complete(1, 7, 2, Vec::new()));
+        assert!(!outlet.complete(3, 7, 1, Vec::new()));
+        assert!(!outlet.complete(2, 7, 1, Vec::new()));
+        assert!(outlet.complete(1, 7, 1, b"K1".to_vec()));
+        assert_eq!(outlet.take(), chunks(&[b"K1", b"b", b"K2", b"c"]));
+        assert_eq!(outlet.deadline(), None);
+    }
+
+    #[test]
+    fn a_printed_commands_answers_and_a_prints_replies_are_dropped() {
+        let outlet = Outlet::default();
+        let later = Instant::now() + Duration::from_secs(60);
+        // an empty completion adds nothing; a printed command's answers are dropped
+        let mut printed = barrier(3, 7, later);
+        printed.discard = true;
+        outlet.open(printed);
+        outlet.push(b"d");
+        outlet.open(barrier(4, 7, later));
+        assert!(outlet.complete(3, 7, 1, b"K3".to_vec()));
+        assert!(outlet.complete(4, 7, 1, Vec::new()));
+        assert_eq!(outlet.take(), chunks(&[b"d"]));
+        // replies discarded meanwhile are never queued
+        outlet.discard(true);
+        outlet.push(b"printed");
+        outlet.discard(false);
+        assert!(!outlet.ready());
+    }
+
+    #[test]
+    fn barriers_end_empty_at_their_deadline_for_their_client_or_past_the_limits() {
+        let outlet = Outlet::default();
+        let now = Instant::now();
+        let later = now + Duration::from_secs(60);
+        outlet.open(barrier(1, 7, now));
+        outlet.push(b"a");
+        outlet.open(barrier(2, 7, later));
+        outlet.push(b"b");
+        assert_eq!(outlet.deadline(), Some(now));
+        outlet.expire(now);
+        assert_eq!(outlet.take(), chunks(&[b"a"]));
+        assert!(!outlet.complete(1, 7, 1, b"late".to_vec()), "a late completion");
+        // another client's end leaves it; its own ends it
+        outlet.end(Some(8));
+        assert!(!outlet.ready());
+        outlet.end(Some(7));
+        assert_eq!(outlet.take(), chunks(&[b"b"]));
+        // past the held bytes
+        outlet.open(barrier(3, 7, later));
+        outlet.push(&vec![b'x'; HELD_LIMIT]);
+        assert!(!outlet.ready());
+        outlet.push(b"y");
+        assert_eq!(outlet.take().len(), 2);
+        assert_eq!(outlet.deadline(), None);
+        // past the barriers: those waiting end, the new one waits
+        for id in 0..BARRIER_LIMIT as u64 {
+            outlet.open(barrier(10 + id, 7, later));
+        }
+        outlet.push(b"z");
+        outlet.open(barrier(1, 7, later));
+        assert_eq!(outlet.take(), chunks(&[b"z"]));
+        outlet.push(b"behind");
+        assert!(!outlet.ready());
+        outlet.end(None);
+        assert_eq!(outlet.take(), chunks(&[b"behind"]));
     }
 
     fn read(location: vt::ClipboardLocation, mimes: Vec<&[u8]>, list: bool) -> vt::ClipboardReadRequest<'_> {

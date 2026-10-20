@@ -66,8 +66,8 @@ use serde::{Deserialize, Serialize};
 pub const MAGIC: [u8; 4] = *b"AGLS";
 
 /// The protocol of this build's message frames. Bumped whenever a message type's postcard layout changes (2: the reply
-/// owner's [`AttachClientMessage::Reply`] and [`AttachServerMessage::ReplyOwner`], the colour scheme in
-/// [`ReplyMetadata`], the list-only clipboard read).
+/// owner's [`AttachServerMessage::ReplyOwner`], its Kitty graphics answers by [`AttachServerMessage::KittyBarrier`] and
+/// [`AttachClientMessage::KittyComplete`], the colour scheme in [`ReplyMetadata`], the list-only clipboard read).
 pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The size of a frame's header: magic, protocol, kind, length.
@@ -951,13 +951,16 @@ pub enum AttachClientMessage {
     /// The answer to the [`AttachServerMessage::DelegatedRequest`] `id` the client was sent in its epoch `epoch`;
     /// dropped unless that request still waits for this client's answer and `epoch` is still its current one.
     DelegatedReply { id: u64, epoch: u64, reply: DelegatedReply },
-    /// What the client's terminal answered the program with to Kitty graphics commands (APC G: whole
-    /// `ESC _ G … ESC \` answers, nothing else), sent only while the client owns the replies (the last
-    /// [`AttachServerMessage::ReplyOwner`] it read said so) and never for a snapshot's bytes; `epoch` is its current
-    /// epoch and `generation` that report's. Written to the program whatever the lead, after the replies queued before
-    /// it; dropped unless the client still owns the replies in that generation and that epoch. A client's terminal
-    /// answers nothing else: the server answers every other query itself.
-    Reply { epoch: u64, generation: u32, data: Vec<u8> },
+    /// The end of the [`AttachServerMessage::KittyBarrier`] `id` the client was sent in its epoch `epoch`: `data` is
+    /// what its terminal answered the program with to the Kitty graphics commands (APC G) in the output it was sent
+    /// since its previous barrier (or since its snapshot, or since it was told it owns the replies) — whole
+    /// `ESC _ G … ESC \` answers, nothing else, and empty when its terminal answered none. Sent once per barrier, even
+    /// empty, once the client's terminal has *processed* every byte of output before the barrier (receiving it is not
+    /// enough), and never for a snapshot's bytes. The server writes `data` to the program in the place the barrier holds
+    /// among its own replies, whatever the lead; it drops it unless that barrier still waits for this client in that
+    /// epoch, and data that is not whole Kitty answers ends the barrier empty. A client's terminal answers nothing
+    /// else: the server answers every other query itself.
+    KittyComplete { id: u64, epoch: u64, data: Vec<u8> },
     /// Leave the session running and close the connection.
     Detach,
 }
@@ -1025,7 +1028,9 @@ pub struct ReplyMetadata {
     pub cell_width_px: u32,
     /// Zero when unknown.
     pub cell_height_px: u32,
-    /// Whether the client's terminal shows Kitty graphics.
+    /// Whether the client's terminal shows Kitty graphics, and so answers their commands: only an owner that does is
+    /// sent [`AttachServerMessage::KittyBarrier`]s (one that cannot fence an outer terminal's answers says it does
+    /// not), and withdrawing it ends the barriers waiting for it.
     pub kitty_graphics: bool,
     /// The desktop's appearance; `None` when unknown.
     pub color_scheme: Option<ColorScheme>,
@@ -1055,10 +1060,22 @@ pub enum AttachServerMessage {
     /// The client's role changed; `generation` counts the session's leadership changes.
     Role { role: LeadRole, generation: u32 },
     /// Whether the client owns the session's replies from here on in the stream (its terminal answers Kitty graphics
-    /// commands, [`AttachClientMessage::Reply`]; no other client's terminal answers anything). The owner is the leader,
-    /// else the first managed client attached. Sent to every client before its first snapshot (after its role), then
-    /// whenever its ownership changes; `generation` counts the session's ownership changes.
+    /// commands, [`AttachServerMessage::KittyBarrier`]; no other client's terminal answers anything). The owner is the
+    /// leader, else the first managed client attached. Sent to every client before its first snapshot (after its
+    /// role), then whenever its ownership changes; `generation` counts the session's ownership changes.
     ReplyOwner { owner: bool, generation: u32 },
+    /// The program's output before this ended with a Kitty graphics command (APC G), which the reply owner's terminal
+    /// answers: sent to it alone (when its [`ReplyMetadata::kitty_graphics`] says it shows them), in its epoch `epoch`,
+    /// right after the [`AttachServerMessage::Output`] that ends at the byte that runs the command — for a command ended
+    /// by ST that byte is ST's ESC, so a terminal fed only that far sits in its escape state, and a client relaying to
+    /// an outer terminal injects nothing there (its own fence, a DA1 whose answer tells it the outer terminal's Kitty
+    /// answers are all in, goes after the `\`). The client answers with [`AttachClientMessage::KittyComplete`], even
+    /// when its terminal answered nothing. Meanwhile the output goes on, and the server holds its own answers to
+    /// what follows the command, so the program reads every answer in the order of its queries. A barrier not
+    /// completed within the server's deadline, or when the owner changes, falls behind, leaves or withdraws
+    /// `kitty_graphics`, ends empty, and its completion is dropped; a client relaying to an outer terminal keeps its
+    /// expired fence until the outer DA1 answer comes, discarding the Kitty answers before it.
+    KittyBarrier { id: u64, epoch: u64 },
     /// A request only the reply owner can answer, sent to it alone, in order with the output: the output up to the
     /// program's request came before it, the output after it waits for the answer, or for the request's end (denied
     /// when the owner changes, the client falls behind or leaves, or no answer comes within the server's deadline).

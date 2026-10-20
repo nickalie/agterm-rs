@@ -361,7 +361,7 @@ fn shown(bytes: &[u8]) -> String {
 }
 
 /// A client attached to a pane, its events read into a terminal of its own whose answers it keeps: the Kitty
-/// graphics ones are relayed while it owns the replies, as an attach client's are.
+/// graphics ones it gave since its previous barrier complete each barrier it is sent, as an attach client's do.
 struct Viewer {
     subscription: Subscription,
     terminal: vt::Terminal,
@@ -370,8 +370,10 @@ struct Viewer {
     owner: Option<u32>,
     output: Vec<u8>,
     delegated: Vec<(u64, u64, DelegatedRequest)>,
-    /// What [`Pane::relay`] said for each Kitty answer it was given.
-    relayed: Vec<bool>,
+    /// The barriers it was sent, by id and epoch.
+    barriers: Vec<(u64, u64)>,
+    /// What each barrier was completed with, and what [`Pane::complete`] said.
+    completed: Vec<(Vec<u8>, bool)>,
 }
 
 struct Answers(Arc<Mutex<Vec<Vec<u8>>>>);
@@ -403,7 +405,8 @@ impl Viewer {
             owner: None,
             output: Vec::new(),
             delegated: Vec::new(),
-            relayed: Vec::new(),
+            barriers: Vec::new(),
+            completed: Vec::new(),
         })
     }
 
@@ -411,7 +414,8 @@ impl Viewer {
         self.subscription.id()
     }
 
-    /// Receive one event within `timeout` and relay its Kitty answers; false when none came.
+    /// Receive one event within `timeout`, completing a barrier with its terminal's Kitty answers; false when none
+    /// came.
     fn receive(&mut self, pane: &Pane, timeout: Duration) -> bool {
         let event = match self.subscription.recv_timeout(timeout) {
             Ok(event) => event,
@@ -422,27 +426,38 @@ impl Viewer {
                 self.epoch = epoch;
                 self.terminal.vt_write(&data);
                 // a snapshot's answers are none of the program's
-                self.answers.lock().unwrap_or_else(PoisonError::into_inner).clear();
+                self.take_answers();
             }
             ClientEvent::Output { data, .. } => {
                 self.output.extend_from_slice(&data);
                 self.terminal.vt_write(&data);
-                self.relay(pane);
             }
-            ClientEvent::ReplyOwner { owner, generation } => self.owner = owner.then_some(generation),
+            ClientEvent::ReplyOwner { owner, generation } => {
+                // only answers given while it owns the replies are the program's
+                self.take_answers();
+                self.owner = owner.then_some(generation);
+            }
             ClientEvent::Delegated { id, epoch, request } => self.delegated.push((id, epoch, request)),
+            ClientEvent::KittyBarrier { id, epoch } => {
+                self.barriers.push((id, epoch));
+                let answers = self.take_answers();
+                let taken = pane.complete(self.id(), id, epoch, &answers);
+                self.completed.push((answers, taken));
+            }
             _ => {}
         }
         true
     }
 
-    /// Its terminal's Kitty answers to the pane, while it owns the replies (and, to see them refused, while not).
-    fn relay(&mut self, pane: &Pane) {
+    /// Its terminal's Kitty answers since the last call (its other answers are the server's to give).
+    fn take_answers(&self) -> Vec<u8> {
         let answers = std::mem::take(&mut *self.answers.lock().unwrap_or_else(PoisonError::into_inner));
-        for answer in answers.iter().filter(|answer| answer.starts_with(b"\x1b_G")) {
-            let generation = self.owner.unwrap_or(0);
-            self.relayed.push(pane.relay(self.id(), self.epoch, generation, answer));
-        }
+        answers
+            .iter()
+            .filter(|answer| answer.starts_with(b"\x1b_G"))
+            .flatten()
+            .copied()
+            .collect()
     }
 
     fn drain(&mut self, pane: &Pane) {
@@ -692,10 +707,11 @@ fn a_clipboard_read_is_denied_by_its_owner_its_deadline_an_owner_change_or_no_ow
     let (id, epoch, _) = owner.delegated[0].clone();
     assert!(pane.answer(owner.id(), id, epoch, DelegatedReply::Denied));
     owner.expect(&pane, "REPLY-0:");
-    // unanswered: denied at its deadline, a late answer refused
+    // unanswered: denied at its deadline, a late answer refused; the clock starts before the probe writes the read,
+    // so before the server starts the read's deadline
+    let asked = Instant::now();
     go(gate.path(), 1)?;
     owner.until(&pane, "the second read", |viewer| viewer.delegated.len() == 2);
-    let asked = Instant::now();
     owner.expect(&pane, "REPLY-1:");
     assert!(
         asked.elapsed() >= Duration::from_millis(900),
@@ -758,6 +774,7 @@ fn a_temporary_file_image_is_read_by_the_owner_alone_and_acknowledged_once() -> 
     let spec = probe(&[query.as_bytes()], &gated(gate.path(), 3000));
     let mut config = pane_config("kitty-t", dir.path(), spec);
     config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
     let (pane, creator) = Pane::spawn(config)?;
     let mut owner = Viewer::new(creator, Some(&temp_dir))?;
     // a client that does not show images from temporary files: its terminal's error answer is not the program's
@@ -766,8 +783,11 @@ fn a_temporary_file_image_is_read_by_the_owner_alone_and_acknowledged_once() -> 
     owner.expect(&pane, "PROBE-DONE");
     other.expect(&pane, "PROBE-DONE");
     assert_eq!(replies(&shown(&owner.output)), [b"\x1b_Gi=7;OK\x1b\\".to_vec()]);
-    assert_eq!(owner.relayed, [true]);
-    assert!(other.relayed.iter().all(|relayed| !relayed), "{:?}", other.relayed);
+    assert_eq!(owner.completed, [(b"\x1b_Gi=7;OK\x1b\\".to_vec(), true)]);
+    assert!(
+        other.barriers.is_empty(),
+        "a client not owning the replies was sent a barrier"
+    );
     assert!(!image.exists(), "the owner's terminal took the temporary file");
     let shown_image = owner
         .terminal
@@ -788,6 +808,7 @@ fn a_direct_image_moves_the_servers_cursor_as_the_owners_and_is_acknowledged_onc
     let spec = probe(&[query.as_bytes()], &gated(gate.path(), 3000));
     let mut config = pane_config("kitty-d", dir.path(), spec);
     config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
     let (pane, creator) = Pane::spawn(config)?;
     let mut owner = Viewer::new(creator, None)?;
     let mut other = Viewer::new(pane.try_attach(SIZE, None)?, None)?;
@@ -795,8 +816,17 @@ fn a_direct_image_moves_the_servers_cursor_as_the_owners_and_is_acknowledged_onc
     owner.expect(&pane, "PROBE-DONE");
     other.expect(&pane, "PROBE-DONE");
     assert_eq!(replies(&shown(&owner.output)), [b"\x1b_Gi=9;OK\x1b\\".to_vec()]);
-    assert_eq!(owner.relayed, [true]);
-    assert_eq!(other.relayed, [false], "a client not owning the replies is refused");
+    let ok = b"\x1b_Gi=9;OK\x1b\\".to_vec();
+    assert_eq!(owner.completed, [(ok.clone(), true)]);
+    assert!(
+        other.barriers.is_empty(),
+        "a client not owning the replies was sent a barrier"
+    );
+    let (id, epoch) = owner.barriers[0];
+    assert!(
+        !pane.complete(other.id(), id, epoch, &ok),
+        "another client's completion"
+    );
     // both terminals at the session's end, where the program's last output left them
     assert!(pane.wait_exit(PATIENCE).is_some());
     owner.drain(&pane);
@@ -806,6 +836,47 @@ fn a_direct_image_moves_the_servers_cursor_as_the_owners_and_is_acknowledged_onc
         owner.terminal.cursor(),
         "the server's cursor stands where the owner's does"
     );
+    Ok(())
+}
+
+/// Kitty's documented detection: a query, then DA1, in one write; the program takes DA1 coming first as no support.
+#[cfg(unix)]
+const KITTY_QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+
+#[cfg(unix)]
+#[test]
+fn a_kitty_query_is_answered_before_the_queries_after_it() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    // answered by the owner; then a transmission it answers nothing to; then the query once the owner says it shows
+    // no Kitty graphics, which no barrier waits for
+    let silent: &[u8] = b"\x1b_Gi=32,s=1,v=1,a=T,t=d,f=24,q=2;AAAA\x1b\\\x1b[c";
+    let spec = probe(&[KITTY_QUERY, silent, KITTY_QUERY], &gated(gate.path(), 3000));
+    let mut config = pane_config("kitty-order", dir.path(), spec);
+    config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let mut owner = Viewer::new(creator, None)?;
+    go(gate.path(), 0)?;
+    owner.expect(&pane, "REPLY-0:");
+    go(gate.path(), 1)?;
+    owner.expect(&pane, "REPLY-1:");
+    let without = ReplyMetadata {
+        kitty_graphics: false,
+        ..metadata()
+    };
+    pane.set_metadata(owner.id(), without);
+    go(gate.path(), 2)?;
+    owner.expect(&pane, "PROBE-DONE");
+    let ok = b"\x1b_Gi=31;OK\x1b\\".to_vec();
+    let da1 = b"\x1b[?62;22;52c".to_vec();
+    assert_eq!(
+        replies(&shown(&owner.output)),
+        [[ok.clone(), da1.clone()].concat(), da1.clone(), da1],
+        "{:?}",
+        shown(&owner.output)
+    );
+    assert_eq!(owner.completed, [(ok, true), (Vec::new(), true)]);
     Ok(())
 }
 

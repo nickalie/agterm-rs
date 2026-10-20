@@ -237,10 +237,15 @@ fn every_attach_client_message_round_trips() {
             epoch: 2,
             reply: DelegatedReply::Clipboard { text: None },
         },
-        AttachClientMessage::Reply {
+        AttachClientMessage::KittyComplete {
+            id: u64::MAX,
             epoch: 3,
-            generation: u32::MAX,
             data: b"\x1b_Gi=1;OK\x1b\\".to_vec(),
+        },
+        AttachClientMessage::KittyComplete {
+            id: 1,
+            epoch: 1,
+            data: Vec::new(),
         },
         AttachClientMessage::DelegatedReply {
             id: 4,
@@ -331,6 +336,9 @@ fn every_reply_message_round_trips() {
     }
     for (owner, generation) in [(true, 7), (false, 0), (true, u32::MAX)] {
         messages.push(AttachServerMessage::ReplyOwner { owner, generation });
+    }
+    for (id, epoch) in [(1, 1), (u64::MAX, 2)] {
+        messages.push(AttachServerMessage::KittyBarrier { id, epoch });
     }
     for message in &messages {
         roundtrip_message(message).unwrap();

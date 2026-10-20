@@ -969,8 +969,9 @@ Order after Task 7, as two lanes that meet:
         overrides stay; its appearance answers `CSI ? 996 n` and a changed one sends the mode-2031 report. Defaults:
         Ghostty's fg `#ffffff`, bg `#282c34`, cursor unset, the library palette, cell 0x0 px, Light. Wire (agreed
         with Codex): protocol 2, `ReplyMetadata.color_scheme`, `AttachServerMessage::ReplyOwner { owner,
-        generation }` to every client before its first snapshot and on each change, `AttachClientMessage::Reply
-        { epoch, generation, data }` for the owner's Kitty answers, `DelegatedRequest::ClipboardRead.list_only`,
+        generation }` to every client before its first snapshot and on each change, the owner's Kitty answers by
+        `AttachServerMessage::KittyBarrier { id, epoch }` and `AttachClientMessage::KittyComplete { id, epoch, data }`
+        (review round 1, with Codex, in place of an unsolicited `Reply`), `DelegatedRequest::ClipboardRead.list_only`,
         `DelegatedReply::Clipboard.text: Option`
 - [x] OSC 52 reads as Technical Details says: scan and stop, the output up to that point delivered, a single-recipient
       request with a deadline, denied with no owner or on timeout, parsing resumed
@@ -978,12 +979,17 @@ Order after Task 7, as two lanes that meet:
         past 1 MiB held, resume under 256 KiB) while `ClientEvent::Delegated` goes to the owner in its epoch; its
         answer (`Pane::answer`, matched by id, client and epoch) or a denial (no owner, the owner changing, the
         client behind, the program's end, `DELEGATION_WAIT` 30 s) is armed for the dispatch byte, then the held
-        output is rescanned. A helper thread per pane ends due requests and writes replies queued off the PTY
-        thread. Kitty's OSC 5522 reads go the same way (`list_only` for a listing)
+        output is rescanned. A helper thread per pane ends due requests and is the one writer of every reply (the
+        read callback returns none), so the program reads them in the order they were queued under the pane's lock.
+        Kitty's OSC 5522 reads go the same way (`list_only` for a listing)
 - [x] Kitty graphics: APC G answered by the reply owner's VT, the server VT's media off
       - the server VT keeps the protocol on (64 MiB storage) so direct images move its cursor as on the owner's
-        screen, media off, its own APC G answers dropped; `Pane::relay` writes the owner's whatever the lead, only
-        in its ownership generation and epoch, and only whole APC G answers
+        screen, media off (a `t=f`/`t=t`/`t=s` image places nothing on it, so its cursor stays behind the owner's),
+        its own APC G answers dropped; `vt::Scanner::next` stops at the byte that runs each APC G, and a barrier
+        follows that output to an owner whose metadata says `kitty_graphics`; the output goes on, the server's later
+        replies wait behind the barrier until the owner completes it with its answers (`Pane::complete`, even empty),
+        so `a=q` then DA1 comes back Kitty first; a barrier ends empty after `KITTY_WAIT` (2 s), on an owner change,
+        the owner falling behind or withdrawing `kitty_graphics`, or past 1 MiB held / 4096 barriers
 - [x] on Windows, record per supported version which queries conhost answers itself and which reach the output pipe
       - recorded on Windows Server 2025 10.0.26100.33438 (the CI runner) by `tests/replies.rs`
         `windows_conhost_record`, the table in `server::replies`' docs: conhost answers DA1/DA2/DECRQM itself, keeps
@@ -996,8 +1002,11 @@ Order after Task 7, as two lanes that meet:
       - `tests/replies.rs`, its program a probe (the test binary, raw terminal input, `REPLY-<n>:<hex>` lines):
         the query and theme tests on every OS (Windows with the queries its conhost passes on), the OSC 52 (granted,
         refused from another client/epoch/id, denied, timed out, owner change, no owner, 300 KiB written meanwhile)
-        and Kitty (`t=t` read once by the owner, `t=d` moving the server's cursor as the owner's) tests on Unix;
-        `tests/attach.rs` delegates a read over the wire (Unix); unit tests in `replies`, `clients`, `lead`; the
+        and Kitty (`t=t` read once by the owner, `t=d` moving the server's cursor as the owner's, `a=q` then DA1
+        answered Kitty first, `q=2` and a withdrawn `kitty_graphics` answered DA1 alone) tests on Unix;
+        `tests/attach.rs` delegates a read over the wire (Unix); unit tests in `replies` (the barrier sequence),
+        `pane` (a reply made off the PTY thread not overtaken; replies held behind a Kitty command), `clients`,
+        `lead`, and the scanner's Kitty stops in `agterm-ghostty-vt`; the
         existing tests read past `ReplyOwner`; `tests/pane.rs` waits for a whole `started:` line (a half-delivered
         pid failed on macOS)
 - [x] run gates

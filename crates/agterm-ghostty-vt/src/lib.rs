@@ -21,7 +21,7 @@
 //!   [`Terminal::replay_continuation`]), [`FormatExtras`] (the state VT read-back carries) and the binary snapshot
 //!   codec ([`Terminal::encode_snapshot`], [`Terminal::decode_snapshot`], [`Terminal::restore_snapshot`]).
 //! - [`Scanner`]: finds clipboard reads in a VT stream before the terminal parses them, so their synchronous callback
-//!   can be answered without waiting inside [`Terminal::vt_write`].
+//!   can be answered without waiting inside [`Terminal::vt_write`], and the ends of Kitty graphics commands.
 //!
 //! Every handle is `Send` and not `Sync`: the library creates no threads and keeps no thread-local state, and asks
 //! callers to serialize access to a terminal from any thread (`render.h`, `terminal.h`). A handle may move to another
@@ -97,7 +97,7 @@ pub use paste::{PasteOutcome, PasteSource, paste_is_safe};
 pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
-pub use scan::{ReadCandidate, ReadScope, Scanner};
+pub use scan::{ReadCandidate, ReadScope, Scanner, Stop};
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
 pub use selection::{Point, PointTag, Selection, SelectionAdjust};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};

@@ -227,7 +227,10 @@ impl Client {
                         self.owners.push((*owner, *generation));
                         return self.receive(timeout);
                     }
-                    ClientEvent::Role { .. } | ClientEvent::Delegated { .. } | ClientEvent::Overflowed { .. } => {}
+                    ClientEvent::Role { .. }
+                    | ClientEvent::Delegated { .. }
+                    | ClientEvent::KittyBarrier { .. }
+                    | ClientEvent::Overflowed { .. } => {}
                 }
                 self.events.push(event);
                 true

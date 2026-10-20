@@ -1,5 +1,6 @@
 //! Finds clipboard reads in a VT stream before the terminal parses them (`terminal.h`'s clipboard read callback), so a
-//! reader can stop right before the byte that makes Ghostty dispatch one.
+//! reader can stop right before the byte that makes Ghostty dispatch one; and, for [`Scanner::next`], the byte that
+//! ends a Kitty graphics command, so a reader can tell where in the stream its answer belongs.
 //!
 //! The read callback is synchronous: the stream waits inside [`Terminal::vt_write`](crate::Terminal::vt_write) until it
 //! returns. An embedder whose answer takes time (a consent prompt, a client across a socket) cannot wait there with the
@@ -13,6 +14,11 @@
 //! (`osc/parsers/clipboard_operation.zig`, `kitty/clipboard_command.zig`). A disagreement fails closed: a read the
 //! scanner misses reaches the callback with no answer armed and is denied; a candidate Ghostty then rejects only costs
 //! an answer that is discarded unused.
+//!
+//! A Kitty graphics command is an SOS, PM or APC string (one state in Ghostty's parser, which emits `apc_start` on
+//! entering it and `apc_end` on leaving it by any byte, `Parser.zig`) whose first payload byte is `G` (`apc.zig`
+//! `Handler.feed`); Ghostty runs it at the byte that leaves the string, which [`Stop::KittyGraphics`] reports. It errs
+//! towards reporting: a string cancelled by CAN or SUB, or one Ghostty finds malformed, is reported too.
 
 use base64::Engine as _;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
@@ -38,6 +44,25 @@ pub struct ReadCandidate {
     pub scope: ReadScope,
 }
 
+/// Where [`Scanner::next`] stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// The dispatch byte of a clipboard read.
+    Read(ReadCandidate),
+    /// The byte that ends a Kitty graphics command (APC G): the terminal runs it, and answers it, at that byte.
+    KittyGraphics,
+}
+
+/// What the payload of the SOS, PM or APC string in progress starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Payload {
+    /// No payload byte yet.
+    Empty,
+    /// `G`: a Kitty graphics command.
+    Kitty,
+    Other,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Ground,
@@ -59,6 +84,7 @@ pub struct Scanner {
     state: State,
     body: Vec<u8>,
     overflow: bool,
+    payload: Payload,
 }
 
 impl Default for Scanner {
@@ -67,6 +93,7 @@ impl Default for Scanner {
             state: State::Ground,
             body: Vec::with_capacity(64),
             overflow: false,
+            payload: Payload::Empty,
         }
     }
 }
@@ -79,6 +106,11 @@ const BEL: u8 = 0x07;
 /// C0 controls that execute (or are ignored) without leaving a state: everything below 0x20 but CAN, SUB and ESC.
 fn is_inert_c0(byte: u8) -> bool {
     byte < 0x20 && !matches!(byte, CAN | SUB | ESC)
+}
+
+/// The bytes an SOS, PM or APC string takes as payload (`parse_table.zig` "`sos_pm_apc_string`", `apc_put`).
+fn is_string_put(byte: u8) -> bool {
+    is_inert_c0(byte) || (0x20..=0x7F).contains(&byte)
 }
 
 /// Ghostty's "anywhere" transitions (`parse_table.zig`), for states that do not override the byte.
@@ -98,26 +130,60 @@ impl Scanner {
     /// Advance over `bytes` until the dispatch byte of a clipboard read: returns its offset (the byte is consumed, so
     /// the next call starts after it) and the read, or `None` when `bytes` holds none.
     pub fn find(&mut self, bytes: &[u8]) -> Option<(usize, ReadCandidate)> {
+        let mut start = 0;
+        while let Some((offset, stop)) = self.next(&bytes[start..]) {
+            if let Stop::Read(candidate) = stop {
+                return Some((start + offset, candidate));
+            }
+            start += offset + 1;
+        }
+        None
+    }
+
+    /// Advance over `bytes` until the dispatch byte of a clipboard read or the byte that ends a Kitty graphics
+    /// command: returns its offset (the byte is consumed, so the next call starts after it) and what it is, or `None`
+    /// when `bytes` holds neither.
+    pub fn next(&mut self, bytes: &[u8]) -> Option<(usize, Stop)> {
         for (offset, &byte) in bytes.iter().enumerate() {
-            if let Some(candidate) = self.step(byte) {
-                return Some((offset, candidate));
+            if let Some(stop) = self.step(byte) {
+                return Some((offset, stop));
             }
         }
         None
     }
 
-    /// One byte; `Some` when it dispatched an OSC that is a clipboard read.
-    fn step(&mut self, byte: u8) -> Option<ReadCandidate> {
+    /// One byte; `Some` when it dispatched an OSC that is a clipboard read or ended a Kitty graphics command.
+    fn step(&mut self, byte: u8) -> Option<Stop> {
         if self.state == State::Osc {
-            return self.osc(byte);
+            return self.osc(byte).map(Stop::Read);
         }
         let next = self.transition(byte);
+        let stop = if self.state == State::SosPmApc {
+            self.string(byte)
+        } else {
+            None
+        };
         if next == State::Osc {
             self.body.clear();
             self.overflow = false;
         }
         self.state = next;
-        None
+        stop
+    }
+
+    /// One byte inside an SOS, PM or APC string: its first payload byte tells a Kitty graphics command, and a byte that
+    /// ends the string (whatever comes next, another string included) ends that command.
+    fn string(&mut self, byte: u8) -> Option<Stop> {
+        if is_string_put(byte) {
+            if self.payload == Payload::Empty {
+                self.payload = if byte == b'G' { Payload::Kitty } else { Payload::Other };
+            }
+            return None;
+        }
+        anywhere(byte)?;
+        let kitty = self.payload == Payload::Kitty;
+        self.payload = Payload::Empty;
+        kitty.then_some(Stop::KittyGraphics)
     }
 
     fn osc(&mut self, byte: u8) -> Option<ReadCandidate> {
@@ -433,6 +499,61 @@ mod tests {
                 let mut start = 0;
                 while let Some((offset, read)) = scanner.find(&part[start..]) {
                     found.push((base + start + offset, read));
+                    start += offset + 1;
+                }
+            }
+            assert_eq!(found, whole, "split at {split}");
+        }
+    }
+
+    fn stops(stream: &[u8]) -> Vec<(usize, Stop)> {
+        let mut scanner = Scanner::default();
+        let mut found = Vec::new();
+        let mut start = 0;
+        while let Some((offset, stop)) = scanner.next(&stream[start..]) {
+            found.push((start + offset, stop));
+            start += offset + 1;
+        }
+        found
+    }
+
+    #[test]
+    fn a_kitty_graphics_command_stops_at_the_byte_that_ends_it() {
+        let kitty = Stop::KittyGraphics;
+        // ESC of ST, then a clipboard read after it, in order
+        assert_eq!(
+            stops(b"x\x1b_Ga=q,i=1;AAAA\x1b\\\x1b]52;c;?\x07"),
+            [(16, kitty), (26, Stop::Read(DATA))]
+        );
+        // an 8-bit APC (outside ground, where C1 bytes are UTF-8), ended by an 8-bit ST; SOS and PM strings are the
+        // same state in Ghostty
+        assert_eq!(stops(b"\x1b\x9fGa=q\x9c"), [(6, kitty)]);
+        assert_eq!(stops(b"\x9fGa=q\x9c"), []);
+        assert_eq!(stops(b"\x1bXGi=1\x1b\\\x1b^Gi=2\x1b\\"), [(6, kitty), (14, kitty)]);
+        // C0 controls are payload: the first one decides, so `G` after it is no Kitty command
+        assert_eq!(stops(b"\x1b_\x05Gi=1\x1b\\"), []);
+        assert_eq!(stops(b"\x1b_G\x05i=1\x1b\\"), [(7, kitty)]);
+        // a C1 introducer ends one string and opens the next
+        assert_eq!(stops(b"\x1b_Gi=1\x9f25a1;s\x1b\\"), [(6, kitty)]);
+        // cancelled strings are reported too (erring towards a stop); other APCs are not
+        assert_eq!(stops(b"\x1b_Gi=1\x18"), [(6, kitty)]);
+        assert_eq!(stops(b"\x1b_25a1;s\x1b\\\x1b_\x1b\\"), []);
+        // `find` passes over them
+        assert_eq!(reads(b"\x1b_Gi=1\x1b\\\x1b]52;c;?\x07"), [(16, DATA)]);
+    }
+
+    #[test]
+    fn a_kitty_graphics_command_split_across_reads_stops_once() {
+        let stream = b"\x1b_Gi=1;AAAA\x1b\\\x1b_Gi=2\x1b\\";
+        let whole = stops(stream);
+        assert_eq!(whole.len(), 2);
+        for split in 0..=stream.len() {
+            let mut scanner = Scanner::default();
+            let mut found = Vec::new();
+            for (base, part) in [(0, &stream[..split]), (split, &stream[split..])] {
+                let mut start = 0;
+                while let Some((offset, stop)) = scanner.next(&part[start..]) {
+                    found.push((base + start + offset, stop));
                     start += offset + 1;
                 }
             }

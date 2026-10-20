@@ -27,8 +27,9 @@
 //! offset), until its queue overflows or the session ends; a snapshot's offset is where the output after it starts. A
 //! managed client's [`ClientEvent::Role`] reports ([`super::lead`]) sit in that order too, its first before anything
 //! else it is sent, and outlast an overflow; so do every client's [`ClientEvent::ReplyOwner`] reports
-//! ([`super::replies`]), its first right after its first role report. A [`ClientEvent::Delegated`] request goes to one
-//! client in its current epoch, after the output it concerns, and an overflow drops it with that output.
+//! ([`super::replies`]), its first right after its first role report. A [`ClientEvent::Delegated`] request and a
+//! [`ClientEvent::KittyBarrier`] go to one client in its current epoch, after the output they concern, and an overflow
+//! drops them with that output.
 //! [`ClientEvent::Exit`] is always queued, after all output, and is the last event of a session.
 
 use std::collections::VecDeque;
@@ -98,6 +99,9 @@ pub enum ClientEvent {
         epoch: u64,
         request: DelegatedRequest,
     },
+    /// The output before it ended with a Kitty graphics command the client, as the reply owner, is to answer in its
+    /// epoch `epoch` ([`super::replies`]).
+    KittyBarrier { id: u64, epoch: u64 },
     /// The client's queue was full: the output, size changes, delegated requests and unsent snapshot it held were
     /// dropped, output from `offset` on was not queued, and nothing but role and reply-ownership changes, the
     /// session's last snapshot and its exit is queued after this until the client is resynced (`Pane::resync`).
@@ -185,7 +189,7 @@ impl Queue {
                 stops = stops.min(*offset);
                 false
             }
-            ClientEvent::Delegated { .. } => false,
+            ClientEvent::Delegated { .. } | ClientEvent::KittyBarrier { .. } => false,
             ClientEvent::Role { .. }
             | ClientEvent::ReplyOwner { .. }
             | ClientEvent::Overflowed { .. }
@@ -252,14 +256,16 @@ impl Queue {
     /// Queue a delegated request in the client's current epoch; that epoch, `None` (nothing queued) once the queue
     /// overflowed or closed.
     fn push_delegated(&mut self, id: u64, request: DelegatedRequest) -> Option<u64> {
+        self.push_in_epoch(|epoch| ClientEvent::Delegated { id, epoch, request })
+    }
+
+    /// Queue the event `make` builds around the client's current epoch; that epoch, `None` (nothing queued) once the
+    /// queue overflowed or closed.
+    fn push_in_epoch(&mut self, make: impl FnOnce(u64) -> ClientEvent) -> Option<u64> {
         if self.closed || self.overflowed {
             return None;
         }
-        self.events.push_back(ClientEvent::Delegated {
-            id,
-            epoch: self.epoch,
-            request,
-        });
+        self.events.push_back(make(self.epoch));
         Some(self.epoch)
     }
 
@@ -476,6 +482,15 @@ impl Clients {
         let slot = self.slot(client)?;
         let mut epoch = None;
         slot.with(|queue| epoch = queue.push_delegated(id, request));
+        epoch
+    }
+
+    /// Queue the Kitty barrier `id` for the client `client` in its current epoch; that epoch, `None` when it is not
+    /// attached or its queue overflowed (it would not get the barrier before its resync).
+    pub fn barrier(&mut self, client: ClientId, id: u64) -> Option<u64> {
+        let slot = self.slot(client)?;
+        let mut epoch = None;
+        slot.with(|queue| epoch = queue.push_in_epoch(|epoch| ClientEvent::KittyBarrier { id, epoch }));
         epoch
     }
 

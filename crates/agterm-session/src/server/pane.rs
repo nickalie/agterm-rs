@@ -26,10 +26,12 @@
 //!
 //! Every read of the PTY is written into the pane's terminal and queued for each client under one lock, so the
 //! terminal's state and the clients' streams agree at every offset; a client attaching later starts at the offset
-//! the terminal had then. The terminal answers the program's queries itself, its answers going back to the program in
-//! order with its input, with the reply owner's facts; a clipboard read stops the stream for the owner's answer, and
-//! the owner's terminal answers Kitty graphics commands ([`super::replies`]). It loads no Kitty images from files,
-//! temporary files or shared memory: an image shown that way is read once, by the client that shows it.
+//! the terminal had then. The terminal answers the program's queries itself, with the reply owner's facts; a clipboard
+//! read stops the stream for the owner's answer, and the owner's terminal answers Kitty graphics commands, the
+//! server's later answers waiting behind them ([`super::replies`]). Every answer is queued under that lock and written
+//! by one thread ([`run_helper`]), so the program reads them in the order of its queries. The terminal loads no Kitty
+//! images from files, temporary files or shared memory: an image shown that way is read once, by the client that shows
+//! it, and places nothing on the server's terminal, whose cursor it does not move.
 //!
 //! # Snapshots
 //!
@@ -90,7 +92,9 @@ use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, Rea
 
 use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget, Subscription};
 use super::lead::{Change, Lead, RoleNotice};
-use super::replies::{Answer, DELEGATION_WAIT, Facts, KITTY_STORAGE_LIMIT, Outlet, PARK_LOW, Replies, ServerEffects};
+use super::replies::{
+    Answer, DELEGATION_WAIT, Facts, KITTY_STORAGE_LIMIT, KITTY_WAIT, Outlet, PARK_LOW, Replies, ServerEffects,
+};
 use super::snapshot::{self, Kind, SnapshotError};
 use crate::protocol::{DelegatedReply, ExitStatus, GridSize, LeadRole, Managed, ReplyMetadata, SessionSpec};
 
@@ -151,6 +155,8 @@ pub struct PaneConfig {
     pub metadata: ReplyMetadata,
     /// How long a clipboard read waits for the reply owner's answer ([`DELEGATION_WAIT`]).
     pub delegation_wait: Duration,
+    /// How long a Kitty barrier waits for the reply owner's completion ([`KITTY_WAIT`]).
+    pub kitty_wait: Duration,
 }
 
 impl PaneConfig {
@@ -168,6 +174,7 @@ impl PaneConfig {
             continuation_limit: snapshot::CONTINUATION_LIMIT,
             metadata: ReplyMetadata::default(),
             delegation_wait: DELEGATION_WAIT,
+            kitty_wait: KITTY_WAIT,
         }
     }
 }
@@ -252,10 +259,11 @@ struct Core {
     state: Mutex<State>,
     /// Notified when the PTY ends, when output is fed and when the program's end is recorded.
     changed: Condvar,
-    /// Wakes the replies' helper thread ([`run_helper`]): a read delegated, ended or cancelled, replies to write.
+    /// Wakes the replies' helper thread ([`run_helper`]): a read delegated, ended or cancelled, a Kitty barrier
+    /// opened, replies to write.
     timer: Arc<Condvar>,
-    /// The terminal's replies of the write in progress (filled, taken and truncated only under `state`'s lock), and
-    /// what its effects answer from.
+    /// The replies for the program in order (changed only under `state`'s lock, taken only by the helper thread), and
+    /// what the terminal's effects answer from.
     outlet: Arc<Outlet>,
     /// Stops the PTY's reads while a waiting clipboard read holds too much output ([`super::replies`]).
     pause: ReadPause,
@@ -313,20 +321,27 @@ impl Core {
     }
 
     /// Feed a read of the PTY to the terminal and the clients, up to a clipboard read the reply owner is to answer
-    /// (held behind it while it waits, [`super::replies`]); the terminal's replies.
+    /// (held behind it while it waits, [`super::replies`]). Returns no replies: the terminal's are queued in the
+    /// outlet, in order with every other reply, and the helper thread writes them.
     fn read(&self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut state = self.lock();
         if state.exit.is_some() {
             return Vec::new();
         }
         state.take_output(bytes, &self.pause);
-        // taken under the pane's lock, so the queue changes only under it ([`Pane::print`] drops its replies by
-        // truncating it)
-        let replies = self.outlet.take();
         drop(state);
         // a snapshot waiting for a cut looks again
         self.changed.notify_all();
-        replies
+        self.wake_helper();
+        Vec::new()
+    }
+
+    /// Have the helper thread write the replies ready (it looks under the pane's lock, so one made ready before this
+    /// is never missed).
+    fn wake_helper(&self) {
+        if self.outlet.ready() {
+            self.timer.notify_all();
+        }
     }
 
     /// Whether the PTY's reads, paused for output held behind a waiting read, are to go on now (the pause is
@@ -350,13 +365,10 @@ impl Core {
         let mut state = self.lock();
         state.exited = true;
         state.deny_from_now();
-        let replies = self.outlet.take();
         let wake = self.unpause(&state);
         drop(state);
         self.changed.notify_all();
-        for reply in replies {
-            actor.write_reply(&reply);
-        }
+        self.wake_helper();
         if wake {
             actor.wake_reader();
         }
@@ -470,76 +482,27 @@ impl Pane {
     /// [`io::ErrorKind::InvalidInput`] for an empty argv; the terminal could not be created, the PTY opened, the
     /// program started or the PTY's thread started.
     pub fn spawn(config: PaneConfig) -> io::Result<(Self, Attached)> {
-        let PaneConfig {
-            name,
-            namespace,
-            spec,
-            size,
-            managed,
-            client_queue_limit,
-            resync_budget,
-            snapshot_wait,
-            continuation_limit,
-            metadata,
-            delegation_wait,
-        } = config;
         let size = GridSize {
-            cols: size.cols.max(1),
-            rows: size.rows.max(1),
+            cols: config.size.cols.max(1),
+            rows: config.size.rows.max(1),
         };
-        let env = child_environment(&spec.env, &name, &namespace);
-        let command = command(&spec, &env)?;
-        let outlet = Arc::new(Outlet::default());
-        let timer = Arc::new(Condvar::new());
-        let mut clients = Clients::new(client_queue_limit);
-        let mut lead = Lead::new();
-        let mut creator = attach_creator(&mut clients, &mut lead, size, managed.as_ref());
-        let replies = Replies::new(
-            Arc::clone(&outlet),
-            Arc::clone(&timer),
-            creator.subscription.id(),
-            metadata,
-            delegation_wait,
-        );
-        let term = lookup(&env, "TERM");
-        let terminal = server_terminal(size, continuation_limit, &outlet, replies.facts(), term)?;
+        let env = child_environment(&config.spec.env, &config.name, &config.namespace);
+        let command = command(&config.spec, &env)?;
+        let (core, creator) = new_core(&config, size, lookup(&env, "TERM"))?;
         let Spawned { master, child } = agterm_pty::spawn(&command, Size::cells(size.rows, size.cols))?;
-        let pause = ReadPause::new();
-        let core = Arc::new(Core {
-            state: Mutex::new(State {
-                terminal,
-                clients,
-                lead,
-                replies,
-                offset: 0,
-                revision: 0,
-                size,
-                pty_ended: false,
-                exited: false,
-                reap_holds: 0,
-                reaping: false,
-                exit: None,
-                on_end: Vec::new(),
-            }),
-            changed: Condvar::new(),
-            timer,
-            outlet,
-            pause,
-        });
-        prune_on_drop(&core, &mut creator.subscription);
         let id = NEXT_PANE.fetch_add(1, Ordering::Relaxed);
         let killer = child.killer();
         let pid = child.pid();
         let actor = start_threads(id, master, child, &core)?;
-        tracing::debug!(session = %name, pid, "live session started");
+        tracing::debug!(session = %config.name, pid, "live session started");
         let pane = Self {
             id,
-            name,
             pid,
             created_at: unix_seconds(SystemTime::now()),
-            tracked_env: tracked(&env, &spec.tracked_env),
-            resync_budget,
-            snapshot_wait,
+            tracked_env: tracked(&env, &config.spec.tracked_env),
+            resync_budget: config.resync_budget,
+            snapshot_wait: config.snapshot_wait,
+            name: config.name,
             core,
             actor,
             killer,
@@ -824,18 +787,15 @@ impl Pane {
         self.release(state);
     }
 
-    /// Let go of the pane's lock, then write the replies the terminal gave outside the PTY's reads (a size report the
-    /// program asked for, in-band resize notifications, a clipboard read answered, a reply owner's Kitty answers):
-    /// written once the lock is let go, as the PTY's read callback may be waiting for it; and read the PTY again once
-    /// the output held behind a clipboard read went through.
+    /// Let go of the pane's lock; have the helper thread write the replies made ready under it (a size report the
+    /// program asked for, in-band resize notifications, a clipboard read answered, a reply owner's Kitty answers), in
+    /// order with every other reply; and read the PTY again once the output held behind a clipboard read went
+    /// through.
     fn release(&self, state: MutexGuard<'_, State>) {
-        let replies = self.core.outlet.take();
         let wake = self.core.unpause(&state);
         drop(state);
         self.core.changed.notify_all();
-        for reply in replies {
-            self.actor.write_reply(&reply);
-        }
+        self.core.wake_helper();
         if wake {
             self.actor.wake_reader();
         }
@@ -867,19 +827,21 @@ impl Pane {
         taken
     }
 
-    /// Kitty graphics answers the client `id`'s terminal gave, relayed in its epoch `epoch` under its ownership report
-    /// `generation`: written to the program, whatever the lead, after the replies queued before them, while the client
-    /// owns the replies in that generation and that epoch and has not fallen behind; dropped otherwise, or when `data`
-    /// is anything but whole Kitty answers. Whether they were written.
+    /// The client `id`'s completion of the Kitty barrier `barrier` it was sent in its epoch `epoch`
+    /// ([`ClientEvent::KittyBarrier`](super::clients::ClientEvent)), with what its terminal answered the program's Kitty
+    /// graphics commands with since its previous barrier (`answers`, empty for none): they go to the program, whatever
+    /// the lead, in the barrier's place among the server's replies. Dropped unless that barrier was sent to this client
+    /// in that epoch, still waits and the client has not fallen behind since; answers that are not whole Kitty answers
+    /// end the barrier empty. Whether they were taken.
     #[must_use]
-    pub fn relay(&self, id: ClientId, epoch: u64, generation: u32, data: &[u8]) -> bool {
+    pub fn complete(&self, id: ClientId, barrier: u64, epoch: u64, answers: &[u8]) -> bool {
         let mut state = self.core.lock();
         if state.exit.is_some() {
             return false;
         }
-        let relayed = state.relay(id, epoch, generation, data);
+        let taken = state.complete(id, barrier, epoch, answers);
         self.release(state);
-        relayed
+        taken
     }
 
     /// The client owning the session's replies ([`super::replies`]) and the generation of its ownership.
@@ -936,17 +898,21 @@ impl Pane {
         if data.is_empty() {
             return Ok(());
         }
-        // the replies queued before are the program's own; those after, to bytes it never printed, are dropped
-        let theirs = self.core.outlet.queued();
+        // the terminal's replies to bytes the program never printed are dropped
+        self.core.outlet.discard(true);
         state.terminal.vt_write(data);
-        self.core.outlet.truncate(theirs);
+        self.core.outlet.discard(false);
         // the clipboard-read scanner follows the terminal's parser
-        state.replies.observe(data);
+        let kitty = state.replies.observe(data);
         let offset = state.offset;
         state.offset += data.len() as u64;
         state.revision = state.revision.wrapping_add(1);
         state.prune();
         state.clients.output(offset, data);
+        if kitty {
+            // the owner's terminal answers the printed Kitty commands too: a barrier takes those answers, dropped
+            state.barrier(true);
+        }
         self.release(state);
         Ok(())
     }
@@ -1126,6 +1092,47 @@ fn attach_creator(clients: &mut Clients, lead: &mut Lead, size: GridSize, manage
     }
 }
 
+/// The state of a pane for `config`, its grid `size` and its program's `TERM` `term`, with its creator attached (as
+/// [`Pane::spawn`] says), before any program runs.
+fn new_core(config: &PaneConfig, size: GridSize, term: Option<&str>) -> io::Result<(Arc<Core>, Attached)> {
+    let outlet = Arc::new(Outlet::default());
+    let timer = Arc::new(Condvar::new());
+    let mut clients = Clients::new(config.client_queue_limit);
+    let mut lead = Lead::new();
+    let mut creator = attach_creator(&mut clients, &mut lead, size, config.managed.as_ref());
+    let replies = Replies::new(
+        Arc::clone(&outlet),
+        Arc::clone(&timer),
+        creator.subscription.id(),
+        config.metadata.clone(),
+        (config.delegation_wait, config.kitty_wait),
+    );
+    let terminal = server_terminal(size, config.continuation_limit, &outlet, replies.facts(), term)?;
+    let core = Arc::new(Core {
+        state: Mutex::new(State {
+            terminal,
+            clients,
+            lead,
+            replies,
+            offset: 0,
+            revision: 0,
+            size,
+            pty_ended: false,
+            exited: false,
+            reap_holds: 0,
+            reaping: false,
+            exit: None,
+            on_end: Vec::new(),
+        }),
+        changed: Condvar::new(),
+        timer,
+        outlet,
+        pause: ReadPause::new(),
+    });
+    prune_on_drop(&core, &mut creator.subscription);
+    Ok((core, creator))
+}
+
 /// The snapshot of the session `state` holds ([`snapshot::capture`]) of the `kind` given; empty while the session has
 /// no output, which its client's terminal already shows.
 fn capture(state: &mut State, kind: Kind) -> Result<Vec<u8>, SnapshotError> {
@@ -1284,17 +1291,16 @@ fn start_helper(id: u64, core: &Arc<Core>, actor: &ActorHandle) -> io::Result<()
         .map(drop)
 }
 
-/// What answers no thread of the pane's own writes: it denies a clipboard read whose time is up or that was
-/// cancelled, writes the replies queued outside a read of the PTY or a call that writes its own (a client's
-/// subscription dropped), and lets the PTY be read again once the output held behind a read went through. It sleeps
-/// on [`Core::timer`] until the next deadline, and ends once the session ended.
+/// The one writer of the terminal's replies: it takes the replies ready under the pane's lock and writes each batch
+/// before it takes the next, so the program reads them in the order they were made ready, whichever thread made them
+/// (a read of the PTY, a client's answer, a resize, a deadline). It also denies a clipboard read whose time is up or
+/// that was cancelled, ends the Kitty barriers whose time is up, and lets the PTY be read again once the output held
+/// behind a read went through. It sleeps on [`Core::timer`] until the next deadline, and ends once the session ended.
 fn run_helper(core: &Core, actor: &ActorHandle) {
     let mut state = core.lock();
     while state.exit.is_none() {
         let now = Instant::now();
-        if state.replies.due(now) {
-            state.settle(Answer::Denied);
-        }
+        state.expire(now);
         let replies = core.outlet.take();
         let wake = core.unpause(&state);
         if !replies.is_empty() || wake {
@@ -1462,6 +1468,81 @@ impl Panes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ColorScheme;
+    use crate::server::clients::ClientEvent;
+
+    /// A pane's state with no program (none is needed to feed it), its creator owning the replies with `metadata`.
+    fn core(metadata: ReplyMetadata) -> (Arc<Core>, Attached) {
+        let spec = SessionSpec {
+            argv: vec!["none".to_owned()],
+            env: Vec::new(),
+            cwd: None,
+            tracked_env: Vec::new(),
+        };
+        let mut config = PaneConfig::new("unit", "unit", spec, GridSize { cols: 80, rows: 24 });
+        config.metadata = metadata;
+        new_core(&config, config.size, None).unwrap()
+    }
+
+    #[test]
+    fn a_reply_made_off_the_ptys_thread_is_not_overtaken_by_a_later_reads() {
+        let (core, creator) = core(ReplyMetadata::default());
+        let owner = creator.subscription.id();
+        // the read callback hands no reply back itself: the helper thread writes them all
+        assert!(core.read(b"\x1b[?2031h").is_empty());
+        // off the PTY's thread, under the pane's lock: the owner turns dark, a mode 2031 report is made
+        let dark = ReplyMetadata {
+            color_scheme: Some(ColorScheme::Dark),
+            ..ReplyMetadata::default()
+        };
+        core.lock().remember(owner, dark);
+        // a read after it: its answer goes behind the report
+        assert!(core.read(b"\x1b[5n").is_empty());
+        assert_eq!(core.outlet.take(), [b"\x1b[?997;1n".to_vec(), b"\x1b[0n".to_vec()]);
+    }
+
+    #[test]
+    fn the_replies_after_a_kitty_command_wait_for_the_owners_answers() {
+        let shows = ReplyMetadata {
+            kitty_graphics: true,
+            ..ReplyMetadata::default()
+        };
+        let (core, creator) = core(shows);
+        let owner = creator.subscription.id();
+        let query = b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA\x1b\\";
+        assert!(
+            core.read(&[b"\x1b[5n".as_slice(), query, b"\x1b[c"].concat())
+                .is_empty()
+        );
+        // the answer before the command goes; DA1's waits
+        assert_eq!(core.outlet.take(), [b"\x1b[0n".to_vec()]);
+        // the owner was sent the output up to the command's ESC, then the barrier, then the rest
+        let mut events = Vec::new();
+        while let Ok(event) = creator.subscription.recv_timeout(Duration::ZERO) {
+            events.push(event);
+        }
+        let barrier = events
+            .iter()
+            .position(|event| matches!(event, ClientEvent::KittyBarrier { .. }))
+            .unwrap();
+        let ClientEvent::KittyBarrier { id, epoch } = events[barrier].clone() else {
+            unreachable!()
+        };
+        let ClientEvent::Output { data, .. } = &events[barrier - 1] else {
+            panic!("{events:?}")
+        };
+        assert!(data.ends_with(&query[..query.len() - 1]), "{data:?}");
+        assert!(matches!(&events[barrier + 1], ClientEvent::Output { data, .. } if data == b"\\\x1b[c"));
+        // whole Kitty answers only: anything else ends it empty
+        let ok = b"\x1b_Gi=31;OK\x1b\\";
+        assert!(core.lock().complete(owner, id, epoch, ok));
+        assert!(!core.lock().complete(owner, id, epoch, ok), "a second completion");
+        assert_eq!(core.outlet.take(), [ok.to_vec(), b"\x1b[?62;22;52c".to_vec()]);
+        assert!(core.read(&[query.as_slice(), b"\x1b[c"].concat()).is_empty());
+        let next = id + 1;
+        assert!(!core.lock().complete(owner, next, epoch, b"\x1b[c"));
+        assert_eq!(core.outlet.take(), [b"\x1b[?62;22;52c".to_vec()]);
+    }
 
     fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
         list.iter()
