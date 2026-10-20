@@ -1042,18 +1042,61 @@ Order after Task 7, as two lanes that meet:
 - Modify: `crates/agterm-session/src/bin/agterm-session.rs`
 - Create: `crates/agterm-session/src/{cli,attach_tty}.rs`, `crates/agterm-session/tests/cli.rs`
 
-- [ ] subcommands: `server <socket dir>` (exists), `attach`, `list`, `kill`, `screen`, `type`, `print`, `version`
-- [ ] `attach` honors the attach contract: the `AGTERM_LIVE_*` variables (empty means unset), create-only with the
+- [x] subcommands: `server <socket dir>` (exists), `attach`, `list`, `kill`, `screen`, `type`, `print`, `version`
+      - `cli::{parse, execute}` with zmx's spellings and aliases (`a`, `ls`/`l`, `k`, `p`, `-v`): `list [--short]` as
+        zmx's `name=…␉pid=…␉clients=…␉created=…` lines, `kill [--force] <name>…`, `screen [--all]` under zmx's header
+        (`revision cols rows x y alternate`), `type` from standard input, `print <name> [text…]` (else standard input),
+        `version` (crate version, build id, protocol, the running server's build). Exit 0, 1 (a session missing, no
+        server, a kill not killing all), 2 (a command line it does not take, `AGTERM_LIVE_DIR` unset). Only `attach`
+        starts a server; for the others none means no session
+- [x] `attach` honors the attach contract: the `AGTERM_LIVE_*` variables (empty means unset), create-only with the
       gone guard, the detach key unless `AGTERM_LIVE_NO_DETACH_KEY`, the managed-claim opt-in, the role title
-- [ ] `attach` as a terminal client: raw mode, resize forwarding; on Windows, console VT input as herdr's
+      - `cli::Contract::from_env`. An attach where `AGTERM_LIVE_SESSION` is set (inside a session) is refused (zmx
+        switched sessions there; this server does not). An existing session's argv is ignored, and a gone one runs the
+        guard, whose status the client exits with. Ctrl+\ detaches, typed plain or as Kitty or modifyOtherKeys keys. A
+        nonce that is not a token leaves the attach unmanaged. The role title is `ngterm-live-role` (the build's
+        identity, `server::lead`), written at ground. A connection that ends without the exit attaches again for 5 s,
+        creating nothing, under the lead it held
+- [x] `attach` as a terminal client: raw mode, resize forwarding; on Windows, console VT input as herdr's
       `client/input/windows_vti.rs` reads it
-- [ ] `attach` as a full reply owner: it queries its outer terminal for the theme colours and cell size and sends them
+      - `attach_tty::{unix,windows}`. Unix: termios raw mode and a `SIGWINCH` watcher. Windows: console VT input
+        read as records (`ReadConsoleInputW`; key characters taken as VT bytes, surrogate pairs joined), window-size
+        events plus a 200 ms size poll, UTF-8 code pages, everything restored on drop. The output filter takes
+        DECSET 9001 (win32-input-mode) out: a Windows session's pseudoconsole asks for it, and an outer terminal
+        that took it would send the client win32 key records (the `windows-2025` failure before the fix)
+- [x] `attach` as a full reply owner: it queries its outer terminal for the theme colours and cell size and sends them
       as metadata, and relays delegated OSC 52 reads to the outer terminal and back; the server-owned queries are
       filtered out of its output, fragment-safe across reads
-- [ ] tests: each subcommand's output and exit codes; `attach` round trip in a PTY, detach and reattach; the gone
+      - `attach_tty::owner::Relay` probes OSC 10/11/12, OSC 4 for all 256 colours, `CSI 16 t`, `CSI ? 996 n`, a Kitty
+        query and DA1 last as the fence, and turns mode 2031 on. The answers become `ReplyMetadata`, with the cell
+        pixels from `TIOCGWINSZ`, else `CSI 16 t`. It is sent on the fence, on a refresh and on a cell-size change.
+        Kitty barriers and delegated OSC 52 reads are answered behind a DA1 fence, a read with no answer denied. An
+        outer terminal that answers no fence within 5 s gets empty barriers and denied reads, and its metadata
+        claims no Kitty graphics.
+      - `attach_tty::filter::OutputFilter` follows Ghostty's parser states and holds a possible query whole across
+        reads. It drops what the server answers: DA1/2/3, DSR/CPR/996, DECRQM, XTVERSION, `CSI ? u`, the XTWINOPS
+        reports, the OSC colour, clipboard (52, 5522) and OSC 4 queries, DECRQSS, XTGETTCAP, DECID and ENQ. It
+        rewrites DECSET 2031/2048/9001 out and adds `redraw=0` to `OSC 133;A` (zmx's).
+      - `attach_tty::input::InputParser` picks the outer terminal's answers out of the input
+- [x] tests: each subcommand's output and exit codes; `attach` round trip in a PTY, detach and reattach; the gone
       guard; the role title on a lead change; an inherited `AGTERM_LIVE_SESSION` ignored when set empty; split query
       sequences with two attached CLIs; OSC 10/11 answered with the outer terminal's colours; an OSC 52 read relayed
-- [ ] run gates
+      - `tests/cli.rs`, the test acting as the outer terminal on a real PTY. On every OS: the api commands, the round
+        trip with a resize, detach and reattach (an empty inherited `AGTERM_LIVE_SESSION` included), the detach key
+        turned off, the gone guard, a nested attach refused, an attach starting the server, and against a scripted
+        peer a dropped connection reattached from a reset and a reattach to a gone session.
+      - Unix only: the role title on lead changes, split DA2/DECRQM/XTGETTCAP queries with two clients, OSC 10/11 from
+        the outer terminal's colours, an OSC 52 read relayed. On Windows a pseudoconsole passes on only the latest
+        title when it paints, and conhost answers or drops those queries itself (Task 20's table).
+      - Unit tests in `cli/tests.rs`, `cli/attach.rs`, `attach_tty/{filter,input,owner}/tests.rs` and
+        `attach_tty/windows.rs`
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session` for macOS) and the lint report all pass. Workspace tests ran
+        headless: 4529 passed, 0 failed. Selftests: 835 passed.
+      - No conformance run, as in Tasks 16–23: no staged binary uses the server yet.
+      - `cross-platform.yml` run 39484030686 was green on all three OSes. It ran on `ci/cps-task-22` (deleted after),
+        on a commit whose tree is the committed one
 
 ### Task 23: Client library and `SessionHost` (library only)
 

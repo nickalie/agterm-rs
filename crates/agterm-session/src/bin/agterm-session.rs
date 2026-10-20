@@ -1,25 +1,23 @@
-//! `agterm-session`: agterm's live-session server. Its one command so far is the server itself,
-//! `agterm-session server <namespace directory>`, which the client that finds no server runs
-//! (`agterm_session::server::spawn::connect_or_start`), detached from itself.
+//! `agterm-session`: agterm's live-session server, `agterm-session server <namespace directory>`, which the client that
+//! finds no server runs (`agterm_session::server::spawn::connect_or_start`), detached from itself; and its clients'
+//! commands (`attach`, `list`, `kill`, `screen`, `type`, `print`, `version`: [`agterm_session::cli`]).
 //!
-//! Exit status: 0 once the server stopped by itself, 1 when it failed, 2 for a command line it does not take, 3 when
-//! another server holds the namespace.
+//! The server's exit status: 0 once it stopped by itself, 1 when it failed, 2 for a command line it does not take, 3
+//! when another server holds the namespace. The other commands' are [`agterm_session::cli`]'s.
 
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::process::ExitCode;
 
-use agterm_session::server::{self, EXIT_FAILED, EXIT_STOPPED, EXIT_TAKEN, EXIT_USAGE, ServerConfig};
+use agterm_session::cli;
+use agterm_session::server::{self, EXIT_FAILED, EXIT_STOPPED, EXIT_TAKEN, ServerConfig};
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
         [command, directory] if command == "server" => serve(Path::new(directory)),
-        _ => {
-            eprintln!("usage: agterm-session server <namespace directory>");
-            ExitCode::from(EXIT_USAGE)
-        }
+        _ => cli::run(&args),
     }
 }
 
