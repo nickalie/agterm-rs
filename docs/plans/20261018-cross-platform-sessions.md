@@ -912,14 +912,42 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/src/server/api.rs`, `crates/agterm-session/tests/api.rs`
 
-- [ ] port herdr's socket API shape (`src/api/`) for exactly the operations in Technical Details > API
-- [ ] list with each `LiveSessionRecord` field; kill (one, batch, `force`) with every `KillOutcome` and the
+- [x] port herdr's socket API shape (`src/api/`) for exactly the operations in Technical Details > API
+      - `server::api`: an api connection (now welcomed; only an unknown role is refused) answers `ApiCall`s in order
+        with `ApiReply`s of the same id until the client closes it, a client gone mid-answer being no error, a reply
+        too large for a message answered as the request's `Failed`; `api::handle(request, &Panes, &Sweeper)` is the
+        dispatch, the foreground-job requests (`ForegroundJob`, `JobRunning`, `EndJob`) over `crate::job`'s
+        `Sweeper` (`Shared.jobs`). The wire types are Task 4's, unchanged; `protocol.rs` gains the `From`
+        conversions to `agterm-host`'s `LiveSessionRecord`, `KillOutcome`, `LiveScreen` and `ProcessRecord` (and
+        back from it) for Task 23, and `Screen.text`'s doc now says what it holds
+- [x] list with each `LiveSessionRecord` field; kill (one, batch, `force`) with every `KillOutcome` and the
       `StaleSocket` mapping
-- [ ] screen (`active`/`all`) from the server's VT with `revision`, cursor and `alternate`; type (encoded for the
+      - list: sorted by name, clients attached, the program's pid (`None` once ended), creation time. Kill: a batch in
+        parallel, one result per name in order; `Killed` once the end is recorded, after which the server hangs up
+        the foreground job the shell left (read before the kill: `ZmxClient`'s client-side sweep moves into the
+        server); `Gone` for no running session (`From` maps it to `StaleSocket`); `Failed` with the reason for a
+        program that outlived the hangup or a failed signal
+- [x] screen (`active`/`all`) from the server's VT with `revision`, cursor and `alternate`; type (encoded for the
       keyboard mode, without taking the lead); print (an OSC 52 write into the output)
-- [ ] tests for each operation's success and error paths: an unknown session, a dead one, a batch with both, and a
+      - `Pane::observe` reads the terminal with its revision under the pane's lock; `Pane::revision` moves with every
+        PTY read, resize and print (zmx's `screen_revision`). The text is zmx's `serializeScreenText` (plain, wraps
+        joined, trimmed; `api::read_screen`). `api::encode_typed` is zmx's `encodeTyped` over the key encoder (each
+        CR a Return press and release); C0 controls and non-UTF-8 bytes, which the encoder takes no text of, go as
+        they are; queued by `Pane::write`, which bypasses the lead. `Pane::print` waits up to the snapshot wait for
+        the parser at ground, then feeds the bytes to the terminal and every client at the next offset, dropping the
+        terminal's replies to them
+- [x] tests for each operation's success and error paths: an unknown session, a dead one, a batch with both, and a
       `revision` that moves only when the screen does
-- [ ] run gates
+      - `tests/api.rs` through an in-process server (all three OSes; the hangup-ignoring kill Unix-only, since
+        Windows ends the job), unit tests of the dispatch with a fake process table, of `read_screen` (zmx's own
+        case) and `encode_typed` (zmx's legacy and Kitty cases), and of the host conversions in `tests/protocol.rs`.
+        `tests/lifecycle.rs`'s refused role is now an unknown one; `tests/attach.rs`'s gone probe takes a stopped
+        server for gone (a macOS runner probed after the idle server had stopped)
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features), the lint report, the workspace tests headless, the selftests; no conformance
+        run, as in Tasks 16–18 (no staged binary runs the server yet); `cross-platform.yml` run 39383843538 green on
+        all three (`ci/cps-task-19`, deleted after)
 
 ### Task 20: Terminal replies
 
