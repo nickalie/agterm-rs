@@ -947,3 +947,73 @@ fn partial_reads_are_reassembled() {
     assert_eq!(second.control().unwrap(), Control::HandoffResult(HandoffResult(Ok(()))));
     assert!(matches!(read_frame(&mut chunked), Err(FramingError::Closed)));
 }
+
+#[test]
+fn the_api_replies_are_the_session_hosts_types_field_for_field() {
+    let record = SessionRecord {
+        name: "agterm-1".to_owned(),
+        clients: 2,
+        leader_pid: Some(4242),
+        created_at: 1_760_000_000,
+    };
+    assert_eq!(
+        agterm_host::LiveSessionRecord::from(record),
+        agterm_host::LiveSessionRecord {
+            name: "agterm-1".to_owned(),
+            clients: Some(2),
+            leader_pid: Some(4242),
+            created_at: Some(1_760_000_000),
+        }
+    );
+    // the session-gone outcome is the host's stale socket: the kill that killed nothing
+    assert_eq!(
+        agterm_host::KillOutcome::from(KillOutcome::Killed),
+        agterm_host::KillOutcome::Killed
+    );
+    assert_eq!(
+        agterm_host::KillOutcome::from(KillOutcome::Gone),
+        agterm_host::KillOutcome::StaleSocket
+    );
+    assert_eq!(
+        agterm_host::KillOutcome::from(KillOutcome::Failed("why".to_owned())),
+        agterm_host::KillOutcome::Failed("why".to_owned())
+    );
+    let screen = Screen {
+        revision: 9,
+        columns: 20,
+        rows: 5,
+        cursor_column: 4,
+        cursor_row: 2,
+        alternate: true,
+        text: "0123456789abcdefghijKLMNO\n> ab".to_owned(),
+    };
+    assert_eq!(
+        agterm_host::LiveScreen::from(screen),
+        agterm_host::LiveScreen {
+            revision: 9,
+            columns: 20,
+            rows: 5,
+            cursor_column: 4,
+            cursor_row: 2,
+            alternate: true,
+            text: "0123456789abcdefghijKLMNO\n> ab".to_owned(),
+        }
+    );
+    let record = agterm_host::ProcessRecord {
+        pid: 7,
+        started: 123_456,
+        group: 7,
+        foreground: 7,
+    };
+    let process = JobProcess::from(record);
+    assert_eq!(
+        process,
+        JobProcess {
+            pid: 7,
+            started: 123_456,
+            group: 7,
+            foreground: 7,
+        }
+    );
+    assert_eq!(agterm_host::ProcessRecord::from(process), record);
+}

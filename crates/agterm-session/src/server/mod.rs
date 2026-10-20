@@ -25,11 +25,13 @@
 //!
 //! A connection counts as a client from its accept until it closes. Every connection starts with a hello
 //! ([`crate::protocol::Control::Hello`]) within [`HANDSHAKE_TIMEOUT`] (on Unix; Windows pipes take no timeout). The
-//! server serves the control and attach roles: an attach connection attaches to a session, creating it when asked,
-//! and carries its stream ([`attach`]); an api hello is still refused with
-//! [`crate::protocol::ErrorCode::UnsupportedRole`], and a handoff request with a failed result, since the server does
-//! not advertise [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`].
+//! server serves every role: an attach connection attaches to a session, creating it when asked, and carries its
+//! stream ([`attach`]); an api connection asks what `SessionHost` and `ngtermctl clipboard set` need, request by
+//! request ([`api`]); a control connection holds the server, and its handoff request gets a failed result, since the
+//! server does not advertise [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`]. A role this server does not know is
+//! refused with [`crate::protocol::ErrorCode::UnsupportedRole`].
 
+pub mod api;
 mod attach;
 pub mod clients;
 pub mod lead;
@@ -46,8 +48,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::endpoint::{Endpoint, Listener, Stream};
+use crate::job::Sweeper;
 use crate::protocol::{
-    CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffResult, Hello, Role, Welcome,
+    CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, FramingError, HandoffResult, Role, Welcome,
     read_frame, welcome, write_control,
 };
 use clients::ResyncBudget;
@@ -119,6 +122,7 @@ pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
             capabilities: capabilities(),
         },
         panes: Panes::new(),
+        jobs: Sweeper::live(),
         namespace: endpoint.directory().to_path_buf(),
         client_queue_limit: config.client_queue_limit,
         resync_budget: config.resync_budget,
@@ -164,6 +168,8 @@ struct Shared {
     identity: Identity,
     /// The live sessions.
     panes: Panes,
+    /// The process table the api's foreground jobs are read from and signalled through.
+    jobs: Sweeper,
     /// The namespace directory served, absolute: the sessions' `AGTERM_LIVE_DIR`.
     namespace: PathBuf,
     /// The sessions' client queues and resync budget ([`ServerConfig`]).
@@ -248,7 +254,10 @@ fn serve_connection(mut stream: Stream, shared: &Arc<Shared>) -> Result<(), Fram
     set_recv_timeout(&stream, Some(HANDSHAKE_TIMEOUT));
     let frame = read_frame(&mut stream)?;
     let (welcome, role) = match frame.control() {
-        Ok(Control::Hello(hello)) => (welcome_for(&hello, frame.protocol, identity), hello.role),
+        Ok(Control::Hello(hello)) => (
+            welcome(&hello, frame.protocol, &identity.build, &identity.capabilities),
+            hello.role,
+        ),
         Ok(_) => (
             refusal(
                 identity,
@@ -266,21 +275,10 @@ fn serve_connection(mut stream: Stream, shared: &Arc<Shared>) -> Result<(), Fram
     set_recv_timeout(&stream, None);
     match role {
         Role::Attach => attach::serve(stream, shared),
-        _ => serve_control(&mut stream),
+        Role::Api => api::serve(&stream, shared),
+        // a welcomed hello names a role this server knows
+        Role::Control | Role::Unknown => serve_control(&mut stream),
     }
-}
-
-/// The welcome for `hello` from a client of `protocol`: [`welcome`]'s, refusing the roles this server does not serve
-/// yet.
-fn welcome_for(hello: &Hello, protocol: u32, identity: &Identity) -> Welcome {
-    let mut answer = welcome(hello, protocol, &identity.build, &identity.capabilities);
-    if answer.error.is_none() && !matches!(hello.role, Role::Control | Role::Attach) {
-        answer.error = Some(ControlError::new(
-            ErrorCode::UnsupportedRole,
-            "this agterm-session server serves control and attach connections only",
-        ));
-    }
-    answer
 }
 
 fn refusal(identity: &Identity, error: ControlError) -> Welcome {
@@ -341,7 +339,7 @@ pub fn working_directory(directory: &Path) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::PROTOCOL_VERSION;
+    use crate::protocol::{Hello, PROTOCOL_VERSION};
 
     fn identity() -> Identity {
         Identity {
@@ -358,6 +356,10 @@ mod tests {
         }
     }
 
+    fn welcome_for(hello: &Hello, protocol: u32, identity: &Identity) -> Welcome {
+        welcome(hello, protocol, &identity.build, &identity.capabilities)
+    }
+
     #[test]
     fn a_control_hello_is_welcomed_with_the_servers_identity() {
         let welcome = welcome_for(&hello(Role::Control), PROTOCOL_VERSION, &identity());
@@ -368,16 +370,13 @@ mod tests {
     }
 
     #[test]
-    fn the_role_not_served_yet_is_refused() {
-        let welcome = welcome_for(&hello(Role::Api), PROTOCOL_VERSION, &identity());
-        let error = welcome.error.unwrap();
-        assert_eq!(error.code, ErrorCode::UnsupportedRole);
-        assert_eq!(
-            error.message,
-            "this agterm-session server serves control and attach connections only"
-        );
-        let welcome = welcome_for(&hello(Role::Attach), PROTOCOL_VERSION, &identity());
-        assert_eq!(welcome.error, None, "an attach is served");
+    fn every_known_role_is_served_and_an_unknown_one_refused() {
+        for role in [Role::Control, Role::Api, Role::Attach] {
+            let welcome = welcome_for(&hello(role), PROTOCOL_VERSION, &identity());
+            assert_eq!(welcome.error, None, "{role:?} is served");
+        }
+        let welcome = welcome_for(&hello(Role::Unknown), PROTOCOL_VERSION, &identity());
+        assert_eq!(welcome.error.unwrap().code, ErrorCode::UnsupportedRole);
     }
 
     #[test]

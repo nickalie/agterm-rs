@@ -828,11 +828,13 @@ pub struct KillResult {
     pub outcome: KillOutcome,
 }
 
+/// [`agterm_host::KillOutcome`] on the wire: [`KillOutcome::Gone`] is the host's
+/// [`agterm_host::KillOutcome::StaleSocket`], the outcome that killed nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KillOutcome {
-    /// The session and its shell were ended.
+    /// The session and its shell were ended, and the foreground job the shell left was hung up.
     Killed,
-    /// No session of that name was left to kill.
+    /// No session of that name was left to kill: none was there, or its program had already ended.
     Gone,
     /// The kill failed, with the reason.
     Failed(String),
@@ -851,7 +853,8 @@ pub struct Screen {
     pub cursor_row: u32,
     /// The alternate screen is active.
     pub alternate: bool,
-    /// One line per row, trailing blank rows included.
+    /// Plain text read the way a terminal copies a selection (zmx's `serializeScreenText`): soft-wrapped rows joined
+    /// into one line, trailing blanks of a line and trailing blank lines trimmed; empty for a blank screen.
     pub text: String,
 }
 
@@ -865,6 +868,66 @@ pub struct JobProcess {
     pub group: i32,
     /// The foreground process group of its terminal; zero or negative without one.
     pub foreground: i32,
+}
+
+// What the api's replies are to `SessionHost` ([`agterm_host`]), and its job records back: the wire carries the host's
+// types field for field, so a client converts without judging anything.
+
+impl From<SessionRecord> for agterm_host::LiveSessionRecord {
+    fn from(record: SessionRecord) -> Self {
+        Self {
+            name: record.name,
+            clients: Some(record.clients),
+            leader_pid: record.leader_pid,
+            created_at: Some(record.created_at),
+        }
+    }
+}
+
+impl From<KillOutcome> for agterm_host::KillOutcome {
+    fn from(outcome: KillOutcome) -> Self {
+        match outcome {
+            KillOutcome::Killed => Self::Killed,
+            KillOutcome::Gone => Self::StaleSocket,
+            KillOutcome::Failed(reason) => Self::Failed(reason),
+        }
+    }
+}
+
+impl From<Screen> for agterm_host::LiveScreen {
+    fn from(screen: Screen) -> Self {
+        Self {
+            revision: screen.revision,
+            columns: screen.columns,
+            rows: screen.rows,
+            cursor_column: screen.cursor_column,
+            cursor_row: screen.cursor_row,
+            alternate: screen.alternate,
+            text: screen.text,
+        }
+    }
+}
+
+impl From<JobProcess> for agterm_host::ProcessRecord {
+    fn from(process: JobProcess) -> Self {
+        Self {
+            pid: process.pid,
+            started: process.started,
+            group: process.group,
+            foreground: process.foreground,
+        }
+    }
+}
+
+impl From<agterm_host::ProcessRecord> for JobProcess {
+    fn from(record: agterm_host::ProcessRecord) -> Self {
+        Self {
+            pid: record.pid,
+            started: record.started,
+            group: record.group,
+            foreground: record.foreground,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

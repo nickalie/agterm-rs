@@ -58,6 +58,16 @@
 //! pane's lock). The program's end leaves no client attached or leading. [`Pane::write`] (typing on behalf of no
 //! client) and [`Pane::resize`] (the server's own) bypass the lead.
 //!
+//! # On behalf of no client
+//!
+//! The api ([`super::api`]) reads and writes a session without attaching to it. [`Pane::observe`] reads its terminal
+//! together with its revision ([`Pane::revision`]), which counts the changes of the terminal's screen: every read of
+//! the PTY, every resize and every [`Pane::print`] moves it (zmx's `screen_revision`), nothing else does, so two reads
+//! with the same revision saw the same screen. [`Pane::write`] queues typing that bypasses the lead, and
+//! [`Pane::print`] writes bytes into the session's output as if its program had printed them (zmx's injected output,
+//! for `ngtermctl clipboard set`'s OSC 52 write): the terminal and every client take them at the next offset, once the
+//! program's output stands outside a sequence they could split.
+//!
 //! # The end
 //!
 //! When the program exits, the pane waits up to [`EXIT_GRACE`] for the PTY's end, so output written before the exit
@@ -163,6 +173,17 @@ pub enum AttachError {
     Unavailable(SnapshotError),
 }
 
+/// Why [`Pane::print`] wrote nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PrintError {
+    /// The session's program ended.
+    #[error("the live session ended")]
+    Ended,
+    /// The program's output stood inside a sequence for the whole wait.
+    #[error("the live session's output stands inside an escape sequence")]
+    InsideSequence,
+}
+
 /// Why a client was not resynced.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ResyncError {
@@ -232,6 +253,8 @@ struct State {
     lead: Lead,
     /// The session's output bytes so far: the offset of the next read.
     offset: u64,
+    /// Counts the changes of the terminal's screen: reads, resizes and prints ([`Pane::revision`]).
+    revision: u64,
     size: GridSize,
     /// The PTY actor stopped.
     pty_ended: bool,
@@ -279,6 +302,7 @@ impl Core {
         state.terminal.vt_write(bytes);
         let offset = state.offset;
         state.offset += bytes.len() as u64;
+        state.revision = state.revision.wrapping_add(1);
         state.prune();
         state.clients.output(offset, bytes);
         drop(state);
@@ -441,6 +465,7 @@ impl Pane {
                 clients,
                 lead,
                 offset: 0,
+                revision: 0,
                 size,
                 pty_ended: false,
                 exited: false,
@@ -727,6 +752,7 @@ impl Pane {
         }
         self.actor.resize(Size::cells(size.rows, size.cols));
         state.size = size;
+        state.revision = state.revision.wrapping_add(1);
         let offset = state.offset;
         state.clients.resized(offset, size);
     }
@@ -754,6 +780,60 @@ impl Pane {
     /// Run `read` on the session's terminal, under the pane's lock (no output is fed meanwhile).
     pub fn with_terminal<R>(&self, read: impl FnOnce(&mut vt::Terminal) -> R) -> R {
         read(&mut self.core.lock().terminal)
+    }
+
+    /// Run `read` on the session's terminal and its revision ([`Pane::revision`]) together, under the pane's lock;
+    /// `None` once the program ended, whose session is gone.
+    pub fn observe<R>(&self, read: impl FnOnce(&mut vt::Terminal, u64) -> R) -> Option<R> {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return None;
+        }
+        let revision = state.revision;
+        Some(read(&mut state.terminal, revision))
+    }
+
+    /// Counts the changes of the session's screen: it moves with every read of the PTY, every resize and every
+    /// [`Pane::print`], and with nothing else (it starts at zero and wraps).
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.core.lock().revision
+    }
+
+    /// Write `data` into the session's output as if its program had printed it: the session's terminal and every
+    /// client take it at the next offset, in order with the program's output, and the revision moves. Waits up to
+    /// [`PaneConfig::snapshot_wait`] for the program's output to stand outside any sequence (the PTY read
+    /// meanwhile), so the bytes neither split one of the program's sequences nor are split by it. The terminal's
+    /// replies to them are dropped: the program asked for none. Nothing for empty `data`.
+    ///
+    /// # Errors
+    ///
+    /// [`PrintError::Ended`] once the program ended; [`PrintError::InsideSequence`] when its output still stood
+    /// inside a sequence at the end of the wait, with nothing written.
+    pub fn print(&self, data: &[u8]) -> Result<(), PrintError> {
+        let (mut state, _) = self.core.wait_until(self.snapshot_wait, |state| {
+            state.exit.is_some() || state.terminal.at_ground()
+        });
+        if state.exit.is_some() {
+            return Err(PrintError::Ended);
+        }
+        if !state.terminal.at_ground() {
+            return Err(PrintError::InsideSequence);
+        }
+        if data.is_empty() {
+            return Ok(());
+        }
+        // the replies queued before are the program's own; those after, to bytes it never printed, are dropped
+        let theirs = lock(&self.core.replies).len();
+        state.terminal.vt_write(data);
+        lock(&self.core.replies).truncate(theirs);
+        let offset = state.offset;
+        state.offset += data.len() as u64;
+        state.revision = state.revision.wrapping_add(1);
+        state.prune();
+        state.clients.output(offset, data);
+        self.release(state);
+        Ok(())
     }
 
     /// How the program ended; `None` while it runs.
