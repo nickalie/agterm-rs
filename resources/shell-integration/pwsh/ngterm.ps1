@@ -29,7 +29,8 @@ $global:__NgtermIntegration = & {
         $cursor = if ($features -contains 'cursor:steady') { 6 } else { 5 }
     }
     $prompt = Microsoft.PowerShell.Management\Get-Item -LiteralPath Function:\prompt -ErrorAction Ignore
-    $readLine = Microsoft.PowerShell.Management\Get-Item -LiteralPath Function:\PSConsoleHostReadLine -ErrorAction Ignore
+    $readLine = Microsoft.PowerShell.Management\Get-Item -LiteralPath Function:\PSConsoleHostReadLine `
+        -ErrorAction Ignore
     @{
         # the prompt and the line reader this script wraps
         Prompt   = if ($prompt) { $prompt.ScriptBlock } else { $null }
@@ -46,7 +47,8 @@ $global:__NgtermIntegration = & {
 function global:prompt {
     # first, before any statement replaces them; no command has set the exit code yet in a fresh shell
     $succeeded = $?
-    $exitCode = Microsoft.PowerShell.Utility\Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore
+    $exitCode = Microsoft.PowerShell.Utility\Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly `
+        -ErrorAction Ignore
     $state = $global:__NgtermIntegration
     $esc = [char]27
     $bel = [char]7

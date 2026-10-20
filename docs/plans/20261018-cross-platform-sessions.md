@@ -1022,8 +1022,8 @@ Order after Task 7, as two lanes that meet:
 
 - [x] `ShellKind::Pwsh`: the script (OSC 7, OSC 133, title), launch arguments, the replay script in pwsh
       - `LoginShell::Pwsh` (the enum kept its name), known by `pwsh`/`powershell` with or without `.exe`, after `/` or
-        `\`, on every OS (a Unix pwsh login shell wraps too). The script is `resources/shell-integration/pwsh/ngterm.ps1`
-        (ngterm's own name), staged by `scripts/stage.sh` in ngterm's own resources
+        `\`, on every OS (a Unix pwsh login shell wraps too). The script is
+        `resources/shell-integration/pwsh/ngterm.ps1` (ngterm's own name), staged by `scripts/stage.sh` in ngterm's own resources
         (`share/ngterm/shell-integration/pwsh/ngterm.ps1`, resolved from the staged root as the zmx build id is, so an
         inherited `GHOSTTY_RESOURCES_DIR` cannot hide it; `Runtime`/`LiveProbe`/`Inputs` carry `own_resources_dir`);
         `AGTERM_PWSH_INTEGRATION` names it and `-NoLogo -NoExit -Command` (Unix `-Login` first) loads it as a script
@@ -1036,13 +1036,17 @@ Order after Task 7, as two lanes that meet:
         `Windows` on Windows) or a durable line as a script block, single-quoted with typographic quotes doubled;
         exact argv in PowerShell 7.3+ on Linux and macOS, on Windows but for `cmd.exe`, batch files, WSH scripts and
         `msiexec`; Windows PowerShell 5.1's legacy passing loses embedded `"` and empty arguments. `command_restore`
-        takes PowerShell (and a Windows `\`-path, `.exe` name) as a shell, and one told `-NoExit` among its host
-        options (before `-Command`/`-File`/the first argument, option values skipped) as idle, so a live pwsh pane at
-        its prompt is never replayed. A plain pane's PowerShell gets no integration (Ghostty has none). On Unix pwsh
-        has no job control, so its programs stay in its own group: the foreground reads (`ForegroundReader`'s
-        `observed`/`command`) take a group led by a PowerShell holding its prompt for its first child that is no shell,
-        so the restore capture, `tree` and a restart's replay find a program typed into it on every OS (review round 1
-        closed the gap the first pass recorded as accepted)
+        takes PowerShell (and a Windows `\`-path, `.exe` name) as a shell, idle when its host options, read as its
+        console host's parser reads them (7's and 5.1's tables: `-`, `/` or another dash, abbreviations, option values
+        skipped, an unknown option or the first argument starting the script or command, 7's `-Version` exiting),
+        leave it at a prompt: options alone, or `-NoExit` before the command, so a live pwsh pane at its prompt (or a
+        `Start-Job` worker) is never replayed. A plain pane's PowerShell gets no integration (Ghostty has none). On
+        Unix pwsh has no job control: every program it starts, foreground or background (`Start-Process
+        -NoNewWindow`, thread jobs, prompt helpers), stays in its own group and nothing tells them apart, so the
+        foreground reads take a group led by a PowerShell holding its prompt for that shell: the restore capture finds
+        nothing, `tree` shows the shell and a restart replays nothing, and a Unix pwsh pane restores to its prompt
+        (review round 1 added a descent to the shell's first child; round 2 removed it, since it replayed background
+        programs; Windows reads the console's foreground)
 - [x] eligibility on Windows: `pwsh.exe`, then `powershell.exe`, else the existing rejection with its reason
       - `windows_shell`: launchable `pwsh.exe` on `PATH`, then `powershell.exe` on `PATH`, then the system directory's
         `WindowsPowerShell\v1.0\powershell.exe`, as full paths; none is `None` (plain panes run `cmd.exe`) and the live
@@ -1054,10 +1058,11 @@ Order after Task 7, as two lanes that meet:
       session
       - core: rendering, quoting, eligibility, `is_idle_shell`, and a real-pwsh replay round trip of odd arguments
         after the integration loads (`live::replay`); session: `tests/pwsh.rs` on real PTYs (`Pane::spawn`), on every
-        OS with a pwsh (required on Windows): the prompt's OSC 7, 133 and title, C and `D;3`, the helper's argv read
-        through the process table (Windows: the console foreground; Unix: the shell group's child), replayed into a
-        new session that runs it with the same arguments and then reports its directory; the argv is read through
-        `ForegroundReader::command` (the capture's production path), each line typed once `PSReadLine` echoed its first
+        OS with a pwsh (required on Windows): the prompt's OSC 7, 133 and title, C and `D;3`, the running helper read
+        through the process table and `ForegroundReader` (the capture's production path; Windows: its argv from the
+        console foreground; Unix: nothing captured, the shell in `tree` and for a restart), its argv (the one read on
+        Windows, the one typed on Unix) replayed into a new session that runs it with the same arguments and then
+        reports its directory; each line typed once `PSReadLine` echoed its first
         character back (no sleeps), the helper's record renamed into place. The VM was not used: copying
         the tree into it was refused by the environment's permission classifier, so Windows is checked on CI only
 - [x] run gates

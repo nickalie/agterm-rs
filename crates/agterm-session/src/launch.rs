@@ -1,8 +1,8 @@
 //! What a live launch reads of this host (upstream's `agterm/Ghostty/ZmxLaunch.swift`): the staged session host
 //! executable (or a debug build's override), the login shell, the Ghostty resources holding its shell integration
-//! (ngterm's own staged resources for PowerShell's, which Ghostty has none of), the app's own values of the variables that integration hands on, the state directory naming the socket namespace and
-//! the staged host's build id. Linux and Windows have no supervising session host (macOS's `agterm-session-host`),
-//! so no configuration names one.
+//! (ngterm's own staged resources for PowerShell's, which Ghostty has none of), the app's own values of the variables
+//! that integration hands on, the state directory naming the socket namespace and the staged host's build id. Linux
+//! and Windows have no supervising session host (macOS's `agterm-session-host`), so no configuration names one.
 //!
 //! The staged session host is still zmx, so the executable, its override and its build id keep zmx's names
 //! ([`EXECUTABLE_FILE`], [`EXECUTABLE_OVERRIDE`], [`BUILD_ID_PATH`]) until the session server takes its place.

@@ -18,11 +18,12 @@
 //!
 //! bash, fish and PowerShell are a Rust-only extension: upstream wraps zsh only (capability `live-any-shell`).
 //! PowerShell is the shell a Windows live pane runs (`agterm-session::launch`), and a Unix one whose login shell it
-//! is. It has no job control there, so a program it runs stays in the shell's own process group, led by the shell (the
-//! terminal's session leader): the foreground reads (`restore::capture`) take a group led by a PowerShell holding its
-//! prompt for the program it runs there, its first child that is no shell, so the restore capture, the `tree` and a
-//! restart's replay find it as they find a job-control shell's job. Windows' process table names the shell's newest
-//! child as the console's foreground instead, which they take as it is.
+//! is. It has no job control there, so every program it runs, in the foreground or the background, stays in the
+//! shell's own process group, led by the shell (the terminal's session leader), and nothing tells its foreground
+//! program from the others: the foreground reads (`restore::capture`) take that group for the shell, so the restore
+//! capture finds nothing, the `tree` shows the shell and a restart replays nothing, and a Unix PowerShell pane
+//! restores to its prompt. Windows' process table names the shell's newest child as the console's foreground instead,
+//! which they take as it is.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

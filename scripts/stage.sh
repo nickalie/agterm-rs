@@ -8,8 +8,8 @@
 # from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes, its PowerShell
 # integration and the agent integrations' payloads from resources/. Binaries are staged when they exist (agterm and
 # ngtermctl appear with their crates, zmx once scripts/build-zmx.sh filled its prefix); Ghostty's resources are
-# required. There is no lib/: libghostty-vt is linked statically. The terminfo, themes and shell integration are Ghostty's at LIBGHOSTTY_VT_REV,
-# from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
+# required. There is no lib/: libghostty-vt is linked statically. The terminfo, themes and shell integration are
+# Ghostty's at LIBGHOSTTY_VT_REV, from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail

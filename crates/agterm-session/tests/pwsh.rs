@@ -1,10 +1,11 @@
 //! PowerShell live sessions end to end, at the session and the core level: a session started the way a live pane's
 //! wrap starts its PowerShell (`agterm-core`'s login arguments and integration variable, this repository's
 //! integration script) reports its working directory and its prompt and command marks to the server's terminal; a
-//! program typed into it is read back as its foreground command the way the restore capture reads it
-//! (`agterm-core`'s `ForegroundReader` over the process table: past the shell on Unix, where PowerShell has no job
-//! control), and `agterm-core`'s replay of that argv into a recreated session runs it again with the same arguments,
-//! then leaves the integrated prompt.
+//! program typed into it is read the way the restore capture reads it (`agterm-core`'s `ForegroundReader` over the
+//! process table): on Windows as its foreground command, on Linux and macOS, where PowerShell has no job control and
+//! nothing tells its foreground program from a background one, not at all (the shell holds the foreground). Then
+//! `agterm-core`'s replay of the program's argv (the one read on Windows, the one typed elsewhere) into a recreated
+//! session runs it again with the same arguments, then leaves the integrated prompt.
 //!
 //! On every OS with a PowerShell 7 (`pwsh`; every CI runner carries one, and Windows requires it). On Unix the shell
 //! runs in a throwaway home, so no profile, history or module cache of the user's is read or written; every session
@@ -19,6 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use agterm_core::command_restore::PaneForeground;
 use agterm_core::live::replay::{self, FinalShell, powershell_quoted};
 use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
 use agterm_core::restore::capture::ForegroundReader;
@@ -240,11 +243,47 @@ fn wait_for_directory(pane: &Pane, cwd: &Path) {
 
 /// The program in the foreground of the shell `shell_pid` runs, read as a live pane's restore capture reads it: the
 /// terminal's foreground group through the process table (Windows: the console's foreground), then
-/// `ForegroundReader::command`, which on Unix reads past a PowerShell holding its prompt to the program it runs in
-/// its own group. `None` while the shell holds its prompt.
+/// `ForegroundReader::command`. `None` while the shell holds its prompt, and on Unix while it runs a program in its
+/// own group.
 fn foreground_argv(table: &dyn ProcessTable, shell_pid: i32) -> Option<Vec<String>> {
     let group = table.terminal_foreground(shell_pid)?;
     ForegroundReader::new(table, None).command(group)
+}
+
+/// The argv to replay for `helper`, running at the prompt of the shell `shell_pid`, as the capture reads it: on
+/// Windows the console's foreground, which must be the helper.
+#[cfg(windows)]
+fn captured_helper(table: &dyn ProcessTable, shell_pid: i32, helper: &[String]) -> Vec<String> {
+    wait_for(
+        "the helper in the foreground",
+        || foreground_argv(table, shell_pid),
+        |argv| argv.as_ref().is_some_and(|argv| argv.ends_with(&helper[1..])),
+    )
+    .unwrap_or_default()
+}
+
+/// The argv to replay for `helper`, running at the prompt of the shell `shell_pid`: on Unix the capture reads
+/// nothing (the helper shares the shell's group, as a background program would), the `tree` and a restart see the
+/// shell, so the replay is of the argv typed.
+#[cfg(unix)]
+fn captured_helper(table: &dyn ProcessTable, shell_pid: i32, helper: &[String]) -> Vec<String> {
+    let group = table.terminal_foreground(shell_pid);
+    assert_eq!(group, Some(shell_pid), "the helper runs in the shell's own group");
+    let reader = ForegroundReader::new(table, None);
+    assert_eq!(
+        foreground_argv(table, shell_pid),
+        None,
+        "nothing is captured under PowerShell"
+    );
+    assert!(
+        matches!(reader.running(shell_pid), Some(PaneForeground::ForegroundShell(_))),
+        "the tree shows the shell"
+    );
+    assert!(
+        matches!(reader.observed(shell_pid), Some((pid, PaneForeground::ForegroundShell(_))) if pid == shell_pid),
+        "a restart sees the shell"
+    );
+    helper.to_vec()
 }
 
 /// The line that runs `argv` at a PowerShell prompt.
@@ -276,7 +315,7 @@ fn exit_three() -> String {
 }
 
 #[test]
-fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() -> TestResult {
+fn a_live_powershell_reports_its_directory_reads_its_foreground_and_replays_a_program() -> TestResult {
     let Some(shell) = pwsh()? else {
         eprintln!("SKIPPED: no pwsh on PATH");
         return Ok(());
@@ -307,18 +346,12 @@ fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() 
     expect_raw(&mut client, b"\x1b]133;C\x07");
     expect_raw(&mut client, b"\x1b]133;D;3\x07");
 
-    // a program in the foreground, read through the process table
+    // a program in the foreground, read through the process table once it runs
     let helper = helper_argv()?;
     type_at_prompt(&pane, &mut client, 2, &typed(&helper))?;
-    let table = ProcTable::new();
-    let shell_pid = i32::try_from(pane.pid())?;
-    let foreground = wait_for(
-        "the helper in the foreground",
-        || foreground_argv(&table, shell_pid),
-        |argv| argv.as_ref().is_some_and(|argv| argv.ends_with(&helper[1..])),
-    )
-    .unwrap_or_default();
     wait_for("the helper's record", || record.exists(), |exists| *exists);
+    let table = ProcTable::new();
+    let foreground = captured_helper(&table, i32::try_from(pane.pid())?, &helper);
     pane.kill(true)?;
     drop(client);
     fs::remove_file(&record)?;
@@ -354,10 +387,10 @@ fn a_live_powershell_reports_its_directory_and_replays_its_foreground_command() 
     Ok(())
 }
 
-/// Not a test of its own: the program [`a_live_powershell_reports_its_directory_and_replays_its_foreground_command`]
-/// runs in its sessions, which records its arguments after `--` as JSON in the file [`RECORD`] names (written beside
-/// it and renamed into place, so it never shows up partly written), then holds the foreground until the `.stop` file
-/// beside it exists.
+/// Not a test of its own: the program
+/// [`a_live_powershell_reports_its_directory_reads_its_foreground_and_replays_a_program`] runs in its sessions, which
+/// records its arguments after `--` as JSON in the file [`RECORD`] names (written beside it and renamed into place, so
+/// it never shows up partly written), then holds the foreground until the `.stop` file beside it exists.
 #[test]
 #[ignore = "the PowerShell session test's child"]
 fn foreground_helper() {

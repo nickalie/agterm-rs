@@ -77,90 +77,218 @@ pub fn is_known_shell(basename: &str, extra: Option<&str>) -> bool {
 /// as `extra`) and only option flags follow it. Not proof of an interactive prompt: a builtin or a shell loop runs in
 /// the shell process and leaves argv untouched. A shell running something is not idle: a script path
 /// (`/bin/sh /usr/local/bin/cld`, the foreground of any `#!/bin/sh` wrapper) or a `-c` command leaves a non-flag
-/// argument after `argv[0]`. A PowerShell told `-NoExit` is the exception: it holds a prompt once its `-Command` ran,
-/// which is how a live pane's PowerShell loads its integration (`live::shell_integration`) and runs a replay.
+/// argument after `argv[0]`. A PowerShell is read by its own host options instead ([`powershell_holds_prompt`]): one
+/// told `-NoExit` holds a prompt once its `-Command` ran, which is how a live pane's PowerShell loads its integration
+/// (`live::shell_integration`) and runs a replay.
 #[must_use]
 pub fn is_idle_shell(argv: &[String], extra: Option<&str>) -> bool {
     let Some((first, rest)) = argv.split_first() else {
         return false;
     };
     let name = basename(first);
-    is_known_shell(name, extra) && (rest.iter().all(|arg| arg.starts_with('-')) || stays_open(name, rest))
-}
-
-/// Whether a PowerShell (`name`, by its basename) is told `-NoExit` among its host options `arguments`, in any of the
-/// abbreviations PowerShell takes for it (down to `-noe`), in any case. Only the options before the command count:
-/// `-Command`, `-File`, `-CommandWithArgs` (by any of their abbreviations; a `-` or `--` before the name, in any
-/// case) and the first argument that is no option
-/// (`-File`'s script in PowerShell 7, the command in 5.1) take the rest as command text or script arguments, and an
-/// option's value is skipped (`-ExecutionPolicy Bypass`, `-WorkingDirectory dir`). PowerShell's console host parser
-/// (`CommandLineParameterParser.cs`) at its 7.x releases.
-fn stays_open(name: &str, arguments: &[String]) -> bool {
-    if !crate::live::shell_integration::is_powershell(name.strip_prefix('-').unwrap_or(name)) {
+    if !is_known_shell(name, extra) {
         return false;
     }
-    let mut arguments = arguments.iter();
-    while let Some(argument) = arguments.next() {
-        // `-` or `--` before the name
-        let Some(option) = argument.strip_prefix('-') else {
-            return false;
-        };
-        let option = option.strip_prefix('-').unwrap_or(option).to_ascii_lowercase();
-        match powershell_option(&option) {
-            PowerShellOption::NoExit => return true,
-            PowerShellOption::Last => return false,
-            PowerShellOption::Valued => {
-                arguments.next();
-            }
-            PowerShellOption::Switch => {}
-        }
+    match PowerShellHost::of(name) {
+        Some(host) => powershell_holds_prompt(host, rest),
+        None => rest.iter().all(|arg| arg.starts_with('-')),
     }
-    false
 }
 
-/// What a PowerShell host option (lower case, without its `-`) does to the arguments after it.
+/// Which PowerShell reads its host options: PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 (`powershell`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PowerShellOption {
+enum PowerShellHost {
+    Core,
+    Desktop,
+}
+
+impl PowerShellHost {
+    /// The PowerShell `name` (a basename, maybe login-dashed, with or without `.exe`) is; `None` for another shell.
+    fn of(name: &str) -> Option<Self> {
+        let name = name.strip_prefix('-').unwrap_or(name);
+        if !crate::live::shell_integration::is_powershell(name) {
+            return None;
+        }
+        Some(if name.to_ascii_lowercase().starts_with("pwsh") {
+            Self::Core
+        } else {
+            Self::Desktop
+        })
+    }
+
+    /// Its host options in its parser's order.
+    fn options(self) -> &'static [(&'static str, &'static str, HostOption)] {
+        match self {
+            Self::Core => PWSH_OPTIONS,
+            Self::Desktop => WINDOWS_POWERSHELL_OPTIONS,
+        }
+    }
+}
+
+/// Whether a PowerShell `host` given `arguments` is left at its prompt, its host options read as its console host's
+/// parser reads them (`CommandLineParameterParser.cs`'s `ParseHelper` and `GetSwitchKey` at PowerShell 7.5.4; for
+/// 5.1, that parser's first open-source form, v6.0.0-alpha.9): an option starts with `-`, `/` or another dash (`–`,
+/// `—`, `―`), a second dash after it is dropped (the same one in 7, any in 5.1), each argument is trimmed, and its
+/// name matches in any case from the shortest abbreviation PowerShell takes, the first match in its order. Only the
+/// options before the command count: `-Command`, `-File`, `-CommandWithArgs`, an option it does not know and the
+/// first argument that is no option (`-File`'s script in 7, the command in 5.1) take the rest, and the shell then
+/// stays only when `-NoExit` came first; an option's value is skipped (`-ExecutionPolicy Bypass`,
+/// `-WorkingDirectory dir`). Options alone leave the interactive shell. An empty argument is skipped by 5.1 and taken
+/// for `-File`'s script by 7, which then fails and exits, as it does after `-Version`.
+fn powershell_holds_prompt(host: PowerShellHost, arguments: &[String]) -> bool {
+    let mut no_exit = false;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let argument = argument.trim();
+        let option = if argument.is_empty() {
+            match host {
+                PowerShellHost::Core => HostOption::Exits,
+                PowerShellHost::Desktop => continue,
+            }
+        } else {
+            switch_key(host, argument).map_or(HostOption::Last, |key| host_option(host, &key.to_lowercase()))
+        };
+        match option {
+            HostOption::NoExit => no_exit = true,
+            HostOption::Last => return no_exit,
+            HostOption::Exits => return false,
+            HostOption::Valued => {
+                arguments.next();
+            }
+            HostOption::Switch => {}
+        }
+    }
+    true
+}
+
+/// Whether `c` is a dash PowerShell takes before an option (`CharExtensions.IsDash`).
+fn is_powershell_dash(c: char) -> bool {
+    matches!(c, '-' | '\u{2013}' | '\u{2014}' | '\u{2015}')
+}
+
+/// The option name in a trimmed, non-empty `argument` (`GetSwitchKey`): what follows its `-`, `/` or other dash and a
+/// second dash; `None` when it is no option.
+fn switch_key(host: PowerShellHost, argument: &str) -> Option<&str> {
+    let first = argument.chars().next()?;
+    if !is_powershell_dash(first) && first != '/' {
+        return None;
+    }
+    let key = &argument[first.len_utf8()..];
+    let second_dash = |c: char| match host {
+        PowerShellHost::Core => is_powershell_dash(first) && c == first,
+        PowerShellHost::Desktop => is_powershell_dash(c),
+    };
+    Some(key.strip_prefix(second_dash).unwrap_or(key))
+}
+
+/// What a PowerShell host option does to the arguments after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostOption {
     /// `-NoExit`.
     NoExit,
-    /// The command or script follows and takes every argument after it (`-` alone reads the command from stdin).
+    /// The command or script follows and takes every argument after it (an option with no name, a `-` alone, reads
+    /// it from stdin); so does an option the shell does not know.
     Last,
+    /// The shell ends without a prompt, whatever came before (PowerShell 7's `-Version`).
+    Exits,
     /// Takes the next argument as its value.
     Valued,
-    /// Takes nothing: a switch, or one this parser does not know.
+    /// Takes nothing.
     Switch,
 }
 
-/// The kind of host option `option` is: the full name or an abbreviation at least as long as PowerShell's shortest
-/// (`(full name, shortest)`), or one of its fixed aliases.
-fn powershell_option(option: &str) -> PowerShellOption {
-    const ENDING: [(&str, usize); 3] = [("commandwithargs", 15), ("command", 1), ("file", 1)];
-    const ENDING_ALIASES: [&str; 2] = ["cwa", ""];
-    const VALUED: [(&str, usize); 12] = [
-        ("configurationname", 6),
-        ("configurationfile", 17),
-        ("custompipename", 14),
-        ("encodedcommand", 1),
-        ("encodedarguments", 8),
-        ("executionpolicy", 2),
-        ("inputformat", 3),
-        ("outputformat", 1),
-        ("settingsfile", 8),
-        ("windowstyle", 1),
-        ("workingdirectory", 2),
-        ("psconsolefile", 13),
-    ];
-    const VALUED_ALIASES: [&str; 5] = ["ec", "ep", "if", "of", "wd"];
-    let abbreviates = |(full, shortest): &(&str, usize)| option.len() >= *shortest && full.starts_with(option);
-    if option.len() >= "noe".len() && "noexit".starts_with(option) {
-        PowerShellOption::NoExit
-    } else if VALUED_ALIASES.contains(&option) || VALUED.iter().any(abbreviates) {
-        PowerShellOption::Valued
-    } else if ENDING_ALIASES.contains(&option) || ENDING.iter().any(abbreviates) {
-        PowerShellOption::Last
-    } else {
-        PowerShellOption::Switch
-    }
+/// PowerShell 7's host options in its parser's order: the full name, the shortest abbreviation it takes and what the
+/// option does. The options of its Windows builds only (`-Sta`, `-Token`, …) are listed on every OS.
+const PWSH_OPTIONS: &[(&str, &str, HostOption)] = &[
+    ("version", "v", HostOption::Exits),
+    ("help", "h", HostOption::Switch),
+    ("?", "?", HostOption::Switch),
+    ("login", "l", HostOption::Switch),
+    ("noexit", "noe", HostOption::NoExit),
+    ("noprofile", "nop", HostOption::Switch),
+    ("nologo", "nol", HostOption::Switch),
+    ("noninteractive", "noni", HostOption::Switch),
+    ("socketservermode", "so", HostOption::Switch),
+    ("v2socketservermode", "v2so", HostOption::Switch),
+    ("servermode", "s", HostOption::Switch),
+    ("namedpipeservermode", "nam", HostOption::Switch),
+    ("sshservermode", "sshs", HostOption::Switch),
+    ("noprofileloadtime", "noprofileloadtime", HostOption::Switch),
+    ("interactive", "i", HostOption::Switch),
+    ("configurationfile", "configurationfile", HostOption::Valued),
+    ("configurationname", "config", HostOption::Valued),
+    ("custompipename", "cus", HostOption::Valued),
+    ("commandwithargs", "commandwithargs", HostOption::Last),
+    ("cwa", "cwa", HostOption::Last),
+    ("command", "c", HostOption::Last),
+    ("windowstyle", "w", HostOption::Valued),
+    ("file", "f", HostOption::Last),
+    ("outputformat", "o", HostOption::Valued),
+    ("of", "o", HostOption::Valued),
+    ("inputformat", "inp", HostOption::Valued),
+    ("if", "if", HostOption::Valued),
+    ("executionpolicy", "ex", HostOption::Valued),
+    ("ep", "ep", HostOption::Valued),
+    ("encodedcommand", "e", HostOption::Valued),
+    ("ec", "e", HostOption::Valued),
+    ("encodedarguments", "encodeda", HostOption::Valued),
+    ("ea", "ea", HostOption::Valued),
+    ("settingsfile", "settings", HostOption::Valued),
+    ("sta", "sta", HostOption::Switch),
+    ("mta", "mta", HostOption::Switch),
+    ("workingdirectory", "wo", HostOption::Valued),
+    ("wd", "wd", HostOption::Valued),
+    (
+        "removeworkingdirectorytrailingcharacter",
+        "removeworkingdirectorytrailingcharacter",
+        HostOption::Switch,
+    ),
+    ("token", "to", HostOption::Valued),
+    ("utctimestamp", "utc", HostOption::Valued),
+];
+
+/// Windows PowerShell 5.1's host options in its parser's order, after `-Version` and `-PSConsoleFile`, which its
+/// `powershell.exe` reads itself, each with a value.
+const WINDOWS_POWERSHELL_OPTIONS: &[(&str, &str, HostOption)] = &[
+    ("version", "v", HostOption::Valued),
+    ("psconsolefile", "psconsolefile", HostOption::Valued),
+    ("help", "h", HostOption::Switch),
+    ("?", "?", HostOption::Switch),
+    ("noexit", "noe", HostOption::NoExit),
+    ("importsystemmodules", "imp", HostOption::Switch),
+    ("noprofile", "nop", HostOption::Switch),
+    ("nologo", "nol", HostOption::Switch),
+    ("noninteractive", "noni", HostOption::Switch),
+    ("socketservermode", "so", HostOption::Switch),
+    ("servermode", "s", HostOption::Switch),
+    ("namedpipeservermode", "nam", HostOption::Switch),
+    ("sshservermode", "sshs", HostOption::Switch),
+    ("configurationname", "config", HostOption::Valued),
+    ("command", "c", HostOption::Last),
+    ("windowstyle", "w", HostOption::Valued),
+    ("file", "f", HostOption::Last),
+    ("outputformat", "o", HostOption::Valued),
+    ("of", "o", HostOption::Valued),
+    ("inputformat", "i", HostOption::Valued),
+    ("if", "i", HostOption::Valued),
+    ("executionpolicy", "ex", HostOption::Valued),
+    ("ep", "ep", HostOption::Valued),
+    ("encodedcommand", "e", HostOption::Valued),
+    ("ec", "e", HostOption::Valued),
+    ("encodedarguments", "encodeda", HostOption::Valued),
+    ("ea", "ea", HostOption::Valued),
+    ("sta", "s", HostOption::Switch),
+    ("mta", "mta", HostOption::Switch),
+];
+
+/// What host option `key` (lower case) is to `host`: the first option it abbreviates, at least as long as that
+/// option's shortest form (`MatchSwitch`); [`HostOption::Last`] for one it does not know (7 takes it for the script's
+/// path, 5.1 for the command).
+fn host_option(host: PowerShellHost, key: &str) -> HostOption {
+    host.options()
+        .iter()
+        .find(|(full, shortest, _)| key.len() >= shortest.len() && full.starts_with(key))
+        .map_or(HostOption::Last, |(_, _, option)| *option)
 }
 
 /// Classifies a pane's raw foreground argv for the tree read; `None` for an empty argv only. `extra` is `$SHELL`'s
@@ -571,6 +699,131 @@ mod tests {
             None
         ));
         assert!(is_idle_shell(&argv(&["pwsh", "-e", "ZQBjAGgAbwA=", "-NoExit"]), None));
+    }
+
+    /// Whether each `(argv, holds a prompt, why)` case reads as its PowerShell reads it.
+    fn assert_idle_cases(cases: &[(&[&str], bool, &str)]) {
+        for (args, holds, why) in cases {
+            assert_eq!(is_idle_shell(&argv(args), None), *holds, "{args:?}: {why}");
+        }
+    }
+
+    #[test]
+    fn a_powershells_options_start_with_its_dashes_or_a_slash_and_end_at_the_script() {
+        assert_idle_cases(&[
+            (
+                &["pwsh", "/NoLogo", "-NoExit", "-Command", "'ready'"],
+                true,
+                "`/` starts an option",
+            ),
+            (
+                &["pwsh", "-NoProfile", "/NoExit", "-Command", "'ready'"],
+                true,
+                "`/NoExit`",
+            ),
+            (
+                &["pwsh", "\u{2013}NoExit", "-c", "x"],
+                true,
+                "an en dash starts an option",
+            ),
+            (
+                &["pwsh", "\u{2014}\u{2014}NoExit", "-c", "x"],
+                true,
+                "the same dash twice",
+            ),
+            (
+                &["pwsh", "-\u{2013}NoExit", "-c", "x"],
+                false,
+                "7 drops only the same dash again",
+            ),
+            (
+                &["powershell", "-\u{2013}NoExit", "-c", "x"],
+                true,
+                "5.1 drops any second dash",
+            ),
+            (&["pwsh", " -NoExit ", "-c", "x"], true, "an argument is trimmed"),
+            (
+                &["pwsh", "/home/me/monitor.ps1", "-NoExit"],
+                false,
+                "a script path is no option",
+            ),
+            (
+                &["pwsh", "-NoExit", "/home/me/monitor.ps1"],
+                true,
+                "-NoExit before the script",
+            ),
+            (&["pwsh", "-bogus", "-NoExit"], false, "an unknown option is the script"),
+        ]);
+    }
+
+    #[test]
+    fn a_powershells_option_values_and_empty_arguments_are_read_as_its_parser_reads_them() {
+        assert_idle_cases(&[
+            (
+                &["pwsh", "-ea", "AAAA", "-NoExit", "-c", "x"],
+                true,
+                "-ea takes a value",
+            ),
+            (
+                &["pwsh", "-cus", "pipe", "-NoExit", "-c", "x"],
+                true,
+                "-cus is -CustomPipeName",
+            ),
+            (
+                &["pwsh", "-config", "name", "-NoExit", "-c", "x"],
+                true,
+                "-config is -ConfigurationName",
+            ),
+            (
+                &["pwsh", "-conf", "name", "-NoExit"],
+                false,
+                "-conf is too short: the script",
+            ),
+            (&["pwsh", "-wd", "/tmp"], true, "options alone, a value among them"),
+            (&["pwsh", "/NoLogo"], true, "options alone"),
+            (
+                &["pwsh", "", "-NoExit", "-c", "x"],
+                false,
+                "7 takes an empty argument for a script and fails",
+            ),
+            (&["pwsh", "-NoExit", "  "], false, "and a blank one"),
+            (
+                &["powershell", "", "-NoExit", "-c", "x"],
+                true,
+                "5.1 skips an empty argument",
+            ),
+            (
+                &["pwsh", "-i", "Text", "-NoExit"],
+                false,
+                "7's -i is -Interactive: Text is the script",
+            ),
+            (
+                &["powershell", "-i", "Text", "-NoExit", "-c", "x"],
+                true,
+                "5.1's -i is -InputFormat",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_powershells_version_ends_7_and_picks_5_1s_engine() {
+        // 7 prints its version and exits, -NoExit or not
+        assert!(!is_idle_shell(&argv(&["pwsh", "-NoExit", "-Version"]), None));
+        assert!(!is_idle_shell(&argv(&["pwsh", "-v"]), None));
+        // 5.1's takes the engine version as its value: its job worker, as `Start-Job` starts it, is a shell
+        assert!(is_idle_shell(
+            &argv(&["powershell.exe", "-Version", "5.1", "-s", "-NoLogo", "-NoProfile"]),
+            None
+        ));
+        assert!(is_idle_shell(
+            &argv(&["powershell", "-v", "2.0", "-NoExit", "-c", "x"]),
+            None
+        ));
+        // and 7's, with the working directory `Start-Job` gives it
+        assert!(is_idle_shell(
+            &argv(&["/usr/bin/pwsh", "-s", "-NoLogo", "-NoProfile", "-wd", "/home/me"]),
+            None
+        ));
     }
 
     #[test]

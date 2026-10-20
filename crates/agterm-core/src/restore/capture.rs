@@ -21,19 +21,19 @@
 //!   first element of a typed pipeline are captured. A captured argv then preempts the creation command on the next
 //!   launch, while a refused one leaves the creation command to the exec path, with `--wait` and close-on-exit.
 //!
-//! PowerShell is the exception to both reads (a Rust-only extension, the shell of a live PowerShell pane): on Linux
-//! and macOS it has no job control, so a program typed at its prompt stays in the shell's own group, led by the shell
-//! (the terminal's session leader in a live pane). A group led by a PowerShell holding its prompt (only options, or
-//! `-NoExit`, as a live pane's and its replay's) therefore reads as the first of the shell's children in it that is no
-//! shell itself: the program typed into it, or a pipeline's first element, as a job-control shell's job would be;
-//! the shell itself while it runs none. On Windows the console's foreground already is that program.
+//! PowerShell (a Rust-only extension, the shell of a live PowerShell pane) has no job control on Linux and macOS:
+//! every native program it starts, in the foreground or in the background (`Start-Process -NoNewWindow`, a thread
+//! job's, a `Start-Job` worker, a prompt helper such as `git status`), stays in the shell's own group, led by the
+//! shell, and nothing in the process table tells its foreground program from the others. So native children sharing
+//! an interactive PowerShell leader's group are not inferred: the group reads as that shell, the capture finds
+//! nothing, the `tree` shows the shell and a restart replays nothing, so a Unix PowerShell pane restores to its prompt
+//! rather than replaying a program that was not in its foreground. A PowerShell running a script or a command
+//! (`-File`, `-Command` without `-NoExit`) is a program like any other, and a descendant that leads a group of its
+//! own reads as any job does. On Windows the console's foreground is read instead (`agterm-session`'s process table).
 
 use agterm_host::{ProcessTable, Surface};
 
-use crate::command_restore::{
-    PaneForeground, ProcessGroupMember, group_descent_candidates, is_idle_shell, pane_foreground,
-};
-use crate::live::shell_integration::is_powershell;
+use crate::command_restore::{PaneForeground, ProcessGroupMember, group_descent_candidates, pane_foreground};
 use crate::model::Session;
 
 /// A live pane's foreground group by its pane token.
@@ -78,16 +78,11 @@ impl<'a> ForegroundReader<'a> {
     }
 
     /// The process that holds group `pgid`'s foreground and what it is (upstream's `ForegroundProcess.observed`):
-    /// the leader, else the first readable member of its descent; past a PowerShell leader holding its prompt, the
-    /// program it runs (module docs).
+    /// the leader, else the first readable member of its descent. A PowerShell leader holding its prompt is that
+    /// shell, whatever runs in its group (module docs).
     #[must_use]
     pub fn observed(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
         if let Some(argv) = self.table.argv(pgid) {
-            if is_powershell_prompt(&argv, self.shell)
-                && let Some((member, program)) = self.under_powershell(pgid)
-            {
-                return Some((member, PaneForeground::Program(program)));
-            }
             return pane_foreground(&argv, self.shell).map(|foreground| (pgid, foreground));
         }
         self.descent(pgid)
@@ -105,15 +100,6 @@ impl<'a> ForegroundReader<'a> {
 
     /// The first readable member of group `pgid`'s descent (upstream's `groupDescentCandidates`).
     fn descent(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
-        let (member, argv) = self
-            .descent_candidates(pgid)
-            .into_iter()
-            .find_map(|candidate| self.table.argv(candidate).map(|argv| (candidate, argv)))?;
-        pane_foreground(&argv, self.shell).map(|foreground| (member, foreground))
-    }
-
-    /// Group `pgid`'s descent candidates, as the table lists its members (upstream's `groupDescentCandidates`).
-    fn descent_candidates(&self, pgid: i32) -> Vec<i32> {
         let members: Vec<ProcessGroupMember> = self
             .table
             .group(pgid)
@@ -123,18 +109,10 @@ impl<'a> ForegroundReader<'a> {
                 ppid: stat.ppid,
             })
             .collect();
-        group_descent_candidates(pgid, &members)
-    }
-
-    /// The program a PowerShell leading group `pgid` runs, and its pid: the first of its children in the group that is
-    /// no shell holding a prompt (a `Start-Job` worker is one); `None` while it runs none, as at its prompt.
-    fn under_powershell(&self, pgid: i32) -> Option<(i32, Vec<String>)> {
-        self.descent_candidates(pgid).into_iter().find_map(|candidate| {
-            match pane_foreground(&self.table.argv(candidate)?, self.shell)? {
-                PaneForeground::Program(argv) => Some((candidate, argv)),
-                PaneForeground::ForegroundShell(_) => None,
-            }
-        })
+        let (member, argv) = group_descent_candidates(pgid, &members)
+            .into_iter()
+            .find_map(|candidate| self.table.argv(candidate).map(|argv| (candidate, argv)))?;
+        pane_foreground(&argv, self.shell).map(|foreground| (member, foreground))
     }
 
     /// The child running the command when group `pgid` is led by the terminal's own process and that is libghostty's
@@ -150,19 +128,15 @@ impl<'a> ForegroundReader<'a> {
 
     /// The restore capture's read of foreground group `pgid` (upstream's `ForegroundProcess.command`): the leader's
     /// program, or `None` when the group is led by the terminal's session leader (module docs), a shell holds the
-    /// foreground, or the leader cannot be read. A PowerShell leader holding its prompt, the session's leader or not,
-    /// stands for the program it runs in its own group, if any (module docs).
+    /// foreground, or the leader cannot be read. A PowerShell leader holding its prompt is a shell, so no program in
+    /// its group is captured (module docs).
     #[must_use]
     pub fn command(&self, pgid: i32) -> Option<Vec<String>> {
         let leader = self.table.stat(pgid)?;
-        let argv = self.table.argv(pgid)?;
-        if is_powershell_prompt(&argv, self.shell) {
-            return self.under_powershell(pgid).map(|(_, program)| program);
-        }
         if leader.session == leader.pid {
             return None;
         }
-        match pane_foreground(&argv, self.shell)? {
+        match pane_foreground(&self.table.argv(pgid)?, self.shell)? {
             PaneForeground::Program(argv) => Some(argv),
             PaneForeground::ForegroundShell(_) => None,
         }
@@ -179,13 +153,6 @@ impl<'a> ForegroundReader<'a> {
     pub fn command_in(&self, surface: &dyn Surface) -> Option<Vec<String>> {
         self.command(self.group_of(surface)?)
     }
-}
-
-/// Whether `argv` is a PowerShell holding its prompt: one with only options, or one told `-NoExit` (a live pane's).
-fn is_powershell_prompt(argv: &[String], shell: Option<&str>) -> bool {
-    argv.first()
-        .is_some_and(|first| is_powershell(first.strip_prefix('-').unwrap_or(first)))
-        && is_idle_shell(argv, shell)
 }
 
 /// Whether `argv` is the shell libghostty runs a command through on Linux: `/bin/sh -c <command>` (`-l` first inside
@@ -375,10 +342,29 @@ mod tests {
         assert_eq!(reader.command(400), None);
     }
 
+    /// What a PowerShell's group holds while it sits at its prompt or runs a native program: on Linux and macOS it has
+    /// no job control, so every child it starts shares its group, foreground or not.
+    fn powershell_children() -> [(i32, &'static [&'static str]); 5] {
+        [
+            // `Start-Process -NoNewWindow server`, still running in the background
+            (101, &["server", "--port", "8080"]),
+            // a `Start-Job` worker, as PowerShellProcessInstance starts it (StartJob defaults its working directory)
+            (
+                102,
+                &["/usr/bin/pwsh", "-s", "-NoLogo", "-NoProfile", "-wd", "/home/me"],
+            ),
+            // a prompt helper (posh-git's `git status`) while the prompt renders
+            (103, &["git", "status", "--porcelain"]),
+            // `vim notes | cat`, typed at the prompt and running in the foreground
+            (104, &["vim", "notes"]),
+            (105, &["cat"]),
+        ]
+    }
+
     #[test]
-    fn a_program_typed_into_a_powershell_without_job_control_is_read_past_the_shell() {
+    fn a_powershell_without_job_control_reads_as_its_shell_whatever_runs_in_its_group() {
         let table = FakeProcessTable::default();
-        // a live pane's PowerShell, its session's leader, at its prompt: nothing captured, the shell in the tree
+        // a live pane's PowerShell, its session's leader
         let live: &[&str] = &[
             "-pwsh",
             "-Login",
@@ -388,37 +374,36 @@ mod tests {
             crate::live::shell_integration::PWSH_LOAD,
         ];
         table.insert(stat(100, 1, 100, 100), Some(live));
+        // a PowerShell that is a job of another shell, in a group of its own
+        table.insert(stat(200, 1, 200, 200), Some(&["zsh"]));
+        table.insert(stat(300, 200, 300, 200), Some(&["pwsh", "-NoLogo"]));
         let reader = ForegroundReader::new(&table, None);
-        assert_eq!(reader.command(100), None);
-        assert_eq!(
-            reader.running(100),
-            Some(PaneForeground::ForegroundShell("pwsh".to_owned()))
-        );
-        // a Start-Job worker is a shell, never the program
-        table.insert(
-            stat(101, 100, 100, 100),
-            Some(&["/usr/bin/pwsh", "-s", "-NoLogo", "-NoProfile"]),
-        );
-        assert_eq!(reader.command(100), None);
-        // `vim notes | cat` typed at its prompt: both its children, in its own group; the first element is the program
-        table.insert(stat(102, 100, 100, 100), Some(&["vim", "notes"]));
-        table.insert(stat(103, 100, 100, 100), Some(&["cat"]));
-        // a grandchild is the program's own business
-        table.insert(stat(104, 102, 100, 100), Some(&["sh", "-c", "make"]));
-        assert_eq!(reader.command(100), Some(argv(&["vim", "notes"])));
-        assert_eq!(
-            reader.running(100),
-            Some(PaneForeground::Program(argv(&["vim", "notes"])))
-        );
-        assert_eq!(reader.observed(100).map(|(pid, _)| pid), Some(102), "the program's pid");
-        // a PowerShell that is a job of another shell reads the same way
-        table.insert(stat(300, 200, 300, 200), Some(&["pwsh"]));
-        table.insert(stat(301, 300, 300, 200), Some(&["htop"]));
-        assert_eq!(reader.command(300), Some(argv(&["htop"])));
+        let shell = Some(PaneForeground::ForegroundShell("pwsh".to_owned()));
+        let at_prompt = |pgid: i32| {
+            assert_eq!(reader.command(pgid), None, "nothing captured under {pgid}");
+            assert_eq!(reader.running(pgid), shell, "the shell in the tree under {pgid}");
+            assert_eq!(
+                reader.observed(pgid),
+                shell.clone().map(|shell| (pgid, shell)),
+                "the shell for a restart under {pgid}"
+            );
+        };
+        at_prompt(100);
+        at_prompt(300);
+        // nothing tells the foreground program from the background ones, so none of them is inferred
+        for (pid, child) in powershell_children() {
+            table.insert(stat(pid, 100, 100, 100), Some(child));
+            table.insert(stat(pid + 500, 300, 300, 200), Some(child));
+            at_prompt(100);
+            at_prompt(300);
+        }
         // a PowerShell running a script or a command (no -NoExit) is the program itself
         table.insert(stat(400, 200, 400, 200), Some(&["pwsh", "-File", "build.ps1"]));
         table.insert(stat(401, 400, 400, 200), Some(&["cargo", "build"]));
         assert_eq!(reader.command(400), Some(argv(&["pwsh", "-File", "build.ps1"])));
+        // a program leading a group of its own (a job of a job-control shell it started) is a job like any other
+        table.insert(stat(500, 100, 500, 100), Some(&["htop"]));
+        assert_eq!(reader.command(500), Some(argv(&["htop"])));
     }
 
     fn session_with(primary: Option<u32>, split: Option<u32>, split_shown: bool) -> Session {
