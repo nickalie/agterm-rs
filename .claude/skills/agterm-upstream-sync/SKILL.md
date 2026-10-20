@@ -209,7 +209,7 @@ the analysis, the bump and the baseline:
 
 - one `### Task N:` per cluster with STATUS `absent` or `partial` (partial: only the gap), in the order the template
   gives: new wire names and CLI skeletons first when the catalog gained any, then the groups, then vendored-copy
-  conflicts and pin work, then the UI checklist task, then "Claim TARGET parity and update the docs" last;
+  conflicts and pin work, then the UI-only task, then "Claim TARGET parity and update the docs" last;
 - every task names its upstream implementation files, Swift tests (with the functions), contract sections, the Rust
   files, the existing and new conformance ids, and ends with the gate and "newly green ids added with
   `check_ratchet.py --add`";

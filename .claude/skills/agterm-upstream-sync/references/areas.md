@@ -34,7 +34,7 @@ that group's change touches. The per-commit block in the classify report ("Commi
   validation order and field order. Every plan task names the Swift test files (and the test functions the classify
   report lists) its port asserts against; the Rust unit tests assert the full upstream string on the dispatcher's
   output. `tests-ui` adds or changes accessibility-driven checks: they map to `conformance/tests/ui` and
-  `ui-ids.yaml`, which the Linux build cannot run (no ui driver), so they become checklist rows.
+  `ui-ids.yaml`, which the Linux build cannot run (no ui driver), so they become items of the plan's UI-only task.
 - **Contract docs** (`site/commands.html`, `site/docs.html`, `.claude/rules/*.md`, `docs/troubleshooting.md`): the
   documented contract. `commands.html` feeds the catalog's `cli` section; a rules file states the subsystem's
   invariants. Where a doc and the Swift code disagree, read both and record the conflict in the task.
@@ -45,10 +45,9 @@ that group's change touches. The per-commit block in the classify report ("Commi
 
 `agterm/Views/*`, `agterm/Ghostty/*`, `agterm/*.swift` (menus, app actions, settings model), `agterm/Commands/*`,
 `agterm/Notifications/*` map to `agterm-gpui` in GPUI idioms. The suite cannot see this UI on Linux, so
-each UI change becomes a row (new or updated) in `docs/linux-ui-checklist.md` with its GPUI form and manual check,
-plus Rust unit tests where the logic lives in `agterm-core` (palette, keymap, settings model, link policy...).
+each UI change becomes an item of the plan's UI-only task with its GPUI form, plus Rust unit tests where the logic lives in `agterm-core` (palette, keymap, settings model, link policy...).
 Platform-only changes (an AppKit workaround, Finder reveal, a macOS keyboard-layout API) still need a decision:
-the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
+the Linux equivalent, or a recorded "no Linux counterpart" in the plan.
 
 ## Vendored copies and native pins
 

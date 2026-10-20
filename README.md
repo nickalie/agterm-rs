@@ -3,9 +3,6 @@
 agterm in Rust: a GPUI terminal over Ghostty's libghostty-vt, driven by `ngtermctl` over a control socket. macOS,
 Linux and Windows are equal targets; today it is built and tested on Linux, and everything below is the Linux build.
 
-- The parity target is upstream macOS agterm ([umputun/agterm](https://github.com/umputun/agterm) v0.36.0): its wire
-  protocol, command semantics, error strings, `agtermctl` (here `ngtermctl`), on-disk formats, model and UI, the UI
-  in GPUI idioms where AppKit has no direct equivalent.
 - The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
   `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
   (keymap, hooks, agterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
@@ -35,7 +32,7 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
   quit (not a crash: the launch takes a capture off disk so it replays only once), and its Live daemon keeps running,
   so the tree still reports it `backedByZmx`. Sessions made at runtime start at once, shown or not. With only the
   shown sessions spawning, upstream's launch spawn pacer has nothing to pace, and the build has none.
-- Parity is measured by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
+- Behavior is checked by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
 ## Prerequisites
 
@@ -307,5 +304,4 @@ A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`,
 - `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `resources/`: the agent-status hooks and agent skill the app installs (the skill's source stays at
   `resources/skills/agterm`, upstream's name; it installs as `ngterm`).
-- `docs/linux-ui-checklist.md`: every upstream UI feature with its Linux form and manual check (no Linux UI driver
-  exists). `docs/plans/`: implementation plans.
+- `docs/plans/`: implementation plans.
