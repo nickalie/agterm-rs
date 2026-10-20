@@ -31,10 +31,6 @@ fn keys_pass_and_answers_are_picked_out() {
             input(b"\x1bx"),
             answer(Answer::ColorScheme(ColorScheme::Dark)),
             answer(Answer::CellSize { width: 10, height: 20 }),
-            answer(Answer::TextArea {
-                width: 800,
-                height: 600
-            }),
             input(b"\r"),
         ]
     );
@@ -116,8 +112,46 @@ fn a_lone_escape_waits_for_the_quiet_then_is_a_key() {
 fn a_cut_sequence_is_taken_as_typed_once_flushed() {
     let mut parser = InputParser::new(true);
     assert_eq!(parser.feed(b"a\x1b]"), [input(b"a")]);
+    assert_eq!(parser.held(), Some(Held::Key), "Alt+]");
     assert_eq!(parser.flush(), [input(b"\x1b]")]);
     assert_eq!(parser.feed(b"b"), [input(b"b")]);
+    assert_eq!(parser.feed(b"\x1b[1;5"), []);
+    assert_eq!(parser.held(), Some(Held::Csi));
+    assert_eq!(parser.flush(), [input(b"\x1b[1;5")]);
+}
+
+#[test]
+fn a_cut_answer_waits_longer_and_is_never_typed() {
+    for cut in [
+        b"\x1b]52;c;aGVs".as_slice(),
+        b"\x1b]4;17;rgb:",
+        b"\x1b[?62;2",
+        b"\x1b_Gi=1;O",
+        b"\x1bP>|gh",
+    ] {
+        let mut parser = InputParser::new(true);
+        assert_eq!(parser.feed(cut), []);
+        assert_eq!(parser.held(), Some(Held::Answer), "{:?}", String::from_utf8_lossy(cut));
+        assert_eq!(parser.flush(), [], "{:?}", String::from_utf8_lossy(cut));
+        assert!(!parser.holding());
+    }
+    // held until its end comes, the answer is read whole
+    let mut parser = InputParser::new(true);
+    assert_eq!(parser.feed(b"\x1b]52;c;aGVs"), []);
+    assert_eq!(
+        parser.feed(b"bG8=\x1b\\x"),
+        [answer(Answer::Clipboard(Some(b"hello".to_vec()))), input(b"x")]
+    );
+}
+
+#[test]
+fn a_cut_paste_end_is_held_until_the_rest_comes() {
+    let mut parser = InputParser::new(true);
+    assert_eq!(parser.feed(b"\x1b[200~abc\x1b[20"), [input(b"\x1b[200~abc")]);
+    assert!(parser.holding());
+    assert_eq!(parser.held(), None, "no escape time inside a paste");
+    assert_eq!(parser.flush(), []);
+    assert_eq!(parser.feed(b"1~\x1c"), [input(b"\x1b[201~"), Token::Detach]);
 }
 
 #[test]

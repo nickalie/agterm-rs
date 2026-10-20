@@ -18,8 +18,9 @@ use windows_sys::Win32::System::Console::{
     CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_EXTENDED_FLAGS,
     ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
     GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD,
-    KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCP, SetConsoleMode,
-    SetConsoleOutputCP, WINDOW_BUFFER_SIZE_EVENT,
+    KEY_EVENT, KEY_EVENT_RECORD, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED,
+    ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP,
+    WINDOW_BUFFER_SIZE_EVENT,
 };
 
 use super::{TtyEvent, TtySize};
@@ -36,6 +37,11 @@ const RECORDS: u32 = 64;
 
 /// How often the window's size is looked at.
 const SIZE_POLL: Duration = Duration::from_millis(200);
+
+/// The space bar's virtual-key code (`VK_SPACE`).
+const VK_SPACE: u16 = 0x20;
+/// The 2 key's virtual-key code (`'2'`), Ctrl+@ with Shift.
+const VK_2: u16 = 0x32;
 
 pub(super) fn is_terminal() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
@@ -184,7 +190,8 @@ struct ConsoleInput(HANDLE);
 unsafe impl Send for ConsoleInput {}
 
 /// The console's input records until it fails: the characters of key presses (the VT bytes the console encodes the
-/// keys, and the terminal's answers, as), and window-size events.
+/// keys, and the terminal's answers, as; NUL from the key a record without a character names, [`nul_key`]), and
+/// window-size events.
 fn read_console<E: From<TtyEvent>>(console: &ConsoleInput, events: &Sender<E>) {
     let mut records = [INPUT_RECORD::default(); RECORDS as usize];
     let mut decoder = Utf16Decoder::default();
@@ -202,14 +209,7 @@ fn read_console<E: From<TtyEvent>>(console: &ConsoleInput, events: &Sender<E>) {
                 KEY_EVENT => {
                     // SAFETY: the record is a key event, so the union holds a key event record.
                     let key = unsafe { record.Event.KeyEvent };
-                    if key.bKeyDown == 0 {
-                        continue;
-                    }
-                    // SAFETY: both members of the character union are plain data; the W API fills `UnicodeChar`.
-                    let unit = unsafe { key.uChar.UnicodeChar };
-                    for _ in 0..key.wRepeatCount.max(1) {
-                        decoder.push(unit, &mut bytes);
-                    }
+                    key_input(&key, &mut decoder, &mut bytes);
                 }
                 WINDOW_BUFFER_SIZE_EVENT => resized = true,
                 _ => {}
@@ -223,6 +223,37 @@ fn read_console<E: From<TtyEvent>>(console: &ConsoleInput, events: &Sender<E>) {
         }
     }
     let _ = events.send(TtyEvent::InputEnd.into());
+}
+
+/// The bytes a key event record carries: a press's character, as many times as it repeats (NUL from the key when it
+/// carries none, [`nul_key`]); nothing for a release.
+fn key_input(key: &KEY_EVENT_RECORD, decoder: &mut Utf16Decoder, out: &mut Vec<u8>) {
+    if key.bKeyDown == 0 {
+        return;
+    }
+    // SAFETY: both members of the character union are plain data; the W API fills `UnicodeChar`.
+    let unit = unsafe { key.uChar.UnicodeChar };
+    for _ in 0..key.wRepeatCount.max(1) {
+        if unit == 0 {
+            out.extend_from_slice(nul_key(key.wVirtualKeyCode, key.dwControlKeyState));
+        } else {
+            decoder.push(unit, out);
+        }
+    }
+}
+
+/// The bytes of a key press whose record carries no character: NUL for Ctrl+Space, Ctrl+2 and Ctrl+@ (Ctrl+Shift+2),
+/// as xterm sends them, ESC first with the left Alt; nothing for any other (a modifier alone, a key the console encodes
+/// as nothing, a chord with the right Alt, which is `AltGr` with Ctrl on the layouts that have it).
+fn nul_key(virtual_key: u16, control_state: u32) -> &'static [u8] {
+    let ctrl = control_state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
+    let alt = control_state & LEFT_ALT_PRESSED != 0;
+    let alt_gr = control_state & RIGHT_ALT_PRESSED != 0;
+    match (virtual_key, ctrl && !alt_gr, alt) {
+        (VK_SPACE | VK_2, true, false) => b"\0",
+        (VK_SPACE | VK_2, true, true) => b"\x1b\0",
+        _ => &[],
+    }
 }
 
 /// UTF-16 code units to UTF-8, a surrogate pair split across records joined.
@@ -282,7 +313,22 @@ pub(super) fn write_out(bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Utf16Decoder;
+    use windows_sys::Win32::System::Console::SHIFT_PRESSED;
+
+    use super::*;
+
+    #[test]
+    fn a_record_without_a_character_is_nul_only_for_the_keys_that_send_it() {
+        assert_eq!(nul_key(VK_SPACE, LEFT_CTRL_PRESSED), b"\0");
+        assert_eq!(nul_key(VK_2, RIGHT_CTRL_PRESSED | SHIFT_PRESSED), b"\0", "Ctrl+@");
+        assert_eq!(nul_key(VK_SPACE, LEFT_CTRL_PRESSED | LEFT_ALT_PRESSED), b"\x1b\0");
+        // modifiers alone, and keys the console encodes as nothing
+        assert_eq!(nul_key(0x11, LEFT_CTRL_PRESSED), b"");
+        assert_eq!(nul_key(0x10, SHIFT_PRESSED), b"");
+        assert_eq!(nul_key(VK_SPACE, 0), b"");
+        assert_eq!(nul_key(VK_2, LEFT_CTRL_PRESSED | RIGHT_ALT_PRESSED), b"", "AltGr+2");
+        assert_eq!(nul_key(0x7C, LEFT_CTRL_PRESSED), b"", "F13");
+    }
 
     #[test]
     fn utf16_units_decode_to_utf8_with_split_surrogates() {

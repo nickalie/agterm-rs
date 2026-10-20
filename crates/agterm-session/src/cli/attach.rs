@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{Contract, EXIT_OK, default_argv};
-use crate::attach_tty::input::{InputParser, Token};
+use crate::attach_tty::input::{Held, InputParser, Token};
 use crate::attach_tty::owner::{Effects, Outgoing, Relay};
 use crate::attach_tty::{Tty, TtyEvent, write_out};
 use crate::client::{AttachEvent, AttachReader, AttachWriter, Attachment, Client, ClientError};
@@ -31,8 +31,12 @@ use crate::server::{EXIT_FAILED, snapshot};
 /// How long the attach waits for the outer terminal to answer the probe.
 pub const PROBE_WAIT: Duration = Duration::from_millis(500);
 
-/// How long a cut sequence of the input waits for its end before it is taken as typed.
+/// How long a cut sequence of the input that may be a key waits for its end before it is taken as typed.
 pub const INPUT_QUIET: Duration = Duration::from_millis(50);
+
+/// How long a cut sequence only the outer terminal's answers start with waits for its end before it is dropped, and a
+/// cut CSI while an answer is due before it is taken as typed: a pause inside an answer (a slow link) is no key.
+pub const ANSWER_QUIET: Duration = Duration::from_secs(2);
 
 /// How long a client whose connection ended tries to attach again.
 pub const REATTACH_WAIT: Duration = Duration::from_secs(5);
@@ -217,9 +221,10 @@ impl<'a> Loop<'a> {
         let (sender, events) = mpsc::channel();
         let nonce = session.managed.as_ref().map(|managed| managed.nonce.clone());
         let detach_key = session.detach_key;
+        let size = tty.size();
         Self {
             tty,
-            relay: Relay::new(nonce, tty.size().grid),
+            relay: Relay::new(nonce, size.grid, size.pixels),
             parser: InputParser::new(detach_key),
             session,
             sender,
@@ -346,8 +351,9 @@ impl<'a> Loop<'a> {
         match event {
             Event::Tty(TtyEvent::Input(bytes)) => {
                 let tokens = self.parser.feed(&bytes);
-                self.quiet = self.parser.holding().then(|| Instant::now() + INPUT_QUIET);
-                self.tokens(tokens)
+                let result = self.tokens(tokens);
+                self.quiet = self.quiet_time().map(|quiet| Instant::now() + quiet);
+                result
             }
             // zmx detaches at the end of its input
             Event::Tty(TtyEvent::InputEnd) => Err(self.detach()),
@@ -374,6 +380,16 @@ impl<'a> Loop<'a> {
                 result
             }
         }
+    }
+
+    /// How long the cut sequence the input holds waits for its end (`attach_tty::input`); `None` with none, or one
+    /// that waits for good.
+    fn quiet_time(&self) -> Option<Duration> {
+        Some(match self.parser.held()? {
+            Held::Key => INPUT_QUIET,
+            Held::Csi if !self.relay.awaiting() => INPUT_QUIET,
+            Held::Csi | Held::Answer => ANSWER_QUIET,
+        })
     }
 
     fn tokens(&mut self, tokens: Vec<Token>) -> Result<(), Outcome> {

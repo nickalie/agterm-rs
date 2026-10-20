@@ -741,6 +741,34 @@ mod owner {
         assert!(String::from_utf8_lossy(&client.output()).contains("\x1b]52;c;?\x1b\\"));
         Ok(())
     }
+
+    /// An outer terminal that asks its user first answers the read late, and over a slow link the answer can come in
+    /// two reads with a pause between them: the client waits for it, holds the cut answer, and types none of it.
+    #[test]
+    fn a_late_osc_52_answer_cut_by_a_pause_is_relayed_whole() -> TestResult {
+        use base64::Engine as _;
+        let namespace = Namespace::new()?;
+        let client = attach_probe(&namespace, "late", &["printf '\\033]52;c;?\\007'"], &Answers::basic())?;
+        client.type_line("go")?;
+        client.expect_bytes(b"\x1b]52;c;?\x1b\\");
+        let data = base64::engine::general_purpose::STANDARD.encode("clip-text");
+        let (head, tail) = data.split_at(4);
+        // the user's consent takes a while; the pause inside the answer is past the input's escape time
+        std::thread::sleep(Duration::from_millis(400));
+        client.write(format!("\x1b]52;c;{head}").as_bytes())?;
+        std::thread::sleep(Duration::from_millis(300));
+        client.write(format!("{tail}\x1b\\").as_bytes())?;
+        client.expect("DONE");
+        let answer = reply(&client, 0);
+        let text = String::from_utf8_lossy(&answer).into_owned();
+        assert!(text.contains(&format!("]52;c;{data}")), "{text:?}");
+        assert_eq!(
+            escapes(&answer),
+            1 + usize::from(text.ends_with('\\')),
+            "one answer, nothing typed: {text:?}"
+        );
+        Ok(())
+    }
 }
 
 /// A scripted server for the reattach tests: the first attach is sent a snapshot and output, then its connection ends
@@ -826,11 +854,15 @@ fn a_connection_that_ends_without_the_exit_is_attached_again_from_a_reset() -> T
     assert_eq!(client.wait()?, 3, "{:?}", client.text());
     client.expect("second-snap");
     if cfg!(unix) {
-        // the bytes as written (a pseudoconsole repaints them on Windows): the first output, the reset, the second
-        // snapshot
+        // the bytes as written (a pseudoconsole repaints them on Windows): the first output, the reset with the
+        // colour scheme reports turned on again after its RIS, the second snapshot
         let output = String::from_utf8_lossy(&client.output()).into_owned();
         let second = output.find("second-snap").ok_or("no second snapshot")?;
-        let reset = String::from_utf8_lossy(agterm_session::server::snapshot::RESYNC_RESET).into_owned();
+        let reset = String::from_utf8_lossy(agterm_session::server::snapshot::RESYNC_RESET).replacen(
+            "\x1bc",
+            "\x1bc\x1b[?2031h",
+            1,
+        );
         let reset_at = output.find(&reset).ok_or("no reset")?;
         assert!(
             output.find("first-output").is_some_and(|first| first < reset_at) && reset_at < second,

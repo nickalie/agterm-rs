@@ -12,11 +12,13 @@
 //!   (`CSI [>=] Ps c`), DSR and CPR (`CSI [?] Ps n`, `CSI ? 996 n` included), DECRQM (`CSI [?] Ps $ p`), XTVERSION
 //!   (`CSI > Ps q`), the Kitty keyboard flags query (`CSI ? u`) and the XTWINOPS reports Ghostty answers
 //!   (`CSI 14/16/18/21 t`). Rewritten: DECSET and DECRST (`CSI ? Pm h|l`) lose modes 2031 and 2048, whose reports the
-//!   server sends from its own terminal (and the attach client keeps its own 2031 subscription on the outer terminal),
+//!   server sends from its own terminal (and the attach client keeps its own 2031 subscription on the outer terminal:
+//!   [`OutputFilter::after_reset`] puts it back after every RIS that passes, which turns it off),
 //!   and mode 9001, win32-input-mode, which a Windows session's pseudoconsole asks of its terminal as it starts: an
 //!   outer terminal that took it would encode its input, its answers to the client and the detach key included, as
 //!   win32 key records the client does not read (`super::input` reads VT), and the session's pseudoconsole reads the
-//!   plain VT the client forwards as well;
+//!   plain VT the client forwards as well. A C0 control inside a CSI executes in passing, as in Ghostty's parser: the
+//!   CSI is classified without it, and a dropped or rewritten one keeps its controls, ahead of what is written;
 //! - every OSC, up to [`STRING_LIMIT`] bytes. Dropped: the colour queries (OSC 10 to 19 with a `?`, Kitty's OSC 21
 //!   with a `key=?`), clipboard reads (OSC 52 `?`, Kitty's OSC 5522 `type=read`); OSC 4 loses its `index;?` pairs.
 //!   Rewritten: a prompt mark `OSC 133;A` gets `redraw=0` (zmx's `rewritePromptRedraw`, `src/util.zig` at `8bab1f0`,
@@ -92,6 +94,8 @@ pub struct OutputFilter {
     utf8: u8,
     /// The last string ended with ESC, and was dropped: a `\` right after it is its ST.
     dropped_st: bool,
+    /// Written after every RIS that passes.
+    after_reset: &'static [u8],
 }
 
 impl Default for OutputFilter {
@@ -110,7 +114,13 @@ impl OutputFilter {
             body: 0,
             utf8: 0,
             dropped_st: false,
+            after_reset: &[],
         }
+    }
+
+    /// Writes `bytes` after every RIS (`ESC c`) that passes, where the stream stands at ground.
+    pub fn after_reset(&mut self, bytes: &'static [u8]) {
+        self.after_reset = bytes;
     }
 
     /// Whether the stream stands at ground: no sequence and no UTF-8 character in progress, so bytes written now
@@ -286,6 +296,10 @@ impl OutputFilter {
             // DECID: Ghostty answers it as DA1
             b'Z' => self.finish(byte, out, &Verdict::Drop),
             0x20..=0x2F => self.enter(State::EscapeIntermediate, byte),
+            b'c' => {
+                self.finish(byte, out, &Verdict::Keep);
+                out.extend_from_slice(self.after_reset);
+            }
             0x30..=0x7E => self.finish(byte, out, &Verdict::Keep),
             _ if is_inert_c0(byte) || byte == 0x7F || byte >= 0xA0 => self.held.push(byte),
             _ => self.anywhere(byte, out),
@@ -303,7 +317,7 @@ impl OutputFilter {
             0x40..=0x7E => {
                 let verdict = if self.fate == Fate::Hold {
                     self.held.push(byte);
-                    let verdict = classify_csi(&self.held);
+                    let verdict = classify_held_csi(&self.held);
                     self.held.pop();
                     verdict
                 } else {
@@ -498,10 +512,6 @@ struct Csi<'a> {
 fn parse_csi(sequence: &[u8]) -> Option<Csi<'_>> {
     let body = after_introducer(sequence);
     let (&final_byte, body) = body.split_last()?;
-    if body.iter().any(|byte| *byte < 0x20) {
-        // C0 controls inside a CSI execute in passing: not a sequence worth judging
-        return None;
-    }
     let (prefix, body) = match body.split_first() {
         Some((&first @ (b'?' | b'>' | b'=' | b'<'), rest)) => (Some(first), rest),
         _ => (None, body),
@@ -519,7 +529,26 @@ fn parse_csi(sequence: &[u8]) -> Option<Csi<'_>> {
     })
 }
 
-/// What becomes of a complete CSI (module docs).
+/// What becomes of a complete CSI as held, C0 controls and DEL inside it included (module docs): it is classified
+/// without them, and the controls, which the terminal executes as it parses the CSI, stay ahead of what is written.
+fn classify_held_csi(held: &[u8]) -> Verdict {
+    let introducer = held.len() - after_introducer(held).len();
+    let (start, body) = held.split_at(introducer);
+    if !body.iter().any(|byte| *byte < 0x20 || *byte == 0x7F) {
+        return classify_csi(held);
+    }
+    let controls: Vec<u8> = body.iter().copied().filter(|byte| *byte < 0x20).collect();
+    let mut plain = start.to_vec();
+    plain.extend(body.iter().filter(|byte| **byte >= 0x20 && **byte != 0x7F));
+    match classify_csi(&plain) {
+        Verdict::Keep => Verdict::Keep,
+        Verdict::Drop if controls.is_empty() => Verdict::Drop,
+        Verdict::Drop => Verdict::Rewrite(controls),
+        Verdict::Rewrite(bytes) => Verdict::Rewrite([controls, bytes].concat()),
+    }
+}
+
+/// What becomes of a complete CSI with no control inside it (module docs).
 fn classify_csi(sequence: &[u8]) -> Verdict {
     let Some(csi) = parse_csi(sequence) else {
         return Verdict::Keep;

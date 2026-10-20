@@ -223,6 +223,12 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         }
         "version" | "-v" | "--version" => Ok(Command::Version),
         "help" | "-h" | "--help" => Ok(Command::Help),
+        // the binary runs `server <namespace directory>` itself, before these commands
+        "server" => Err(match rest.as_slice() {
+            [] => "server needs the namespace directory".to_owned(),
+            [_] => "server runs only as agterm-session's own command line".to_owned(),
+            [_, extra, ..] => format!("server takes one namespace directory, not {extra:?} too"),
+        }),
         other => Err(format!("unknown command {other:?}")),
     }
 }

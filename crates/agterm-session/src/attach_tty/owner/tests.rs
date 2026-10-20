@@ -24,7 +24,7 @@ fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 /// A relay in a terminal whose probe was answered with `answers` before the fence.
 fn probed(nonce: Option<&str>, answers: Vec<Answer>) -> (Relay, Effects) {
     let now = Instant::now();
-    let mut relay = Relay::new(nonce.map(str::to_owned), GRID);
+    let mut relay = Relay::new(nonce.map(str::to_owned), GRID, None);
     let mut fx = Effects::default();
     relay.start(true, now, &mut fx);
     assert!(relay.probing());
@@ -101,7 +101,7 @@ fn the_probe_asks_everything_once_and_its_fence_sends_the_metadata() {
 #[test]
 fn a_client_without_a_terminal_asks_nothing_and_answers_no_fence() {
     let now = Instant::now();
-    let mut relay = Relay::new(None, GRID);
+    let mut relay = Relay::new(None, GRID, None);
     let mut fx = Effects::default();
     relay.start(false, now, &mut fx);
     assert!(!relay.probing());
@@ -121,7 +121,7 @@ fn a_client_without_a_terminal_asks_nothing_and_answers_no_fence() {
 #[test]
 fn a_probe_unanswered_is_given_up() {
     let now = Instant::now();
-    let mut relay = Relay::new(None, GRID);
+    let mut relay = Relay::new(None, GRID, None);
     let mut fx = Effects::default();
     relay.start(true, now, &mut fx);
     relay.answer(kitty_ok(), now, &mut fx);
@@ -159,46 +159,110 @@ fn a_kitty_fence_goes_after_the_commands_st_and_completes_with_its_answers() {
     assert!(!relay.awaiting());
 }
 
-#[test]
-fn a_clipboard_read_is_relayed_and_denied_without_an_answer() {
-    let (mut relay, _) = probed(None, Vec::new());
-    let now = Instant::now();
-    let mut fx = Effects::default();
-    relay.delegated(clipboard_read(1), now, &mut fx);
-    assert_eq!(fx.stdout, b"\x1b]52;c;?\x1b\\\x1b[c");
-    relay.answer(Answer::Clipboard(Some(b"hello".to_vec())), now, &mut fx);
-    relay.answer(Answer::PrimaryAttributes, now, &mut fx);
-    relay.delegated(clipboard_read(2), now, &mut fx);
-    relay.answer(Answer::PrimaryAttributes, now, &mut fx);
-    relay.delegated(clipboard_read(3), now, &mut fx);
-    relay.answer(Answer::Clipboard(Some(Vec::new())), now, &mut fx);
-    relay.answer(Answer::PrimaryAttributes, now, &mut fx);
-    let replies: Vec<(u64, &DelegatedReply)> = fx
-        .outgoing
+fn replies(fx: &Effects) -> Vec<(u64, &DelegatedReply)> {
+    fx.outgoing
         .iter()
         .filter_map(|outgoing| match outgoing {
             Outgoing::Answer(request, reply) => Some((request.id, reply)),
             _ => None,
         })
-        .collect();
+        .collect()
+}
+
+fn text(text: &str) -> DelegatedReply {
+    DelegatedReply::Clipboard {
+        text: Some(text.to_owned()),
+    }
+}
+
+#[test]
+fn a_clipboard_read_waits_for_its_answer_whatever_the_fences_say() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.delegated(clipboard_read(1), now, &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;c;?\x1b\\", "the read alone, no fence");
+    assert!(relay.awaiting());
+    assert_eq!(relay.next_deadline(), Some(now + DELEGATION_WAIT));
+    // a terminal asking its user first answers DA1 (here another fence's) before the read
+    relay.answer(Answer::PrimaryAttributes, now, &mut fx);
+    assert!(fx.outgoing.is_empty());
+    relay.answer(Answer::Clipboard(Some(b"hello".to_vec())), now, &mut fx);
+    relay.delegated(clipboard_read(2), now, &mut fx);
+    relay.answer(Answer::Clipboard(Some(Vec::new())), now, &mut fx);
+    relay.delegated(clipboard_read(3), now, &mut fx);
+    relay.answer(Answer::Clipboard(None), now, &mut fx);
     assert_eq!(
-        replies,
+        replies(&fx),
         [
-            (
-                1,
-                &DelegatedReply::Clipboard {
-                    text: Some("hello".to_owned())
-                }
-            ),
-            (2, &DelegatedReply::Denied),
-            (3, &DelegatedReply::Clipboard { text: None }),
+            (1, &text("hello")),
+            (2, &DelegatedReply::Clipboard { text: None }),
+            (3, &DelegatedReply::Denied),
         ]
     );
+    assert!(!relay.awaiting());
+    assert_eq!(relay.next_deadline(), None);
+}
+
+#[test]
+fn a_clipboard_answer_nobody_asked_for_is_dropped() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.answer(Answer::Clipboard(Some(b"stale".to_vec())), now, &mut fx);
+    relay.delegated(clipboard_read(1), now, &mut fx);
+    relay.tick(now + DELEGATION_WAIT, &mut fx);
+    assert_eq!(replies(&fx), [(1, &DelegatedReply::Denied)]);
+}
+
+#[test]
+fn a_read_whose_time_ran_out_stays_unresolved_until_its_answer_comes() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.delegated(clipboard_read(1), now, &mut fx);
+    relay.tick(now + DELEGATION_WAIT.saturating_sub(Duration::from_millis(1)), &mut fx);
+    assert!(fx.outgoing.is_empty());
+    relay.tick(now + DELEGATION_WAIT, &mut fx);
+    assert_eq!(replies(&fx), [(1, &DelegatedReply::Denied)]);
+    assert!(!relay.awaiting());
+    assert_eq!(relay.next_deadline(), None);
+    // asked meanwhile: denied at once, the outer terminal not asked
+    let mut fx = Effects::default();
+    relay.delegated(clipboard_read(2), now, &mut fx);
+    assert!(fx.stdout.is_empty());
+    assert_eq!(replies(&fx), [(2, &DelegatedReply::Denied)]);
+    // the late answer is the first read's, the user's consent to it: discarded
+    let mut fx = Effects::default();
+    relay.answer(Answer::Clipboard(Some(b"first".to_vec())), now, &mut fx);
+    assert!(fx.outgoing.is_empty());
+    relay.delegated(clipboard_read(3), now, &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;c;?\x1b\\");
+    relay.answer(Answer::Clipboard(Some(b"third".to_vec())), now, &mut fx);
+    assert_eq!(replies(&fx), [(3, &text("third"))]);
+}
+
+#[test]
+fn a_read_never_written_is_dropped_with_its_query() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.output(b"\x1b]0;unfinished", &mut fx);
+    relay.delegated(clipboard_read(1), now, &mut fx);
+    relay.tick(now + DELEGATION_WAIT, &mut fx);
+    assert_eq!(replies(&fx), [(1, &DelegatedReply::Denied)]);
+    assert_eq!(relay.next_deadline(), None, "nothing waits for ground any more");
+    relay.output(b"\x1b\\", &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]0;unfinished\x1b\\");
+    // nothing unresolved: the next read is asked
+    let mut fx = Effects::default();
+    relay.delegated(clipboard_read(2), now, &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;c;?\x1b\\");
 }
 
 #[test]
 fn a_role_title_waits_for_ground_and_the_newest_wins() {
-    let mut relay = Relay::new(Some("n1".to_owned()), GRID);
+    let mut relay = Relay::new(Some("n1".to_owned()), GRID, None);
     let now = Instant::now();
     let mut fx = Effects::default();
     relay.start(false, now, &mut fx);
@@ -213,7 +277,7 @@ fn a_role_title_waits_for_ground_and_the_newest_wins() {
 
 #[test]
 fn an_unfinished_sequence_is_cancelled_at_the_deadline() {
-    let mut relay = Relay::new(Some("n1".to_owned()), GRID);
+    let mut relay = Relay::new(Some("n1".to_owned()), GRID, None);
     let now = Instant::now();
     let mut fx = Effects::default();
     relay.start(false, now, &mut fx);
@@ -232,7 +296,7 @@ fn an_unfinished_sequence_is_cancelled_at_the_deadline() {
 
 #[test]
 fn an_unmanaged_client_writes_no_role() {
-    let mut relay = Relay::new(None, GRID);
+    let mut relay = Relay::new(None, GRID, None);
     let now = Instant::now();
     let mut fx = Effects::default();
     relay.start(false, now, &mut fx);
@@ -293,7 +357,7 @@ fn the_cell_size_follows_the_window_and_is_sent_when_it_changes() {
 }
 
 #[test]
-fn fences_of_an_ended_connection_complete_nothing() {
+fn fences_and_reads_of_an_ended_connection_complete_nothing() {
     let (mut relay, _) = probed(None, vec![kitty_ok()]);
     let now = Instant::now();
     let mut fx = Effects::default();
@@ -302,7 +366,46 @@ fn fences_of_an_ended_connection_complete_nothing() {
     relay.reattached();
     relay.answer(Answer::Kitty(b"\x1b_Gi=1;OK\x1b\\".to_vec()), now, &mut fx);
     relay.answer(Answer::PrimaryAttributes, now, &mut fx);
-    relay.answer(Answer::PrimaryAttributes, now, &mut fx);
-    assert!(fx.outgoing.is_empty());
     assert!(!relay.awaiting());
+    // the ended connection's read is still asked of the outer terminal: a read meanwhile is denied, and its answer
+    // is discarded
+    relay.delegated(clipboard_read(3), now, &mut fx);
+    relay.answer(Answer::Clipboard(Some(b"old".to_vec())), now, &mut fx);
+    relay.delegated(clipboard_read(4), now, &mut fx);
+    relay.answer(Answer::Clipboard(Some(b"new".to_vec())), now, &mut fx);
+    assert_eq!(replies(&fx), [(3, &DelegatedReply::Denied), (4, &text("new"))]);
+}
+
+#[test]
+fn a_reset_on_its_way_turns_the_scheme_reports_on_again() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let mut fx = Effects::default();
+    relay.output(b"x\x1bcy", &mut fx);
+    assert_eq!(fx.stdout, b"x\x1bc\x1b[?2031hy");
+    let mut fx = Effects::default();
+    relay.output(crate::server::snapshot::RESYNC_RESET, &mut fx);
+    assert!(fx.stdout.starts_with(b"\x18\x1bc\x1b[?2031h"));
+    // a client without a terminal subscribed to nothing
+    let mut relay = Relay::new(None, GRID, None);
+    let mut fx = Effects::default();
+    relay.start(false, Instant::now(), &mut fx);
+    relay.output(b"\x1bc", &mut fx);
+    assert_eq!(fx.stdout, b"\x1bc");
+}
+
+#[test]
+fn the_window_pixels_give_the_cell_from_the_start() {
+    let mut relay = Relay::new(None, GridSize { cols: 100, rows: 50 }, Some((1000, 1000)));
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.start(true, now, &mut fx);
+    let metadata = relay.attach_metadata();
+    assert_eq!((metadata.cell_width_px, metadata.cell_height_px), (10, 20));
+    relay.answer(Answer::CellSize { width: 7, height: 7 }, now, &mut fx);
+    relay.answer(Answer::PrimaryAttributes, now, &mut fx);
+    assert_eq!(
+        (relay.metadata().cell_width_px, relay.metadata().cell_height_px),
+        (10, 20),
+        "the window's pixels come first"
+    );
 }

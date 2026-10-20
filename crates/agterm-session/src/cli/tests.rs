@@ -132,6 +132,18 @@ fn command_lines_parse_as_zmx_spells_them() {
 }
 
 #[test]
+fn a_server_line_with_no_or_two_directories_says_so() {
+    assert_eq!(
+        parse(&args(&["server"])),
+        Err("server needs the namespace directory".to_owned())
+    );
+    assert_eq!(
+        parse(&args(&["server", "a", "b"])),
+        Err("server takes one namespace directory, not \"b\" too".to_owned())
+    );
+}
+
+#[test]
 fn list_and_screen_lines_are_zmxs() {
     let record = SessionRecord {
         name: "agterm-1".to_owned(),

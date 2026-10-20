@@ -197,3 +197,32 @@ fn a_dropped_string_takes_its_st_and_nothing_after() {
     assert_split_safe(b"\x1b]11;?\x1b[1m", b"\x1b[1m");
     assert_split_safe(b"\x1bP$qm\x1b[2m", b"\x1b[2m");
 }
+
+#[test]
+fn a_query_with_controls_inside_is_dropped_and_its_controls_kept() {
+    // Ghostty executes the controls as it parses the CSI, and still dispatches the query
+    assert_split_safe(b"\x1b[6\x00n", b"\x00");
+    assert_split_safe(b"a\x1b[?99\x086n", b"a\x08");
+    assert_split_safe(b"\x1b[\r>0c", b"\r");
+    assert_split_safe(b"\x1b[?20\x7f31;25h", b"\x1b[?25h");
+    assert_split_safe(b"\x1b[?2031;\x0725h", b"\x07\x1b[?25h");
+    // anything else keeps its controls in place
+    assert_split_safe(b"\x1b[1\r;31m", b"\x1b[1\r;31m");
+}
+
+#[test]
+fn a_reset_that_passes_is_followed_by_what_comes_after_it() {
+    let mut filter = OutputFilter::new();
+    filter.after_reset(b"\x1b[?2031h");
+    let mut out = Vec::new();
+    filter.feed(b"a\x1bcb\x1b\x1bc", &mut out);
+    filter.feed(b"\x1b", &mut out);
+    filter.feed(b"c", &mut out);
+    assert_eq!(out, b"a\x1bc\x1b[?2031hb\x1b\x1bc\x1b[?2031h\x1bc\x1b[?2031h");
+    assert!(filter.at_ground());
+    // an escape with an intermediate is no RIS
+    let mut out = Vec::new();
+    filter.feed(b"\x1b#c", &mut out);
+    assert_eq!(out, b"\x1b#c");
+    assert_eq!(filtered(b"\x1bc"), b"\x1bc", "nothing after it unless asked");
+}

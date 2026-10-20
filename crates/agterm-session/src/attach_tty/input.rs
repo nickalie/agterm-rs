@@ -6,16 +6,19 @@
 //!
 //! Recognized, as Ghostty and xterm send them (`ctlseqs`): DA1's answer `CSI ? … c` (the client's fence), OSC 10, 11
 //! and 12 and OSC 4 colours (`rgb:r/g/b` with 1 to 4 hex digits per channel, or `#` hex), an OSC 52 clipboard's
-//! base64, `CSI ? 997 ; 1|2 n` (dark or light), the cell size `CSI 6 ; h ; w t` and the text area `CSI 4 ; h ; w t`,
-//! and Kitty graphics answers (`ESC _ G … ESC \`). Dropped: other OSC, DCS, SOS, PM and APC strings, DA2 and DA3
+//! base64, `CSI ? 997 ; 1|2 n` (dark or light), the cell size `CSI 6 ; h ; w t`, and Kitty graphics answers
+//! (`ESC _ G … ESC \`). Dropped: other OSC, DCS, SOS, PM and APC strings, DA2 and DA3
 //! answers (`CSI > … c`, `CSI = … c`), DSR answers and reports (`CSI … n`), DECRPM (`CSI … $ y`), the Kitty keyboard
 //! flags (`CSI ? … u`) and every other `t` report (`CSI 48 ; … t`). Keys, mouse and focus reports pass (a CPR-shaped
 //! `CSI … R` is a function key: the outer terminal is never asked for the cursor), and so does a bracketed paste,
 //! whole and unparsed, up to its end.
 //!
 //! A sequence cut at the end of a read, a lone ESC included, is held for the next one; [`InputParser::flush`] gives it
-//! up as input once the input stays quiet (the attach loop's escape time). An answer can come cut anywhere: a Windows
-//! console hands the characters of one over as they are parsed, a few per read.
+//! up once the input stays quiet, for as long as [`InputParser::held`] says it may be waiting (the attach loop's
+//! escape time for what may be a key, longer for what only an answer starts with): what may be a key is then input,
+//! a cut answer is dropped. A cut end of a bracketed paste is never given up: the paste goes on until its end. An
+//! answer can come cut anywhere: a Windows console hands the characters of one over as they are parsed, a few per
+//! read.
 //!
 //! The detach key (zmx's `isCtrlBackslash`, `src/util.zig` at `8bab1f0`, MIT, NOTICE): Ctrl+\ typed (anywhere in a read
 //! outside a bracketed paste, where zmx looked at a read's first byte only: a console's reads do not follow the
@@ -62,8 +65,6 @@ pub enum Answer {
     ColorScheme(ColorScheme),
     /// `CSI 6 ; h ; w t`: one cell, in pixels.
     CellSize { width: u32, height: u32 },
-    /// `CSI 4 ; h ; w t`: the text area, in pixels.
-    TextArea { width: u32, height: u32 },
     /// A Kitty graphics answer, whole (`ESC _ G … ESC \`).
     Kitty(Vec<u8>),
 }
@@ -76,6 +77,18 @@ pub enum Token {
     Answer(Answer),
     /// The detach key: leave the session running.
     Detach,
+}
+
+/// What a cut sequence held may be, which says how long it waits for its end ([`InputParser::held`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// A lone ESC, or ESC and one byte: a key (Escape, an Alt chord) as likely as the start of a sequence.
+    Key,
+    /// A CSI without a private prefix: a key's (an arrow with modifiers, a function key) or an answer's.
+    Csi,
+    /// What only the outer terminal's answers start with: a string (OSC, DCS, APC, SOS, PM) past its introducer, or a
+    /// CSI with a `?`, `>` or `=` prefix.
+    Answer,
 }
 
 /// One sequence at the front of the bytes.
@@ -124,6 +137,22 @@ impl InputParser {
         !self.held.is_empty()
     }
 
+    /// What the cut sequence held may be; `None` for none, or for a cut end of a bracketed paste, which waits for the
+    /// rest of the paste however long it takes.
+    #[must_use]
+    pub fn held(&self) -> Option<Held> {
+        if self.paste || self.held.is_empty() {
+            return None;
+        }
+        // what follows the ESC a cut sequence starts with
+        Some(match &self.held[1..] {
+            [] | [_] => Held::Key,
+            [b'[', b'?' | b'>' | b'=', ..] | [b']' | b'P' | b'_' | b'^' | b'X', _, ..] => Held::Answer,
+            [b'[', ..] => Held::Csi,
+            _ => Held::Key,
+        })
+    }
+
     /// The tokens of one read.
     pub fn feed(&mut self, read: &[u8]) -> Vec<Token> {
         let mut bytes = std::mem::take(&mut self.held);
@@ -170,11 +199,15 @@ impl InputParser {
         tokens
     }
 
-    /// The cut sequence held, given up as input once the input stayed quiet.
+    /// The cut sequence held, given up once the input stayed quiet: input when it may be a key, dropped when only an
+    /// answer starts so (module docs). A cut end of a bracketed paste stays held.
     pub fn flush(&mut self) -> Vec<Token> {
-        let held = std::mem::take(&mut self.held);
         let mut tokens = Vec::new();
-        push_input(&mut tokens, &held);
+        match self.held() {
+            None => {}
+            Some(Held::Answer) => self.held.clear(),
+            Some(Held::Key | Held::Csi) => push_input(&mut tokens, &std::mem::take(&mut self.held)),
+        }
         tokens
     }
 
@@ -256,10 +289,6 @@ impl InputParser {
             },
             (b't', None) => match numbers.as_slice() {
                 [Some(6), Some(height), Some(width)] => Kind::Answer(Answer::CellSize {
-                    width: *width,
-                    height: *height,
-                }),
-                [Some(4), Some(height), Some(width)] => Kind::Answer(Answer::TextArea {
                     width: *width,
                     height: *height,
                 }),

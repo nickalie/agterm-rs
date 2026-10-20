@@ -11,13 +11,21 @@
 //! - A probe at the start, when the client runs in a terminal: OSC 10, 11 and 12, OSC 4 for the 256 colours, `CSI 16
 //!   t` (the cell's pixels), `CSI ? 996 n` (dark or light), a Kitty graphics query, and DA1 last, whose answer (the
 //!   fence) says every answer before it is in. Mode 2031 is turned on in the outer terminal, so a change of its
-//!   appearance is reported, and the colours are asked for again then.
+//!   appearance is reported, and the colours are asked for again then; a RIS on its way to the outer terminal (the
+//!   program's own, the reset of a reattach or of a resync) turns it off there, so the filter turns it on again right
+//!   after one (`super::filter`).
 //! - A DA1 fence after each Kitty graphics command the client owns the answer to: the outer terminal answers the
 //!   command first, then DA1, so the Kitty answers read before the fence's are that command's (and its earlier ones'),
 //!   which complete its barrier. The fence goes after the command's ST (the barrier comes when the output stands at
 //!   its ESC, so it is the first ground place).
-//! - For a delegated clipboard read, an OSC 52 read of the outer terminal's clipboard and a DA1 fence: what the outer
-//!   terminal answered before the fence's answer is the clipboard (denied without one).
+//! - For a delegated clipboard read, an OSC 52 read of the outer terminal's clipboard, alone: no fence, since a terminal
+//!   that asks its user first (Ghostty's `clipboard-read = ask`, kitty's `read-clipboard-ask`) answers a DA1 at once
+//!   and the read only once the user agreed. The read waits for its answer up to [`DELEGATION_WAIT`] from its request,
+//!   the server's own bound, then is denied. An OSC 52 answer carries no request of its own, so one read at most is
+//!   asked of the outer terminal at a time, and the next OSC 52 answer is that read's: a read whose time ran out (or
+//!   whose connection ended) stays unresolved, its answer discarded when it comes, and every read meanwhile is denied
+//!   without asking. A terminal that never answers a read thus holds the session's first read for the whole wait
+//!   (the server holds the program's output behind it, `server::replies`), and denies the later ones at once.
 //!
 //! An outer terminal that answers no DA1 within [`PROBE_GIVE_UP`] gets no fences: barriers are completed empty at
 //! once and clipboard reads denied, and the metadata says it shows no Kitty graphics.
@@ -25,7 +33,7 @@
 //! # The metadata
 //!
 //! The colours from the answers, the 256 colours only when all came; the cell's pixels from the window size the
-//! terminal reports with the grid (`TIOCGWINSZ`), else from `CSI 16 t` (or `CSI 14 t` over the grid); the appearance;
+//! terminal reports with the grid (`TIOCGWINSZ`, from the start), else from `CSI 16 t`; the appearance;
 //! Kitty graphics when the outer terminal answered the query and answers fences. It is sent when the probe's fence
 //! comes, again when a refresh's does, and whenever the cell size changes.
 
@@ -37,6 +45,7 @@ use super::input::{Answer, Dynamic};
 use crate::client::{Barrier, Delegated};
 use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, GridSize, LeadRole, ReplyMetadata, Rgb};
 use crate::server::lead::role_title;
+use crate::server::replies::DELEGATION_WAIT;
 
 /// How long the client's own sequences wait for the output to stand at ground before CAN ends what the program left
 /// unfinished (zmx's `DEADLINE_MS`).
@@ -83,7 +92,6 @@ enum Fence {
     /// The colours asked for again.
     Refresh,
     Kitty(Barrier),
-    Clipboard(Delegated),
     /// One written for a connection that ended: its answer completes nothing.
     Stale,
 }
@@ -93,14 +101,19 @@ enum Fence {
 struct Injection {
     bytes: Vec<u8>,
     fence: Option<Fence>,
+    /// The bytes are the clipboard read's query ([`Relay::outer_read`]).
+    clipboard_read: bool,
 }
 
-/// The outer terminal's answer to a clipboard read.
+/// The clipboard read asked of the outer terminal, or to be (module docs).
 #[derive(Debug)]
-enum Clipboard {
-    Data(Vec<u8>),
-    /// Its payload was not base64.
-    Unreadable,
+struct OuterRead {
+    /// The request it answers; `None` once it is unresolved: its time ran out, or its connection ended.
+    request: Option<Delegated>,
+    /// When it is denied.
+    deadline: Instant,
+    /// Its query was written.
+    asked: bool,
 }
 
 /// What the client sends the server.
@@ -127,8 +140,6 @@ struct Draft {
     palette: Vec<Option<Rgb>>,
     /// From `CSI 16 t`.
     cell: Option<(u32, u32)>,
-    /// From `CSI 14 t`.
-    text_area: Option<(u32, u32)>,
     scheme: Option<ColorScheme>,
 }
 
@@ -151,8 +162,8 @@ pub struct Relay {
     kitty: bool,
     /// Kitty answers read since the last Kitty fence.
     kitty_answers: Vec<u8>,
-    /// The clipboard the outer terminal answered since the last clipboard fence.
-    clipboard: Option<Clipboard>,
+    /// The one clipboard read the outer terminal is asked or to be asked for.
+    outer_read: Option<OuterRead>,
     draft: Draft,
     grid: GridSize,
     /// The cell's pixels from the window size.
@@ -162,9 +173,10 @@ pub struct Relay {
 }
 
 impl Relay {
-    /// The relay of a client attached under `nonce` (managed) or none, its outer terminal `grid` cells.
+    /// The relay of a client attached under `nonce` (managed) or none, its outer terminal `grid` cells over the window's
+    /// `pixels` when the terminal reports them.
     #[must_use]
-    pub fn new(nonce: Option<String>, grid: GridSize) -> Self {
+    pub fn new(nonce: Option<String>, grid: GridSize, pixels: Option<(u32, u32)>) -> Self {
         Self {
             filter: OutputFilter::new(),
             nonce,
@@ -176,13 +188,13 @@ impl Relay {
             probe_started: None,
             kitty: false,
             kitty_answers: Vec::new(),
-            clipboard: None,
+            outer_read: None,
             draft: Draft {
                 palette: vec![None; 256],
                 ..Draft::default()
             },
             grid,
-            window_cell: None,
+            window_cell: window_cell(grid, pixels),
             sent: ReplyMetadata::default(),
         }
     }
@@ -196,6 +208,7 @@ impl Relay {
         }
         self.probe_started = Some(now);
         fx.stdout.extend_from_slice(SCHEME_REPORTS_ON);
+        self.filter.after_reset(SCHEME_REPORTS_ON);
         self.queue(probe_queries(), Some(Fence::Probe), now, fx);
     }
 
@@ -205,10 +218,10 @@ impl Relay {
         self.fences_work.is_none()
     }
 
-    /// Whether an answer of the outer terminal is due.
+    /// Whether an answer of the outer terminal is due: a fence's, or a clipboard read's.
     #[must_use]
     pub fn awaiting(&self) -> bool {
-        !self.fences.is_empty()
+        !self.fences.is_empty() || self.outer_read.as_ref().is_some_and(|read| read.request.is_some())
     }
 
     /// The metadata to attach with, taken as the server's from here on.
@@ -221,15 +234,7 @@ impl Relay {
     #[must_use]
     pub fn metadata(&self) -> ReplyMetadata {
         let palette: Vec<Rgb> = self.draft.palette.iter().flatten().copied().collect();
-        let (cell_width_px, cell_height_px) = self
-            .window_cell
-            .or(self.draft.cell)
-            .or_else(|| {
-                let (width, height) = self.draft.text_area?;
-                let (cols, rows) = (u32::from(self.grid.cols), u32::from(self.grid.rows));
-                (cols > 0 && rows > 0).then(|| (width / cols, height / rows))
-            })
-            .unwrap_or((0, 0));
+        let (cell_width_px, cell_height_px) = self.window_cell.or(self.draft.cell).unwrap_or((0, 0));
         ReplyMetadata {
             foreground: self.draft.foreground,
             background: self.draft.background,
@@ -291,9 +296,10 @@ impl Relay {
         }
     }
 
-    /// A delegated request: a clipboard read relayed to the outer terminal, or denied when it answers no fence.
+    /// A delegated request: a clipboard read relayed to the outer terminal; denied when it answers no fence or another
+    /// read is asked of it (module docs).
     pub fn delegated(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
-        if self.fences_work != Some(true) || self.fences.len() >= FENCE_LIMIT {
+        if self.fences_work != Some(true) || self.outer_read.is_some() {
             fx.outgoing.push(Outgoing::Answer(request, DelegatedReply::Denied));
             return;
         }
@@ -302,9 +308,50 @@ impl Relay {
             "s" | "p" => selection.as_str(),
             _ => "c",
         };
-        let mut bytes = format!("\x1b]52;{selection};?\x1b\\").into_bytes();
-        bytes.extend_from_slice(FENCE);
-        self.queue(bytes, Some(Fence::Clipboard(request)), now, fx);
+        let bytes = format!("\x1b]52;{selection};?\x1b\\").into_bytes();
+        self.outer_read = Some(OuterRead {
+            request: Some(request),
+            deadline: now + DELEGATION_WAIT,
+            asked: false,
+        });
+        let injection = Injection {
+            bytes,
+            fence: None,
+            clipboard_read: true,
+        };
+        self.inject(injection, now, fx);
+    }
+
+    /// The outer terminal's answer to the clipboard read asked of it, or to none (dropped).
+    fn clipboard_answer(&mut self, data: Option<Vec<u8>>, fx: &mut Effects) {
+        if !self.outer_read.as_ref().is_some_and(|read| read.asked) {
+            return;
+        }
+        let Some(request) = self.outer_read.take().and_then(|read| read.request) else {
+            // the unresolved read's answer: the next read may be asked
+            return;
+        };
+        let reply = match data {
+            Some(data) if data.is_empty() => DelegatedReply::Clipboard { text: None },
+            Some(data) => DelegatedReply::Clipboard {
+                text: Some(String::from_utf8_lossy(&data).into_owned()),
+            },
+            None => DelegatedReply::Denied,
+        };
+        fx.outgoing.push(Outgoing::Answer(request, reply));
+    }
+
+    /// The clipboard read's request gone (its time ran out, or its connection ended): a read not yet asked is dropped,
+    /// one asked stays unresolved until its answer comes. Returns the request.
+    fn give_up_read(&mut self) -> Option<Delegated> {
+        let read = self.outer_read.as_mut()?;
+        let request = read.request.take()?;
+        if !read.asked {
+            self.outer_read = None;
+            self.pending.retain(|injection| !injection.clipboard_read);
+            self.unqueued();
+        }
+        Some(request)
     }
 
     /// An answer of the outer terminal.
@@ -317,7 +364,7 @@ impl Relay {
                 Dynamic::Cursor => self.draft.cursor = color,
             },
             Answer::Palette { index, color } => self.draft.palette[usize::from(index)] = color,
-            Answer::Clipboard(data) => self.clipboard = Some(data.map_or(Clipboard::Unreadable, Clipboard::Data)),
+            Answer::Clipboard(data) => self.clipboard_answer(data, fx),
             Answer::ColorScheme(scheme) => {
                 self.draft.scheme = Some(scheme);
                 if !self.probing() && !self.fences.iter().any(|fence| matches!(fence, Fence::Refresh)) {
@@ -328,10 +375,6 @@ impl Relay {
                 self.draft.cell = Some((width, height));
                 self.settled_metadata(fx);
             }
-            Answer::TextArea { width, height } => {
-                self.draft.text_area = Some((width, height));
-                self.settled_metadata(fx);
-            }
             Answer::Kitty(bytes) => self.kitty_answer(&bytes),
         }
     }
@@ -339,10 +382,7 @@ impl Relay {
     /// The outer terminal's grid changed, with its window's pixels when the terminal reports them.
     pub fn resize(&mut self, grid: GridSize, pixels: Option<(u32, u32)>, now: Instant, fx: &mut Effects) {
         self.grid = grid;
-        let (cols, rows) = (u32::from(grid.cols), u32::from(grid.rows));
-        self.window_cell = pixels
-            .filter(|(width, height)| *width > 0 && *height > 0 && cols > 0 && rows > 0)
-            .map(|(width, height)| (width / cols, height / rows));
+        self.window_cell = window_cell(grid, pixels);
         if self.window_cell.is_none() && self.fences_work == Some(true) {
             // the cell may have changed with the grid (a font size change): asked again, answered without a fence
             self.queue(b"\x1b[16t".to_vec(), None, now, fx);
@@ -357,18 +397,27 @@ impl Relay {
         }
     }
 
-    /// The client reattached on a new connection: the fences awaited complete nothing of it.
+    /// The client reattached on a new connection: the fences awaited complete nothing of it, and its clipboard read
+    /// answers nothing (one asked stays unresolved until its answer comes).
     pub fn reattached(&mut self) {
         for fence in &mut self.fences {
-            if matches!(fence, Fence::Kitty(_) | Fence::Clipboard(_)) {
+            if matches!(fence, Fence::Kitty(_)) {
                 *fence = Fence::Stale;
             }
         }
         self.pending
-            .retain(|injection| !matches!(injection.fence, Some(Fence::Kitty(_) | Fence::Clipboard(_))));
+            .retain(|injection| !matches!(injection.fence, Some(Fence::Kitty(_))));
+        let _ = self.give_up_read();
         self.role = None;
+        self.unqueued();
         self.kitty_answers.clear();
-        self.clipboard = None;
+    }
+
+    /// Sequences were taken out of the queue: with none left, nothing waits for ground.
+    fn unqueued(&mut self) {
+        if !self.has_pending() {
+            self.waiting_since = None;
+        }
     }
 
     /// When [`Relay::tick`] is due next.
@@ -379,12 +428,25 @@ impl Relay {
             .probe_started
             .filter(|_| self.probing())
             .map(|started| started + PROBE_GIVE_UP);
-        inject.into_iter().chain(probe).min()
+        let read = self
+            .outer_read
+            .as_ref()
+            .filter(|read| read.request.is_some())
+            .map(|read| read.deadline);
+        inject.into_iter().chain(probe).chain(read).min()
     }
 
     /// What is due at `now`: the client's own sequences written after CAN when the output stayed inside a sequence for
-    /// [`INJECT_WAIT`]; the probe given up after [`PROBE_GIVE_UP`].
+    /// [`INJECT_WAIT`]; the probe given up after [`PROBE_GIVE_UP`]; the clipboard read denied at its deadline.
     pub fn tick(&mut self, now: Instant, fx: &mut Effects) {
+        if self
+            .outer_read
+            .as_ref()
+            .is_some_and(|read| read.request.is_some() && now >= read.deadline)
+            && let Some(request) = self.give_up_read()
+        {
+            fx.outgoing.push(Outgoing::Answer(request, DelegatedReply::Denied));
+        }
         if self
             .waiting_since
             .is_some_and(|since| now.saturating_duration_since(since) >= INJECT_WAIT)
@@ -405,13 +467,29 @@ impl Relay {
         }
     }
 
+    /// The clipboard read's query was written.
+    fn asked(&mut self) {
+        if let Some(read) = &mut self.outer_read {
+            read.asked = true;
+        }
+    }
+
     fn has_pending(&self) -> bool {
         self.role.is_some() || !self.pending.is_empty()
     }
 
     /// Queues the client's `bytes`, written at the next ground place, with the fence they end with.
     fn queue(&mut self, bytes: Vec<u8>, fence: Option<Fence>, now: Instant, fx: &mut Effects) {
-        self.pending.push(Injection { bytes, fence });
+        let injection = Injection {
+            bytes,
+            fence,
+            clipboard_read: false,
+        };
+        self.inject(injection, now, fx);
+    }
+
+    fn inject(&mut self, injection: Injection, now: Instant, fx: &mut Effects) {
+        self.pending.push(injection);
         self.waiting_since.get_or_insert(now);
         if self.filter.at_ground() {
             self.flush(fx);
@@ -428,6 +506,9 @@ impl Relay {
             fx.stdout.extend_from_slice(&injection.bytes);
             if let Some(fence) = injection.fence {
                 self.fences.push_back(fence);
+            }
+            if injection.clipboard_read {
+                self.asked();
             }
         }
         self.waiting_since = None;
@@ -462,16 +543,6 @@ impl Relay {
                 let answers = std::mem::take(&mut self.kitty_answers);
                 fx.outgoing.push(Outgoing::Complete(barrier, answers));
             }
-            Fence::Clipboard(request) => {
-                let reply = match self.clipboard.take() {
-                    Some(Clipboard::Data(data)) if data.is_empty() => DelegatedReply::Clipboard { text: None },
-                    Some(Clipboard::Data(data)) => DelegatedReply::Clipboard {
-                        text: Some(String::from_utf8_lossy(&data).into_owned()),
-                    },
-                    Some(Clipboard::Unreadable) | None => DelegatedReply::Denied,
-                };
-                fx.outgoing.push(Outgoing::Answer(request, reply));
-            }
             // the Kitty answers before it answered the ended connection's commands
             Fence::Stale => self.kitty_answers.clear(),
         }
@@ -495,6 +566,14 @@ impl Relay {
             self.kitty_answers.extend_from_slice(bytes);
         }
     }
+}
+
+/// The cell's pixels from the window's `pixels` over `grid`, when both are known.
+fn window_cell(grid: GridSize, pixels: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    let (cols, rows) = (u32::from(grid.cols), u32::from(grid.rows));
+    pixels
+        .filter(|(width, height)| *width > 0 && *height > 0 && cols > 0 && rows > 0)
+        .map(|(width, height)| (width / cols, height / rows))
 }
 
 #[cfg(test)]
