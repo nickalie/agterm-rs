@@ -36,8 +36,8 @@ impl Core {
         self.keymap().equivalent(action).cloned().map(PaletteShortcut::Chord)
     }
 
-    /// The action palette: the visible static rows, the window rows, a Move Session row per other workspace, then the
-    /// custom commands badged `custom` (upstream's `paletteActions`).
+    /// The action palette: the visible static rows, the window rows, Settings… (the build's own), a Move Session row
+    /// per other workspace, then the custom commands badged `custom` (upstream's `paletteActions`).
     fn palette_actions(&self) -> Vec<PaletteEntry> {
         let Some(window) = self.library().active_window_id() else {
             return Vec::new();
@@ -71,6 +71,11 @@ impl Core {
             indicator: None,
             action: PaletteAction::Builtin(action),
         }));
+        entries.push(plain_entry(
+            "settings".to_owned(),
+            "Settings…".to_owned(),
+            PaletteAction::Settings,
+        ));
         // one "Open Window: <name>" per closed window: the open ones are on screen already
         let library = self.library();
         entries.extend(

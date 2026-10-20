@@ -224,6 +224,7 @@ fn the_action_palette_lists_commands_windows_and_moves() {
         "its live chord"
     );
     assert!(titles.contains(&"Delete Window"), "two windows: one can go");
+    assert_eq!(entry(&entries, "Settings…").action, PaletteAction::Settings);
     assert_eq!(
         entry(&entries, "Open Window: archive").action,
         PaletteAction::OpenWindow(closed)
@@ -387,6 +388,22 @@ fn a_row_closes_the_palette_and_runs_as_its_menu_item() {
             crate::app_actions::FrontendAction::RenameSession { window, session }
         )),
         "a dialog is the frontend's, after the palette closed"
+    );
+    assert_eq!(fixture.core.palette_mode(), None);
+}
+
+#[test]
+fn the_settings_row_closes_the_palette_and_leaves_the_popup_to_the_frontend() {
+    let mut fixture = Fixture::new(0);
+    let window = fixture.window;
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    assert!(fixture.core.palette_entry_enabled(window, &PaletteAction::Settings));
+    let effect = fixture.core.run_palette_entry(window, &PaletteAction::Settings);
+    assert_eq!(
+        effect,
+        Some(ActionEffect::Frontend(
+            crate::app_actions::FrontendAction::OpenSettings(window)
+        ))
     );
     assert_eq!(fixture.core.palette_mode(), None);
 }

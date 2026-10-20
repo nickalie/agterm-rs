@@ -3,9 +3,10 @@
 //! `agterm-gtk/src/keymap_actions.rs`).
 //!
 //! Each needs the window, the sidebar or a dialog: full screen and the delete confirmation are carried out here on the
-//! registered window ([`crate::keymap_dispatch::register_window`]); the window close goes to the model; the session
-//! close confirmation, the session and workspace renames, Delete Workspace and Open Directory… go to the window's
-//! sidebar ([`WindowView::sidebar`]); Rename Window and Delete Window are alerts over their window ([`crate::modal`]).
+//! registered window ([`crate::keymap_dispatch::register_window`]); the window close and Settings… go to the model;
+//! the session close confirmation, the session and workspace renames, Delete Workspace and Open Directory… go to the
+//! window's sidebar ([`WindowView::sidebar`]); Rename Window and Delete Window are alerts over their window
+//! ([`crate::modal`]).
 
 use agterm_core::app_actions::FrontendAction;
 use agterm_core::pane_env::uuid_string;
@@ -32,6 +33,9 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
         }
         FrontendAction::CloseWindow(window) => {
             state::post(poster, move |state: &mut AppState| state.close_requested(window));
+        }
+        FrontendAction::OpenSettings(window) => {
+            state::post(poster, move |state: &mut AppState| state.open_settings(window));
         }
         FrontendAction::ConfirmCloseSession { window, session } => {
             with_sidebar(window, cx, |sidebar, root, cx| {

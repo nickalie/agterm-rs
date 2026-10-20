@@ -55,6 +55,8 @@ pub enum FrontendAction {
     OpenDirectory { window: Uuid, workspace: Uuid },
     /// Toggle the window's full screen.
     ToggleFullscreen(Uuid),
+    /// Open the Settings popup over the window, or bring the open one to the front (the palette's Settings…).
+    OpenSettings(Uuid),
 }
 
 /// A config file the menu's Edit items open in an editor overlay.

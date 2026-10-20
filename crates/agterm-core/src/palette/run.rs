@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::{PaletteAction, PaletteMode, feeds::window_holds};
 use crate::Core;
-use crate::app_actions::{ActionEffect, ActionOrigin};
+use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use crate::model::AppStore;
 use crate::palette_catalog::PaletteCommand;
 use crate::pane_env::uuid_string;
@@ -45,6 +45,7 @@ impl Core {
         Some(match action {
             PaletteAction::Command(command) => self.run_palette_command(window, *command),
             PaletteAction::Builtin(builtin) => self.perform_builtin(ActionOrigin { window, quick: false }, *builtin),
+            PaletteAction::Settings => ActionEffect::Frontend(FrontendAction::OpenSettings(window)),
             other => {
                 self.run_palette_item(window, other);
                 ActionEffect::Done
