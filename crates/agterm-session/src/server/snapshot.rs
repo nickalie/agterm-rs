@@ -141,6 +141,16 @@ pub fn capture(terminal: &mut Terminal, kind: Kind) -> Result<Vec<u8>, SnapshotE
     Ok(out)
 }
 
+/// `bytes` put into `snapshot` right after its [`RESYNC_RESET`], ahead of everything the snapshot writes, its parser
+/// continuation included: what a client that fell behind gets back besides the session's state (the clipboard writes
+/// it missed, `super::recovery`). Nothing for an empty `bytes`, or a snapshot that does not start with the reset (a
+/// first attach's).
+pub fn insert_after_reset(snapshot: &mut Vec<u8>, bytes: &[u8]) {
+    if !bytes.is_empty() && snapshot.starts_with(RESYNC_RESET) {
+        snapshot.splice(RESYNC_RESET.len()..RESYNC_RESET.len(), bytes.iter().copied());
+    }
+}
+
 fn set_synchronized(terminal: &mut Terminal, value: bool) -> Result<(), SnapshotError> {
     terminal
         .set_mode(Mode::SYNC_OUTPUT, value)

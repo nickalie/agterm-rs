@@ -1255,20 +1255,60 @@ Order after Task 7, as two lanes that meet:
   `crates/agterm-term/tests/launch.rs`, `CLAUDE.md`, `.claude/skills/agterm-upstream-sync/references/safety.md`,
   `conformance/docs/rust-build.md`
 
-- [ ] stage `bin/agterm-session` and `share/agterm/session-BUILD` in place of today's session-host binary and record
-- [ ] the attach line and the remote one use the attach contract; the frontend builds the new host, and the GPUI pane
+- [x] stage `bin/agterm-session` and `share/agterm/session-BUILD` in place of today's session-host binary and record
+      - `scripts/stage.sh` stages cargo's `agterm-session` (renamed into place, then `share/ngterm/session-BUILD`: the
+        sha256 of the staged binary and `binary <size> <mtime-ns>`, `size_and_mtime_ns` in `scripts/lib/native.sh`,
+        GNU or BSD stat) and no longer zmx (still built until Task 28). `agterm_session::launch`: `EXECUTABLE_FILE`
+        `agterm-session`, `BUILD_ID_PATH` the build id's file, the debug override `AGTERM_SESSION_PATH`;
+        `bundled_build_id` is `build_id::expected` (an id staged for another binary counts as none). The build record
+        is `session-build.json`
+- [x] the attach line and the remote one use the attach contract; the frontend builds the new host, and the GPUI pane
       runs `agterm-session attach` in its PTY
-- [ ] `agterm-term`'s attach effects policy for live panes: the pane's VT writes no replies, set before the first byte;
+      - `agterm-core::live` names the contract's variables (`AGTERM_LIVE_DIR`, `_SESSION`, `_SESSION_PREFIX`,
+        `_NO_DETACH_KEY`; `lead.rs` `AGTERM_LIVE_MANAGED[_CLAIM]`, the `zmx-role;` title no longer read); the Unix
+        namespace is `/tmp/ngterm-live-<hash>`. `remote::ssh` runs the far `agterm-session attach` under them.
+        `session_host::install` builds `agterm_session::host::ServerHost` and first runs the update: a running server
+        of another build than the staged one is asked to hand over (`Client::update`, never starting one), a
+        committed handoff recorded (`build_record::record_handoff`), a failed one leaving the reset offer
+- [x] `agterm-term`'s attach effects policy for live panes: the pane's VT writes no replies, set before the first byte;
       the CLI attach in the pane's PTY is the reply owner (Task 22), so theme replies and clipboard reads keep working
-- [ ] `agtermctl clipboard set` uses the server's print; record which of its error texts change against upstream's
-- [ ] the harness's Rust adapter: leftovers are the instance's server (by its namespaced argv) and its sessions'
+      - kept answering instead (no policy change): the CLI's output filter keeps every server-answered query from
+        the pane's VT, and the CLI as reply owner reads its theme colours, cell size, colour-scheme reports, Kitty
+        answers and OSC 52 reads from the pane's VT's replies, so a silent pane VT would leave the session's replies
+        on defaults and deny every read. `tests/launch.rs` pins both through a live pane: an OSC 11 query answered
+        once with the pane's background, an OSC 52 read answered by the pane. Silencing the pane's VT belongs to
+        Task 26, where the pane is the client
+- [x] `agtermctl clipboard set` uses the server's print; record which of its error texts change against upstream's
+      - `ngtermctl clipboard set` runs `agterm-session print <name>` beside it under `AGTERM_LIVE_SESSION`/`_DIR`;
+        `conformance/docs/rust-build.md` records the print's own complaint after `the live-session print exited N:`.
+        The backlog item an overflowed client losing a printed clipboard write is fixed here (`server::recovery`,
+        agreed with Codex: a client's resync and last snapshots carry each clipboard's latest write it missed, the
+        program's or printed, after the reset, before the continuation; tests in `tests/snapshot.rs`)
+- [x] the harness's Rust adapter: leftovers are the instance's server (by its namespaced argv) and its sessions'
       processes; the leading client is `live_client.py`; the shared tests take the client and the directory from the
       adapter; selftests follow
-- [ ] the capability descriptions and the isolation docs follow the new server and its one-server reap
-- [ ] the gpui live process tests take the cargo-built `agterm-session`; their process-tree check follows one server;
+      - `vocabulary.LIVE`: `AGTERM_LIVE_*`, `live_socket_directory`, `live_client.leading_client`, `server` and its
+        idle grace, which `find_leftovers`/`_leftovers_error` use (`serves_namespace`); `remove_live_dir` removes a
+        stopped server's lock; selftests in `test_vocabulary.py`, `test_impls.py`, `test_live_client.py` (new)
+- [x] the capability descriptions and the isolation docs follow the new server and its one-server reap
+      - `CAPABILITIES` and `rust-build.md`'s table (PowerShell joins `live-any-shell`'s text, Task 27's open item),
+        CLAUDE.md's isolation rule and crate map, the upstream-sync skill's hard rules, `conformance/README.md`,
+        README's staging lines
+- [x] the gpui live process tests take the cargo-built `agterm-session`; their process-tree check follows one server;
       they run, not skip
-- [ ] full GPUI conformance run in the background: every ratchet id green; newly green ids added
-- [ ] run gates
+      - `privileges.rs` and `quit.rs` find it beside the app's binary (failing without it), reap through
+        `ServerHost`, and `quit.rs` asserts one server for the four sessions; `rust-linux.yml`'s process-test step
+        builds it first and its conformance job no longer builds zmx. `agterm-term/tests/launch.rs`'s live tests run
+        on Linux over the cargo-built binary (macOS's startup files set a prompt of their own; Task 26 covers all three)
+- [x] full GPUI conformance run in the background: every ratchet id green; newly green ids added
+      - 653 passed, 14 skipped, ratchet holds (667 ids, the 14 `live-sessions` ones not run on this fish host), no
+        newly green ids. A diagnostic run with `live-sessions` forced on under fish: 53 of 56 live tests passed, the
+        three left on fish's own prompt and replay (`fish -lic` keeps the foreground), which CI's zsh leg runs
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session`/`agterm-pty` and `agterm-term` for macOS), the lint report;
+        workspace tests headless 4605 passed, 0 failed; selftests 842 passed; `cross-platform.yml` run 39538557983
+        green on all three (`ci/cps-task-25`, deleted after)
 
 ### Task 26: Live panes in `agterm-term` over the attach stream
 

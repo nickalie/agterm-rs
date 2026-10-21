@@ -1,4 +1,5 @@
-"""A Live pane another zmx client leads: its own window covers it until it takes the lead back."""
+"""A Live pane another client of its session leads (the vocabulary's leading client): its own window covers it until it
+takes the lead back."""
 
 import pytest
 from agterm_conformance.drivers.base import ElementNotFound

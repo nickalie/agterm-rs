@@ -54,7 +54,12 @@ DEFAULT_APP_ID = "com.nickalie.ngterm"
 # The Linux fork's id, which its installed GTK build (and an older install of this one) still holds.
 FORK_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"
+# The references' live-session processes: upstream's zmx daemons and the macOS session host. A vocabulary with a
+# session server (the Rust build's) names its own leftovers instead (`find_leftovers`).
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
+# What a session server leaves in its namespace directory once it stopped: the lock file it held (kept on purpose,
+# crates/agterm-session/src/endpoint/unix.rs) and, should it have stopped unclean, its socket.
+SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
@@ -137,9 +142,11 @@ POLL_INTERVAL = 0.05
 # test marker, or beside the branch a test takes on `has`.
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
-    "live-sessions": "restoreMode live keeps panes in zmx daemons that outlive the app",
-    "live-any-shell": "Rust-only: Live sessions in a zsh, bash or fish login shell, each started with Ghostty's shell "
-    "integration; claimed where the password-database login shell is one of the three and zmx is staged",
+    "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the "
+    "Rust build's one session server per instance, agterm-session)",
+    "live-any-shell": "Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its "
+    "shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is "
+    "one of them and agterm-session is staged",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "select-takes-frontmost": "`window.select`/`window.go` make their window `active` without waiting on window focus",
@@ -381,7 +388,8 @@ class Adapter:
 
     name: ClassVar[str] = ""
     # The name the implementation gives its state directory under the platform's application support directory, its
-    # control socket (`<name>.sock`) and its zmx socket directories (`/tmp/<name>-zmx-*`): upstream's and the fork's.
+    # control socket (`<name>.sock`) and its live-session socket directories (`/tmp/<name>-zmx-*` for upstream and the
+    # fork, `/tmp/<name>-live-*` for the Rust build: the vocabulary's).
     app_dir_name: ClassVar[str] = "agterm"
     # The implementation's CLI: the executable beside its binary and the name its usage lines and help print.
     ctl_name: ClassVar[str] = "agtermctl"
@@ -611,7 +619,8 @@ class Adapter:
     # -- stop
 
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
-        """Reap daemons, SIGTERM the launched pid, end what `stop_helpers` owns, then require no zmx/session-host left.
+        """Reap daemons, SIGTERM the launched pid, end what `stop_helpers` owns, then require no live-session process
+        left (`find_leftovers`).
 
         The compositor and session bus go last, once the app is gone, and must leave no process of their own.
         """
@@ -643,7 +652,7 @@ class Adapter:
             raise StopError(headless_problem)
         if cleanup:
             shutil.rmtree(instance.root, ignore_errors=True)
-            remove_zmx_dir(instance.live_dir)
+            remove_live_dir(instance.live_dir)
 
     def stop_helpers(self, instance: Instance) -> str | None:
         """Hook: end a helper the implementation detaches on purpose once the app is gone; returns what went wrong."""
@@ -895,8 +904,9 @@ def _tail(log: Path, lines: int = 20) -> str:
 def _leftovers_error(
     live_dir: str, steps: Iterable[str] = (), vocabulary: Vocabulary = UPSTREAM
 ) -> LeftoverProcesses | None:
-    # A killed zmx daemon is confirmed gone by its socket and still exits for a moment after.
-    deadline = time.monotonic() + LEFTOVER_GRACE
+    # A killed zmx daemon is confirmed gone by its socket and still exits for a moment after; a session server stops
+    # by itself once its last session and client are gone, after its idle grace.
+    deadline = time.monotonic() + LEFTOVER_GRACE + vocabulary.server_idle
     while (leftovers := find_leftovers(live_dir, vocabulary)) and time.monotonic() < deadline:
         threading.Event().wait(POLL_INTERVAL * 4)
     if not leftovers:
@@ -1180,14 +1190,29 @@ def _core_hint(pid: int) -> str:
 
 
 def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tuple[int, str, str]]:
-    """(pid, name, command) of zmx / agterm-session-host processes carrying this instance's socket directory in the
-    vocabulary's directory variable (`ZMX_DIR`)."""
+    """(pid, name, command) of this instance's live-session processes: under a vocabulary with a session server, that
+    server (`<server> server <live_dir>`) and every process carrying the socket directory in the directory variable
+    (`AGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else zmx / agterm-session-host processes
+    carrying it (`ZMX_DIR`)."""
     marker = f"{vocabulary.directory_variable}={live_dir}"
+    if vocabulary.server is not None:
+        return [
+            (pid, name, command)
+            for pid, name, command, words in _processes()
+            if marker in words or serves_namespace(words, live_dir, vocabulary.server)
+        ]
     return [
         (pid, name, command)
         for pid, name, command, words in _processes()
         if name in LEFTOVER_NAMES and (marker in words or hosts_zmx_dir(words, live_dir))
     ]
+
+
+def serves_namespace(words: Iterable[str], live_dir: str, server: str) -> bool:
+    """`<server> server <live_dir>`, the argv a session server of that namespace runs with (its environment carries
+    no `AGTERM_*`: the spawn drops them)."""
+    words = list(words)
+    return len(words) >= 3 and os.path.basename(words[0]) == server and words[1:3] == ["server", live_dir]
 
 
 def hosts_zmx_dir(words: Iterable[str], zmx_dir: str) -> bool:
@@ -1278,13 +1303,21 @@ def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
             yield (int(pid), os.path.basename(command.split(" ", 1)[0]), command, command.split(" "))
 
 
-def remove_zmx_dir(path: str) -> None:
-    """The instance's zmx directory, outside its root, once nothing runs there: zmx's own `logs/*.log` go with
-    it; anything else keeps the directory for diagnosis."""
+def remove_live_dir(path: str) -> None:
+    """The instance's live-session socket directory, outside its root, once nothing runs there: zmx's own
+    `logs/*.log` and a stopped session server's lock file go with it; anything else keeps the directory for
+    diagnosis."""
     logs = os.path.join(path, "logs")
     try:
-        if set(os.listdir(path)) - {"logs"} or os.path.islink(logs):
+        names = set(os.listdir(path))
+        if names - {"logs"} - SERVER_NAMESPACE_FILES or os.path.islink(logs):
             return
+        for name in names & SERVER_NAMESPACE_FILES:
+            entry = os.path.join(path, name)
+            if os.path.islink(entry) or os.path.isdir(entry):
+                return
+        for name in names & SERVER_NAMESPACE_FILES:
+            os.unlink(os.path.join(path, name))
         if os.path.isdir(logs):
             entries = list(os.scandir(logs))
             if not all(entry.name.endswith(".log") and entry.is_file(follow_symlinks=False) for entry in entries):

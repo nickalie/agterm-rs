@@ -699,8 +699,8 @@ fn live_core(library: WindowLibrary, resources: &Path) -> Core {
     core.install_live_sessions(LiveInstall {
         host: Arc::new(FakeSessionHost::new()) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
-            executable: "/opt/agterm/bin/zmx".to_owned(),
-            socket_directory: "/tmp/agterm-zmx-test".to_owned(),
+            executable: "/opt/ngterm/bin/agterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },
         wrap: Inputs {
             executable: "/bin/sh".into(),
@@ -732,13 +732,13 @@ fn a_key_press_on_a_covered_pane_takes_it_over_in_a_fresh_terminal(cx: &mut Test
         let launches = h.launches.lock().unwrap();
         let first = launches
             .iter()
-            .find(|launch| launch.env.iter().any(|(key, _)| key == "ZMX_MANAGED"));
+            .find(|launch| launch.env.iter().any(|(key, _)| key == "AGTERM_LIVE_MANAGED"));
         first
             .and_then(|launch| {
                 launch
                     .env
                     .iter()
-                    .find(|(key, _)| key == "ZMX_MANAGED")
+                    .find(|(key, _)| key == "AGTERM_LIVE_MANAGED")
                     .map(|(_, value)| value.clone())
             })
             .expect("a live launch carries its attachment")
@@ -748,7 +748,7 @@ fn a_key_press_on_a_covered_pane_takes_it_over_in_a_fresh_terminal(cx: &mut Test
     assert!(!shared.holds_keys());
 
     // another client leads: the pane is covered and holds its keys
-    let report = agterm_core::PaneReport::Title(format!("zmx-role;{nonce}:follower:1"));
+    let report = agterm_core::PaneReport::Title(format!("ngterm-live-role;{nonce}:follower:1"));
     h.state.report_pane(session, &token, &report);
     h.turn();
     let cover = h
@@ -773,7 +773,7 @@ fn a_key_press_on_a_covered_pane_takes_it_over_in_a_fresh_terminal(cx: &mut Test
         replacement
             .env
             .iter()
-            .any(|(key, value)| key == "ZMX_MANAGED_CLAIM" && value == "1")
+            .any(|(key, value)| key == "AGTERM_LIVE_MANAGED_CLAIM" && value == "1")
     );
     let (deck, state) = (h.deck.clone(), &mut h.state);
     let replaced = h.cx.update(|window, cx| {

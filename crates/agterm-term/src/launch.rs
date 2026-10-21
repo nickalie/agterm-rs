@@ -4,9 +4,9 @@
 //!
 //! - **Program**: a [`Launch`]'s command line, or else the host's login shell, runs through `/bin/sh -c` (libghostty
 //!   ran a surface's command that way on Linux, and core's foreground reader looks past exactly that wrapper). A live
-//!   pane's command is its `zmx attach` line ([`agterm_core::restore::spawn_plan::resolve_live_seed`]), whose
-//!   environment carries the wrap configuration from [`Runtime`]; a plain pane runs its seed's command, or
-//!   the login shell with its `initial_input` typed in.
+//!   pane's command is its `agterm-session attach` line ([`agterm_core::restore::spawn_plan::resolve_live_seed`]),
+//!   whose environment carries the wrap configuration from [`Runtime`]; a plain pane runs its seed's command, or the
+//!   login shell with its `initial_input` typed in.
 //! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as
 //!   `sh -c` reads no rc file; `/S` with the outer quotes keeps the line's own quotes as written, which a quoted
 //!   program path needs), its tail passed as written ([`PaneCommand::raw_args`]). The login shell runs directly, as
@@ -23,7 +23,7 @@
 //! - **Config** (`Surface.zig` and `termio/Exec.zig`, the embedder's options winning as `apprt/embedded.zig` lets
 //!   them): the launch's working directory, else (none, or not a directory) `working-directory`'s; the launch's initial input, else `input`'s;
 //!   `wait-after-command` for every launch; `abnormal-command-exit-runtime`; `shell-integration`'s forced shell for the
-//!   login shell (a command line keeps its own program's scheme: a live pane's `zmx attach` is no shell).
+//!   login shell (a command line keeps its own program's scheme: a live pane's `agterm-session attach` is no shell).
 //! - **Identity** (Technical Details > Terminal identity): with Ghostty's resources and the compiled `xterm-ghostty`
 //!   beside them, `TERM` is the config's `term`, `TERMINFO` that terminfo directory and `GHOSTTY_RESOURCES_DIR` the
 //!   resources; without them `TERM=xterm-256color` and neither variable. `COLORTERM=truecolor`,
@@ -862,12 +862,12 @@ mod tests {
         assert_eq!(shell.command.args[1], OsString::from("/usr/local/bin/mysh --posix"));
         assert!(set(&shell).contains_key("ENV"));
         let command = Launch {
-            command: Some("zmx attach s1".to_owned()),
+            command: Some("agterm-session attach s1".to_owned()),
             ..Launch::default()
         };
         assert_eq!(
             forced.prepare(&command, &env).command.args[1],
-            OsString::from("zmx attach s1")
+            OsString::from("agterm-session attach s1")
         );
         // the integrations agterm does not port inject nothing
         for unported in ["elvish", "nushell"] {
@@ -980,7 +980,7 @@ mod tests {
                 ("TERM".to_owned(), "dumb".to_owned()),
                 ("AGTERM_PANE_ID".to_owned(), "X".to_owned()),
             ],
-            env_remove: vec!["ZMX_DIR".to_owned(), "GHOSTTY_SHELL_FEATURES".to_owned()],
+            env_remove: vec!["AGTERM_LIVE_DIR".to_owned(), "GHOSTTY_SHELL_FEATURES".to_owned()],
             working_directory: Some(PathBuf::from("/nonexistent/dir")),
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
@@ -1001,7 +1001,7 @@ mod tests {
         let vars = set(&prepared);
         expect(&vars, &[("TERM", "dumb"), ("AGTERM_PANE_ID", "X")]);
         assert!(!vars.contains_key("GHOSTTY_SHELL_FEATURES") && !vars.contains_key("PWD"));
-        assert!(removed(&prepared).contains(&"ZMX_DIR".to_owned()));
+        assert!(removed(&prepared).contains(&"AGTERM_LIVE_DIR".to_owned()));
         // a working directory that is not one is ignored, as libghostty ignored it; empty input types nothing
         assert_eq!((&prepared.command.cwd, &prepared.initial_input), (&None, &None));
         assert_eq!(
@@ -1241,12 +1241,12 @@ mod tests {
     #[test]
     fn a_seed_runs_with_its_variables_over_the_panes() {
         let seed = LaunchSeed {
-            command: Some("zmx attach x".to_owned()),
+            command: Some("agterm-session attach x".to_owned()),
             initial_input: Some("ls\n".to_owned()),
             wait_after_command: false,
             env: vec![
                 ("SHELL".to_owned(), "/bin/zsh".to_owned()),
-                ("ZMX_DIR".to_owned(), "/d".to_owned()),
+                ("AGTERM_LIVE_DIR".to_owned(), "/d".to_owned()),
             ],
             live: true,
         };
@@ -1255,7 +1255,7 @@ mod tests {
             ("SHELL".to_owned(), "/bin/sh".to_owned()),
         ];
         let launch = Launch::from_seed(&seed, Some(PathBuf::from("/w")), &pane_env);
-        assert_eq!(launch.command.as_deref(), Some("zmx attach x"));
+        assert_eq!(launch.command.as_deref(), Some("agterm-session attach x"));
         assert_eq!(launch.initial_input.as_deref(), Some("ls\n"));
         assert_eq!(launch.working_directory, Some(PathBuf::from("/w")));
         assert_eq!(
@@ -1263,7 +1263,7 @@ mod tests {
             [
                 ("AGTERM_PANE_ID".to_owned(), "P".to_owned()),
                 ("SHELL".to_owned(), "/bin/zsh".to_owned()),
-                ("ZMX_DIR".to_owned(), "/d".to_owned()),
+                ("AGTERM_LIVE_DIR".to_owned(), "/d".to_owned()),
             ]
         );
     }

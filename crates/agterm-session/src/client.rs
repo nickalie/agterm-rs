@@ -51,12 +51,12 @@ use std::{fmt, io};
 use crate::endpoint::{self, Endpoint, Stream, is_connection_closed_error};
 use crate::protocol::{
     ApiCall, ApiError, ApiReply, ApiRequest, ApiResponse, AttachClientMessage, AttachRefusal, AttachRequest,
-    AttachServerMessage, DelegatedReply, DelegatedRequest, ExitStatus, FramingError, GridSize, Hello, JobProcess,
-    KillResult, LeadRole, PROTOCOL_VERSION, ReplyMetadata, Role, Screen, SessionRecord, Welcome, read_frame,
-    write_message,
+    AttachServerMessage, DelegatedReply, DelegatedRequest, ErrorCode, ExitStatus, FramingError, GridSize, Hello,
+    JobProcess, KillResult, LeadRole, PROTOCOL_VERSION, ReplyMetadata, Role, Screen, SessionRecord, Welcome,
+    read_frame, write_message,
 };
 use crate::server::BUILD_ID;
-use crate::server::spawn::{self, Connected, StartError, StartOptions};
+use crate::server::spawn::{self, Connected, HandoffAttempt, StartError, StartOptions};
 
 /// How long an api call may take, connecting included (zmx's `DEFAULT_TIMEOUT`, which bounded one invocation).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -196,6 +196,32 @@ impl Client {
         };
         let left = deadline.saturating_duration_since(Instant::now()).max(MIN_WAIT);
         api.call_within(request, left).map(Some)
+    }
+
+    /// An update: asks the namespace's running server, when it is of another build than `options` expects, to hand
+    /// its sessions over to `options.executable` ([`spawn::connect_or_start`]'s handoff), as the app launching a new
+    /// build does before its first pane. It never starts a server where none runs. `None` when no server runs, it is
+    /// of the expected build, or `options` expects none (an unstaged executable); else how the handoff went
+    /// ([`HandoffAttempt::Failed`] leaves the sessions with the old server, predating the build).
+    ///
+    /// # Errors
+    ///
+    /// Connecting failed, or the server refused the protocol and could not hand over ([`StartError::HandoffFailed`]).
+    pub fn update(&self, options: &StartOptions) -> Result<Option<HandoffAttempt>, ClientError> {
+        let Some(build) = options.build.as_deref() else {
+            return Ok(None);
+        };
+        match self.connect_existing(Role::Api, self.timeout) {
+            Ok(None) => return Ok(None),
+            Ok(Some(connected)) if connected.welcome.build == build => return Ok(None),
+            // the old server disconnects its clients for the handoff anyway
+            Ok(Some(connected)) => drop(connected),
+            Err(ClientError::Start(StartError::Refused { error, welcome, .. }))
+                if error.code == ErrorCode::ProtocolMismatch && welcome.build != build => {}
+            Err(error) => return Err(error),
+        }
+        let connected = spawn::connect_or_start(&self.endpoint, &self.hello(Role::Api), options)?;
+        Ok(connected.handoff)
     }
 
     /// Attaches to a session as `request` says, creating it when the request carries a spec, starting the server

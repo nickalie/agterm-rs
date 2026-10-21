@@ -53,7 +53,7 @@ def test_clipboard_set_refuses_outside_a_live_pane(cli):
     not_live = cli.vocabulary.text(NOT_LIVE)
     _failed(cli.local("clipboard", "set", "hello", input=""), not_live)
     _failed(cli.local("clipboard", "set", input="hello"), not_live)
-    # A ZMX_SESSION agterm would never have named is not printed into.
+    # A session variable naming a session agterm would never have named is not printed into.
     env = _env(cli, "someone-elses-session", cli.instance.live_dir)
     _failed(cli.local("clipboard", "set", "hello", env=env, input=""), not_live)
 
@@ -93,7 +93,7 @@ def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
     text = f"clip-{uuid.uuid4().hex[:8]}"
     sequence = f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07"
     with vocabulary.leading_client(ctl.instance, endpoint, daemon) as viewer:
-        # Attached once the pane follows; a `zmx print` into a daemon still taking the viewer finds it busy.
+        # Attached once the pane follows: a print into a session still taking the viewer finds it busy (zmx).
         ctl.wait_tree(
             lambda tree: (
                 next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"

@@ -161,17 +161,17 @@ fn a_seed_runs_over_the_panes_own_environment() {
     let (library, window, ids) = three_sessions();
     let spec = PaneSpec::primary(window, library.store(window).unwrap(), ids[0]).unwrap();
     let seed = LaunchSeed {
-        command: Some("zmx attach x".to_owned()),
+        command: Some("agterm-session attach x".to_owned()),
         initial_input: Some("ls\n".to_owned()),
         wait_after_command: false,
         env: vec![
-            ("ZMX_DIR".to_owned(), "/tmp/z".to_owned()),
+            ("AGTERM_LIVE_DIR".to_owned(), "/tmp/z".to_owned()),
             ("AGTERM_PANE".to_owned(), "over".to_owned()),
         ],
         live: true,
     };
     let launch = spec.seeded(&seed, &context());
-    assert_eq!(launch.command.as_deref(), Some("zmx attach x"));
+    assert_eq!(launch.command.as_deref(), Some("agterm-session attach x"));
     assert_eq!(launch.initial_input.as_deref(), Some("ls\n"));
     let value = |key: &str| {
         launch
@@ -180,7 +180,7 @@ fn a_seed_runs_over_the_panes_own_environment() {
             .find(|(known, _)| known == key)
             .map(|(_, value)| value.as_str())
     };
-    assert_eq!(value("ZMX_DIR"), Some("/tmp/z"));
+    assert_eq!(value("AGTERM_LIVE_DIR"), Some("/tmp/z"));
     assert_eq!(value("AGTERM_PANE"), Some("over"), "the seed's variables win");
     assert_eq!(value("AGTERM_SESSION_ID").map(str::len), Some(36));
 }

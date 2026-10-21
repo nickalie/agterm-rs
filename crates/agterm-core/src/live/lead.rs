@@ -1,7 +1,8 @@
-//! Which client of a pane's zmx daemon owns the pty size (upstream's `ZmxLead.swift`). Only the leader's grid is
-//! applied, so every other client draws output laid out for a grid it does not have. The patched zmx (build/patches/zmx
-//! `0001-explicit-leadership.patch`) lets a client attached with `ZMX_MANAGED=<nonce>` lead only by claiming at attach
-//! (`ZMX_MANAGED_CLAIM`), and reports its role as a terminal title under a reserved prefix carrying the nonce.
+//! Which client of a pane's live session owns the pty size (upstream's `ZmxLead.swift`). Only the leader's grid is
+//! applied, so every other client draws output laid out for a grid it does not have. The session server keeps the
+//! explicit leadership of upstream's patched zmx (its `0001-explicit-leadership.patch`): a client attached with
+//! `AGTERM_LIVE_MANAGED=<nonce>` leads only by claiming at attach (`AGTERM_LIVE_MANAGED_CLAIM`), and reports its role
+//! as a terminal title under a reserved prefix carrying the nonce (`agterm_session::server::lead`).
 
 use std::collections::BTreeMap;
 
@@ -17,13 +18,13 @@ pub enum LeadRole {
     Follower,
 }
 
-/// The variable the zmx client reads to opt into explicit leadership.
-pub const NONCE_VARIABLE: &str = "ZMX_MANAGED";
+/// The variable the attach client reads to opt into explicit leadership.
+pub const NONCE_VARIABLE: &str = "AGTERM_LIVE_MANAGED";
 /// The variable that makes the attach claim the lead.
-pub const CLAIM_VARIABLE: &str = "ZMX_MANAGED_CLAIM";
+pub const CLAIM_VARIABLE: &str = "AGTERM_LIVE_MANAGED_CLAIM";
 
-/// One attachment of a pane to its daemon: the token its zmx client echoes in every role report, and whether it asked
-/// for the lead.
+/// One attachment of a pane to its daemon: the token its attach client echoes in every role report, and whether it
+/// asked for the lead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeadAttachment {
     pub nonce: String,
@@ -62,13 +63,13 @@ impl LeadAttachment {
     }
 }
 
-/// A plain token zmx accepts: 32 lower-case hex digits.
+/// A plain token the attach client accepts: 32 lower-case hex digits.
 #[must_use]
 pub fn make_nonce() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
-/// A role report from a pane's zmx client, carried as a terminal title with a reserved prefix. A title because
+/// A role report from a pane's attach client, carried as a terminal title with a reserved prefix. A title because
 /// libghostty delivers every one, where it drops a desktop notification that follows another within a second.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeadNotice {
@@ -82,16 +83,12 @@ impl LeadNotice {
     /// The reserved title prefix of the attach contract's role report, which the session server's attach clients
     /// write (`agterm_session::server::lead::role_title`).
     pub const PREFIX: &'static str = "ngterm-live-role;";
-    /// The prefix the bundled zmx's patch writes its role report under, read as well while zmx hosts live sessions.
-    pub const ZMX_PREFIX: &'static str = "zmx-role;";
 
     /// The notice `title` carries; `None` for any other title, and for one that is not
-    /// `<prefix><nonce>:<role>:<generation>` under [`Self::PREFIX`] or [`Self::ZMX_PREFIX`].
+    /// `<prefix><nonce>:<role>:<generation>` under [`Self::PREFIX`].
     #[must_use]
     pub fn parse(title: &str) -> Option<Self> {
-        let body = title
-            .strip_prefix(Self::PREFIX)
-            .or_else(|| title.strip_prefix(Self::ZMX_PREFIX))?;
+        let body = title.strip_prefix(Self::PREFIX)?;
         let fields: Vec<&str> = body.split(':').collect();
         let [nonce, role, generation] = fields.as_slice() else {
             return None;
@@ -111,8 +108,8 @@ impl LeadNotice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeadState {
     attachment: LeadAttachment,
-    /// `None` until the first report: a daemon or zmx client without explicit leadership never sends one, and such a
-    /// pane behaves as it did before.
+    /// `None` until the first report: an unmanaged attach client never sends one, and such a pane behaves as it did
+    /// before.
     role: Option<LeadRole>,
     /// True from a fresh attach that replaced a covered surface until its first report, so the cover stays up over a
     /// terminal that has nothing to show yet.
@@ -193,14 +190,17 @@ mod tests {
         assert_eq!(
             claiming.environment(),
             BTreeMap::from([
-                ("ZMX_MANAGED".to_owned(), "n1".to_owned()),
-                ("ZMX_MANAGED_CLAIM".to_owned(), "1".to_owned())
+                ("AGTERM_LIVE_MANAGED".to_owned(), "n1".to_owned()),
+                ("AGTERM_LIVE_MANAGED_CLAIM".to_owned(), "1".to_owned())
             ])
         );
-        assert_eq!(claiming.assignments(), ["ZMX_MANAGED=n1", "ZMX_MANAGED_CLAIM=1"]);
+        assert_eq!(
+            claiming.assignments(),
+            ["AGTERM_LIVE_MANAGED=n1", "AGTERM_LIVE_MANAGED_CLAIM=1"]
+        );
         assert_eq!(
             attachment("n2", false).environment(),
-            BTreeMap::from([("ZMX_MANAGED".to_owned(), "n2".to_owned())])
+            BTreeMap::from([("AGTERM_LIVE_MANAGED".to_owned(), "n2".to_owned())])
         );
     }
 
@@ -219,11 +219,9 @@ mod tests {
     #[test]
     fn a_notice_parses_the_reserved_title() {
         for (title, role, generation) in [
-            ("zmx-role;n1:leader:7", LeadRole::Leader, 7),
-            ("zmx-role;n1:follower:0", LeadRole::Follower, 0),
-            ("zmx-role;n1:unowned:4294967295", LeadRole::Unowned, u32::MAX),
             ("ngterm-live-role;n1:leader:7", LeadRole::Leader, 7),
             ("ngterm-live-role;n1:follower:0", LeadRole::Follower, 0),
+            ("ngterm-live-role;n1:unowned:4294967295", LeadRole::Unowned, u32::MAX),
         ] {
             assert_eq!(
                 LeadNotice::parse(title),
@@ -240,16 +238,16 @@ mod tests {
     fn a_notice_leaves_every_other_title_alone() {
         for title in [
             "vim README.md",
-            "zmx-role",
-            "my zmx-role;n1:leader:7",
-            "zmx-role;n1:leader",
-            "zmx-role;n1:owner:7",
-            "zmx-role;n1:leader:-1",
-            "zmx-role;n1:leader:4294967296",
-            "zmx-role;:leader:7",
-            "zmx-role;n1:leader:7:extra",
             "ngterm-live-role",
+            "my ngterm-live-role;n1:leader:7",
             "ngterm-live-role;n1:leader",
+            "ngterm-live-role;n1:owner:7",
+            "ngterm-live-role;n1:leader:-1",
+            "ngterm-live-role;n1:leader:4294967296",
+            "ngterm-live-role;:leader:7",
+            "ngterm-live-role;n1:leader:7:extra",
+            // upstream's patched zmx's prefix: no live session reports under it any more
+            "zmx-role;n1:leader:7",
             "agterm-live-role;n1:leader:7",
         ] {
             assert_eq!(LeadNotice::parse(title), None, "{title}");
@@ -261,19 +259,19 @@ mod tests {
         let mut state = LeadState::new(attachment("n1", true), false);
         assert_eq!(state.role(), None);
         assert!(!state.covered());
-        assert!(state.apply(&notice("zmx-role;n1:follower:3")));
+        assert!(state.apply(&notice("ngterm-live-role;n1:follower:3")));
         assert!(state.covered());
-        assert!(state.apply(&notice("zmx-role;n1:leader:4")));
+        assert!(state.apply(&notice("ngterm-live-role;n1:leader:4")));
         assert!(!state.covered());
     }
 
     #[test]
     fn the_state_drops_another_attachments_report_and_an_older_generation() {
         let mut state = LeadState::new(attachment("n1", true), false);
-        assert!(state.apply(&notice("zmx-role;n1:leader:5")));
-        assert!(!state.apply(&notice("zmx-role;forged:follower:9")));
-        assert!(!state.apply(&notice("zmx-role;n1:follower:4")));
-        assert!(!state.apply(&notice("zmx-role;n1:leader:6")));
+        assert!(state.apply(&notice("ngterm-live-role;n1:leader:5")));
+        assert!(!state.apply(&notice("ngterm-live-role;forged:follower:9")));
+        assert!(!state.apply(&notice("ngterm-live-role;n1:follower:4")));
+        assert!(!state.apply(&notice("ngterm-live-role;n1:leader:6")));
         assert_eq!(state.role(), Some(LeadRole::Leader));
     }
 
@@ -281,7 +279,7 @@ mod tests {
     fn reattaching_stays_covered_until_its_first_report_even_when_the_role_repeats() {
         let mut state = LeadState::new(attachment("n2", true), true);
         assert!(state.covered());
-        assert!(state.apply(&notice("zmx-role;n2:leader:8")));
+        assert!(state.apply(&notice("ngterm-live-role;n2:leader:8")));
         assert!(!state.reattaching());
         assert!(!state.covered());
     }

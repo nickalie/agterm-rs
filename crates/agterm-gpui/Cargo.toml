@@ -23,8 +23,9 @@ agterm-core.workspace = true
 agterm-host.workspace = true
 agterm-proto.workspace = true
 agterm-server.workspace = true
+# the live sessions' server: its `SessionHost`, the live-launch inputs and the update handoff
+agterm-session.workspace = true
 agterm-term.workspace = true
-agterm-zmx.workspace = true
 ashpd.workspace = true
 async-channel.workspace = true
 cosmic-text.workspace = true

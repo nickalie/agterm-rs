@@ -136,6 +136,10 @@ struct Queue {
     epoch: u64,
     /// When the client was resynced, within the last budget window.
     resyncs: VecDeque<Instant>,
+    /// Where the client's copy of the stream stopped at its first overflow since it was last sent a snapshot: a
+    /// later overflow that drops the resync's snapshot unsent keeps it, so the clipboard writes the client missed
+    /// since then still reach it with the next one (`super::recovery`).
+    missed_since: Option<u64>,
 }
 
 impl Queue {
@@ -148,6 +152,7 @@ impl Queue {
             closed: false,
             epoch: 0,
             resyncs: VecDeque::new(),
+            missed_since: None,
         }
     }
 
@@ -197,6 +202,7 @@ impl Queue {
         });
         self.bytes = 0;
         self.overflowed = true;
+        self.missed_since.get_or_insert(stops);
         self.events.push_back(ClientEvent::Overflowed { offset: stops });
     }
 
@@ -278,8 +284,11 @@ impl Queue {
 
     fn pop(&mut self) -> Option<ClientEvent> {
         let event = self.events.pop_front()?;
-        if let ClientEvent::Output { data, .. } = &event {
-            self.bytes -= data.len();
+        match &event {
+            ClientEvent::Output { data, .. } => self.bytes -= data.len(),
+            // the snapshot that brings the client back carries what it missed
+            ClientEvent::Snapshot { .. } => self.missed_since = None,
+            _ => {}
         }
         Some(event)
     }
@@ -514,6 +523,13 @@ impl Clients {
     #[must_use]
     pub fn overflowed(&self, id: ClientId) -> Option<bool> {
         self.slot(id).map(|slot| slot.lock().overflowed)
+    }
+
+    /// Where the copy of the stream of the client `id` stopped at its first overflow since it was last sent a
+    /// snapshot; `None` when it did not fall behind since, or is not attached.
+    #[must_use]
+    pub fn missed_since(&self, id: ClientId) -> Option<u64> {
+        self.slot(id).and_then(|slot| slot.lock().missed_since)
     }
 
     /// The clients whose queue overflowed and await their resync.

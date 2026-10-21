@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import pwd
@@ -39,7 +40,7 @@ from agterm_conformance.impls.base import (
     hosts_zmx_dir,
     isolated_runtime_env,
     process_identity,
-    remove_zmx_dir,
+    remove_live_dir,
     version_tuple,
 )
 from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
@@ -60,14 +61,20 @@ def daemons(tmp_path: Path) -> Iterator[list[subprocess.Popen[bytes]]]:
 
 
 def spawn_daemon(
-    tmp_path: Path, name: str, live_dir: str, spawned: list[subprocess.Popen[bytes]], directory: str = "daemons"
+    tmp_path: Path,
+    name: str,
+    live_dir: str,
+    spawned: list[subprocess.Popen[bytes]],
+    directory: str = "daemons",
+    variable: str = "ZMX_DIR",
 ) -> int:
-    """A copy of `cat` under `name`, blocked on a stdin pipe the test holds."""
+    """A copy of `cat` under `name`, `variable` naming `live_dir` in its environment, blocked on a stdin pipe the test
+    holds."""
     program = tmp_path / directory / name
     program.parent.mkdir(exist_ok=True)
     if not program.exists():
         shutil.copy2(shutil.which("cat") or "/bin/cat", program)
-    process = subprocess.Popen([program], stdin=subprocess.PIPE, env={"ZMX_DIR": live_dir})
+    process = subprocess.Popen([program], stdin=subprocess.PIPE, env={variable: live_dir})
     spawned.append(process)
     # Popen returns once exec passed its point of no return; the new image's argv pages may still be empty.
     cmdline, deadline = Path(f"/proc/{process.pid}/cmdline"), time.monotonic() + 5
@@ -347,13 +354,26 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
     assert not instance.root.exists()
 
 
+def test_stop_removes_a_stopped_session_servers_namespace(tmp_path: Path) -> None:
+    live_dir = tmp_path / "ngterm-live-x"
+    live_dir.mkdir()
+    (live_dir / "server.lock").write_text("")
+    remove_live_dir(str(live_dir))
+    assert not live_dir.exists()
+    live_dir.mkdir()
+    (live_dir / "server.lock").write_text("")
+    (live_dir / "handoff-1").write_text("")
+    remove_live_dir(str(live_dir))
+    assert (live_dir / "server.lock").exists(), "anything else keeps it, the lock too"
+
+
 def test_stop_removes_the_zmx_dir_holding_only_zmx_logs(tmp_path: Path) -> None:
     live_dir = tmp_path / "agterm-zmx-x"
     (live_dir / "logs").mkdir(parents=True)
     (live_dir / "logs" / "zmx.log").write_text("")
-    remove_zmx_dir(str(live_dir))
+    remove_live_dir(str(live_dir))
     assert not live_dir.exists()
-    remove_zmx_dir(str(live_dir))
+    remove_live_dir(str(live_dir))
 
 
 @pytest.mark.parametrize("extra", ["sock", "logs/core", "logs/zmx.log.1"])
@@ -362,7 +382,7 @@ def test_stop_keeps_a_zmx_dir_holding_anything_else(tmp_path: Path, extra: str) 
     (live_dir / "logs").mkdir(parents=True)
     (live_dir / "logs" / "zmx.log").write_text("")
     (live_dir / extra).write_text("")
-    remove_zmx_dir(str(live_dir))
+    remove_live_dir(str(live_dir))
     assert (live_dir / extra).exists() and (live_dir / "logs" / "zmx.log").exists()
 
 
@@ -1008,8 +1028,9 @@ def test_stop_reaps_through_the_adapters_vocabulary(
     monkeypatch.setenv("FAKE_LIVE_GROUP", "live")
     adapter = LiveVocabularyAdapter(fake_bin)
     instance = adapter.launch()
-    assert instance.vocabulary is LIVE and instance.live_dir == LIVE.socket_directory(instance.state_dir)
-    pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
+    assert instance.vocabulary is LIVE
+    assert instance.live_dir == LIVE.socket_directory(instance.state_dir, adapter.app_dir_name)
+    pid = spawn_daemon(tmp_path, "agterm-session", instance.live_dir, daemons, variable="AGTERM_LIVE_DIR")
     assert instance.request("fake.adopt", pid=pid).ok
     adapter.stop(instance, cleanup=False)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
@@ -1075,6 +1096,41 @@ def test_leftover_check_names_an_executable_whose_path_has_a_space(
     live_dir = "/tmp/agterm-zmx-spaced"
     pid = spawn_daemon(tmp_path, "zmx", live_dir, daemons, directory="Test Install")
     assert [found for found, *_ in find_leftovers(live_dir)] == [pid]
+
+
+def test_leftover_check_under_a_session_server_finds_its_server_and_every_process_of_its_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mine, other = "/tmp/ngterm-live-mine", "/tmp/ngterm-live-other"
+    rows = [
+        (1, "agterm-session", "a", ["/x/agterm-session", "server", mine]),
+        (2, "agterm-session", "b", ["/x/agterm-session", "server", other]),
+        (3, "agterm-session", "c", ["/x/agterm-session", "attach", "agterm-1", f"AGTERM_LIVE_DIR={mine}"]),
+        (4, "bash", "d", ["-bash", f"AGTERM_LIVE_DIR={mine}", "AGTERM_LIVE_SESSION=agterm-1"]),
+        (5, "bash", "e", ["-bash", f"AGTERM_LIVE_DIR={other}"]),
+        (6, "zmx", "f", ["zmx", f"ZMX_DIR={mine}"]),
+        (7, "agterm-session", "g", ["/x/agterm-session", "server", mine, "--handoff-import", "c", "t"]),
+    ]
+    monkeypatch.setattr(base, "_processes", lambda: iter(rows))
+    # an update's replacement server counts too: its argv starts the same
+    assert [pid for pid, *_ in find_leftovers(mine, LIVE)] == [1, 3, 4, 7]
+    assert base.serves_namespace(["/a b/agterm-session", "server", mine], mine, "agterm-session")
+    assert not base.serves_namespace(["/x/agterm-session", "server"], mine, "agterm-session")
+    assert not base.serves_namespace(["/x/zmx", "server", mine], mine, "agterm-session")
+
+
+def test_a_session_servers_leftover_check_waits_out_its_idle_grace(
+    tmp_path: Path, daemons: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live_dir = "/tmp/ngterm-live-grace"
+    spawn_daemon(tmp_path, "agterm-session", live_dir, daemons, variable="AGTERM_LIVE_DIR")
+    monkeypatch.setattr(base, "LEFTOVER_GRACE", 0.0)
+    # without an idle grace the server still running is a leftover at once
+    no_grace = dataclasses.replace(LIVE, server_idle=0.0)
+    assert isinstance(base._leftovers_error(live_dir, vocabulary=no_grace), LeftoverProcesses)
+    # with one, a server stopping within it is none
+    threading.Timer(0.2, daemons[-1].kill).start()
+    assert base._leftovers_error(live_dir, vocabulary=dataclasses.replace(LIVE, server_idle=5.0)) is None
 
 
 def test_leftover_check_finds_a_session_host_by_its_host_argv(monkeypatch: pytest.MonkeyPatch) -> None:

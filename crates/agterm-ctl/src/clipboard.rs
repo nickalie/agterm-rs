@@ -1,7 +1,7 @@
 //! `ngtermctl clipboard set` (`agtermctlKit/ClipboardCommands.swift`, `agtermCore/TerminalClipboard.swift`): prints an
-//! OSC 52 clipboard write into the caller's pane through its live-session daemon (`print` of the bundled zmx), so the
-//! write reaches every terminal attached to the pane. Local-only: it never opens the control socket, so it has no
-//! `--socket` or `--json`.
+//! OSC 52 clipboard write into the caller's pane through its live session (the session server's `print`, through the
+//! bundled `agterm-session print`, as upstream runs the bundled `zmx print`), so the write reaches every terminal
+//! attached to the pane. Local-only: it never opens the control socket, so it has no `--socket` or `--json`.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -16,6 +16,17 @@ use base64::engine::general_purpose::STANDARD;
 use crate::Failure;
 use crate::local::{SigpipeIgnored, exit_status};
 use crate::version::client_path;
+
+/// The session server's executable beside the CLI (`bin/` of the staged layout).
+pub const EXECUTABLE_FILE: &str = if cfg!(windows) {
+    "agterm-session.exe"
+} else {
+    "agterm-session"
+};
+/// The attach contract's variable naming the pane's session, which the server sets in its programs.
+const SESSION_VARIABLE: &str = agterm_core::live::SESSION_VARIABLE;
+/// The attach contract's variable naming the session's namespace, which `agterm-session print` reaches.
+const DIRECTORY_VARIABLE: &str = agterm_core::live::DIRECTORY_VARIABLE;
 
 /// The encoded size limit: under the 8 MiB above which libghostty drops an OSC whole; the margin covers the `52;c;`
 /// prefix and the terminator.
@@ -107,17 +118,17 @@ pub enum CopyFailure {
     TooLarge {
         encoded_bytes: usize,
     },
-    /// The environment names no agterm zmx daemon: a scratch, quick or overlay terminal has none.
+    /// The environment names no agterm live session: a scratch, quick or overlay terminal has none.
     NotLivePane,
-    /// Where zmx was expected, `None` when the CLI's own path is unknown.
-    ZmxNotFound {
+    /// Where `agterm-session` was expected, `None` when the CLI's own path is unknown.
+    ExecutableNotFound {
         path: Option<PathBuf>,
     },
     PrintFailed {
         status: i32,
         stderr: String,
     },
-    /// zmx could not be started at all (upstream lets Foundation's own error through).
+    /// `agterm-session` could not be started at all (upstream lets Foundation's own error through).
     SpawnFailed {
         path: PathBuf,
         reason: String,
@@ -137,8 +148,8 @@ impl CopyFailure {
             Self::NotLivePane => {
                 "this pane has no live session; run it in a main or split pane started under Live sessions".to_owned()
             }
-            Self::ZmxNotFound { path: None } => "no live-session executable next to this ngtermctl".to_owned(),
-            Self::ZmxNotFound { path: Some(path) } => {
+            Self::ExecutableNotFound { path: None } => "no live-session executable next to this ngtermctl".to_owned(),
+            Self::ExecutableNotFound { path: Some(path) } => {
                 format!(
                     "no live-session executable next to this ngtermctl; looked for {}",
                     path.display()
@@ -169,15 +180,16 @@ pub fn sequence(text: &[u8]) -> Result<Vec<u8>, CopyFailure> {
     Ok(sequence)
 }
 
-/// The pane's zmx daemon name. Only a name agterm would have created is accepted, so a `ZMX_SESSION` inherited from an
-/// unrelated zmx session is never printed into; `ZMX_DIR` must be set because zmx reads it from the environment.
+/// The pane's live session name (`AGTERM_LIVE_SESSION`). Only a name agterm would have created is accepted, so a
+/// session name inherited from an unrelated live session is never printed into; `AGTERM_LIVE_DIR` must be set because
+/// `agterm-session` reaches the namespace it names.
 pub fn daemon(environment: &HashMap<OsString, OsString>) -> Result<String, CopyFailure> {
     let session = environment
-        .get(&OsString::from("ZMX_SESSION"))
+        .get(&OsString::from(SESSION_VARIABLE))
         .and_then(|value| value.to_str())
         .filter(|name| agterm_core::live::is_daemon_name(name));
     let directory = environment
-        .get(&OsString::from("ZMX_DIR"))
+        .get(&OsString::from(DIRECTORY_VARIABLE))
         .filter(|value| !value.is_empty());
     match (session, directory) {
         (Some(session), Some(_)) => Ok(session.to_owned()),
@@ -185,17 +197,18 @@ pub fn daemon(environment: &HashMap<OsString, OsString>) -> Result<String, CopyF
     }
 }
 
-/// The zmx beside the CLI (`bin/zmx` in the staging layout, upstream's `Contents/MacOS`); `client` is the CLI's
-/// resolved real path. `PATH` is not searched: only the bundled zmx is known to match this build.
-pub fn zmx_path(client: Option<&Path>) -> Result<PathBuf, CopyFailure> {
+/// The `agterm-session` beside the CLI (`bin/agterm-session` in the staging layout, upstream's zmx in
+/// `Contents/MacOS`); `client` is the CLI's resolved real path. `PATH` is not searched: only the bundled server is
+/// known to match this build.
+pub fn executable_path(client: Option<&Path>) -> Result<PathBuf, CopyFailure> {
     let Some(client) = client else {
-        return Err(CopyFailure::ZmxNotFound { path: None });
+        return Err(CopyFailure::ExecutableNotFound { path: None });
     };
-    let path = client.parent().unwrap_or_else(|| Path::new("/")).join("zmx");
+    let path = client.parent().unwrap_or_else(|| Path::new("/")).join(EXECUTABLE_FILE);
     if is_executable_file(&path) {
         Ok(path)
     } else {
-        Err(CopyFailure::ZmxNotFound { path: Some(path) })
+        Err(CopyFailure::ExecutableNotFound { path: Some(path) })
     }
 }
 
@@ -212,20 +225,20 @@ fn is_executable_file(path: &Path) -> bool {
     metadata.is_file() && (unsafe { libc::access(c_path.as_ptr(), libc::X_OK) }) == 0
 }
 
-/// Prints `text` as an OSC 52 write into the pane's daemon with `zmx print`, returning once zmx exits zero. That
-/// confirms neither that the daemon received the write nor that a terminal applied it: zmx reads no reply, and each
-/// terminal applies its own clipboard-write policy. `zmx` overrides the executable beside the CLI (tests).
+/// Prints `text` as an OSC 52 write into the pane's session with `agterm-session print`, returning once it exits
+/// zero: the server wrote it into the session's output, for every client attached. That confirms no terminal applied
+/// it: each applies its own clipboard-write policy. `executable` overrides the one beside the CLI (tests).
 pub fn copy(
     text: &[u8],
     client: Option<&Path>,
     environment: &HashMap<OsString, OsString>,
-    zmx: Option<&Path>,
+    executable: Option<&Path>,
 ) -> Result<(), CopyFailure> {
     let sequence = sequence(text)?;
     let daemon = daemon(environment)?;
-    let executable = match zmx {
-        Some(zmx) => zmx.to_path_buf(),
-        None => zmx_path(client)?,
+    let executable = match executable {
+        Some(executable) => executable.to_path_buf(),
+        None => executable_path(client)?,
     };
     let spawn_failed = |error: io::Error| CopyFailure::SpawnFailed {
         path: executable.clone(),
@@ -235,22 +248,22 @@ pub fn copy(
         .args(["print", &daemon])
         .env_clear()
         .envs(environment)
-        // empty is unset to zmx; an inherited prefix would resolve a name agterm never created
-        .env("ZMX_SESSION", "")
-        .env("ZMX_SESSION_PREFIX", "")
+        // empty is unset to agterm-session; an inherited prefix would resolve a name agterm never created
+        .env(SESSION_VARIABLE, "")
+        .env(agterm_core::live::SESSION_PREFIX_VARIABLE, "")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(spawn_failed)?;
     let stdin = child.stdin.take();
-    // a zmx that exits before reading everything must surface as its status, not kill this process
+    // a print that exits before reading everything must surface as its status, not kill this process
     let _sigpipe = SigpipeIgnored::new();
     let diagnostics = thread::scope(|scope| {
         if let Some(mut stdin) = stdin {
             let sequence = &sequence;
             scope.spawn(move || {
-                // EPIPE is dropped: zmx's own status and stderr say what happened
+                // EPIPE is dropped: the print's own status and stderr say what happened
                 let _ = stdin.write_all(sequence);
             });
         }
@@ -282,7 +295,10 @@ mod tests {
     const DAEMON: &str = "agterm-357e181888f34450b5c225bd00239b9b";
 
     fn live() -> HashMap<OsString, OsString> {
-        env(&[("ZMX_SESSION", DAEMON), ("ZMX_DIR", "/tmp/agterm-zmx-1")])
+        env(&[
+            ("AGTERM_LIVE_SESSION", DAEMON),
+            ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
+        ])
     }
 
     fn env(pairs: &[(&str, &str)]) -> HashMap<OsString, OsString> {
@@ -342,14 +358,14 @@ mod tests {
                 "this pane has no live session; run it in a main or split pane started under Live sessions",
             ),
             (
-                CopyFailure::ZmxNotFound { path: None },
+                CopyFailure::ExecutableNotFound { path: None },
                 "no live-session executable next to this ngtermctl",
             ),
             (
-                CopyFailure::ZmxNotFound {
-                    path: Some(PathBuf::from("/x/zmx")),
+                CopyFailure::ExecutableNotFound {
+                    path: Some(PathBuf::from("/x/agterm-session")),
                 },
-                "no live-session executable next to this ngtermctl; looked for /x/zmx",
+                "no live-session executable next to this ngtermctl; looked for /x/agterm-session",
             ),
             (
                 CopyFailure::PrintFailed {
@@ -392,19 +408,25 @@ mod tests {
     fn an_environment_that_names_no_agterm_daemon_is_not_a_live_pane() {
         let cases: [&[(&str, &str)]; 7] = [
             &[],
-            &[("ZMX_SESSION", DAEMON)],
-            &[("ZMX_DIR", "/tmp/agterm-zmx-1")],
-            &[("ZMX_SESSION", ""), ("ZMX_DIR", "/tmp/agterm-zmx-1")],
-            &[("ZMX_SESSION", DAEMON), ("ZMX_DIR", "")],
-            &[("ZMX_SESSION", "notes"), ("ZMX_DIR", "/tmp/agterm-zmx-1")],
-            &[("ZMX_SESSION", "agterm-notes"), ("ZMX_DIR", "/tmp/agterm-zmx-1")],
+            &[("AGTERM_LIVE_SESSION", DAEMON)],
+            &[("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1")],
+            &[("AGTERM_LIVE_SESSION", ""), ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1")],
+            &[("AGTERM_LIVE_SESSION", DAEMON), ("AGTERM_LIVE_DIR", "")],
+            &[
+                ("AGTERM_LIVE_SESSION", "notes"),
+                ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
+            ],
+            &[
+                ("AGTERM_LIVE_SESSION", "agterm-notes"),
+                ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
+            ],
         ];
         for pairs in cases {
             assert_eq!(daemon(&env(pairs)), Err(CopyFailure::NotLivePane), "{pairs:?}");
         }
     }
 
-    /// A temp root holding a fake zmx and what it recorded.
+    /// A temp root holding a fake `agterm-session` and what it recorded.
     struct Fixture {
         root: tempfile::TempDir,
     }
@@ -424,20 +446,20 @@ mod tests {
             agterm_host::fakes::write_executable(path, &format!("#!/bin/sh\n{body}\n")).unwrap();
         }
 
-        /// `bin/ngtermctl` (an empty file) with or without an executable `bin/zmx` beside it.
-        fn bundle(&self, with_zmx: bool) -> (PathBuf, PathBuf) {
+        /// `bin/ngtermctl` (an empty file) with or without an executable `bin/agterm-session` beside it.
+        fn bundle(&self, with_executable: bool) -> (PathBuf, PathBuf) {
             let bin = self.path("stage/bin");
             fs::create_dir_all(&bin).unwrap();
             let client = bin.join("ngtermctl");
             fs::write(&client, b"").unwrap();
-            let zmx = bin.join("zmx");
-            if with_zmx {
-                Self::script(&zmx, "exit 0");
+            let executable = bin.join(EXECUTABLE_FILE);
+            if with_executable {
+                Self::script(&executable, "exit 0");
             }
-            (client, zmx)
+            (client, executable)
         }
 
-        fn fake_zmx(&self, exit_code: i32, stderr: Option<&str>, reads_stdin: bool) -> PathBuf {
+        fn fake_print(&self, exit_code: i32, stderr: Option<&str>, reads_stdin: bool) -> PathBuf {
             let read = if reads_stdin {
                 format!("cat > '{}'", self.path("stdin").display())
             } else {
@@ -446,17 +468,17 @@ mod tests {
             let complain = stderr
                 .map(|text| format!("printf '%s\\n' '{text}' >&2"))
                 .unwrap_or_default();
-            let zmx = self.path("zmx");
+            let executable = self.path(EXECUTABLE_FILE);
             Self::script(
-                &zmx,
+                &executable,
                 &format!(
-                    "printf '%s\\n' \"$@\" > '{args}'\nenv | grep '^ZMX_' | sort > '{env}'\n{read}\n{complain}\nexit \
-                     {exit_code}",
+                    "printf '%s\\n' \"$@\" > '{args}'\nenv | grep '^AGTERM_LIVE_' | sort > '{env}'\n{read}\n\
+                     {complain}\nexit {exit_code}",
                     args = self.path("args").display(),
                     env = self.path("env").display(),
                 ),
             );
-            zmx
+            executable
         }
 
         fn lines(&self, name: &str) -> Vec<String> {
@@ -469,28 +491,31 @@ mod tests {
     }
 
     #[test]
-    fn zmx_is_the_executable_beside_the_client() {
+    fn the_session_server_is_the_executable_beside_the_client() {
         let fixture = Fixture::new();
-        let (client, zmx) = fixture.bundle(true);
-        assert_eq!(zmx_path(Some(&client)).unwrap(), zmx);
+        let (client, executable) = fixture.bundle(true);
+        assert_eq!(executable_path(Some(&client)).unwrap(), executable);
     }
 
     #[test]
-    fn a_stage_without_zmx_reports_where_it_looked() {
+    fn a_stage_without_the_session_server_reports_where_it_looked() {
         let fixture = Fixture::new();
-        let (client, zmx) = fixture.bundle(false);
+        let (client, executable) = fixture.bundle(false);
         assert_eq!(
-            zmx_path(Some(&client)),
-            Err(CopyFailure::ZmxNotFound { path: Some(zmx) })
+            executable_path(Some(&client)),
+            Err(CopyFailure::ExecutableNotFound { path: Some(executable) })
         );
-        assert_eq!(zmx_path(None), Err(CopyFailure::ZmxNotFound { path: None }));
+        assert_eq!(
+            executable_path(None),
+            Err(CopyFailure::ExecutableNotFound { path: None })
+        );
     }
 
     #[test]
     fn copy_prints_the_sequence_into_the_panes_daemon_on_stdin() {
         let fixture = Fixture::new();
-        let zmx = fixture.fake_zmx(0, None, true);
-        copy(b"hello", None, &live(), Some(&zmx)).unwrap();
+        let print = fixture.fake_print(0, None, true);
+        copy(b"hello", None, &live(), Some(&print)).unwrap();
         assert_eq!(fixture.lines("args"), ["print", DAEMON]);
         assert_eq!(fs::read(fixture.path("stdin")).unwrap(), b"\x1b]52;c;aGVsbG8=\x07");
     }
@@ -498,22 +523,26 @@ mod tests {
     #[test]
     fn copy_clears_the_session_variables_and_keeps_the_socket_directory() {
         let fixture = Fixture::new();
-        let zmx = fixture.fake_zmx(0, None, true);
+        let print = fixture.fake_print(0, None, true);
         let mut environment = live();
-        environment.insert("ZMX_SESSION_PREFIX".into(), "work-".into());
-        copy(b"hello", None, &environment, Some(&zmx)).unwrap();
+        environment.insert("AGTERM_LIVE_SESSION_PREFIX".into(), "work-".into());
+        copy(b"hello", None, &environment, Some(&print)).unwrap();
         assert_eq!(
             fixture.lines("env"),
-            ["ZMX_DIR=/tmp/agterm-zmx-1", "ZMX_SESSION=", "ZMX_SESSION_PREFIX="]
+            [
+                "AGTERM_LIVE_DIR=/tmp/ngterm-live-1",
+                "AGTERM_LIVE_SESSION=",
+                "AGTERM_LIVE_SESSION_PREFIX="
+            ]
         );
     }
 
     #[test]
     fn a_failed_print_carries_its_status_and_stderr() {
         let fixture = Fixture::new();
-        let zmx = fixture.fake_zmx(3, Some("session not found"), true);
+        let print = fixture.fake_print(3, Some("session not found"), true);
         assert_eq!(
-            copy(b"hello", None, &live(), Some(&zmx)),
+            copy(b"hello", None, &live(), Some(&print)),
             Err(CopyFailure::PrintFailed {
                 status: 3,
                 stderr: "session not found\n".to_owned()
@@ -522,16 +551,16 @@ mod tests {
     }
 
     #[test]
-    fn a_zmx_that_exits_without_reading_stdin_still_reports_its_status() {
+    fn a_print_that_exits_without_reading_stdin_still_reports_its_status() {
         // with SIGPIPE at its default, as the real binary runs: the write past the pipe buffer must get EPIPE
         crate::local::default_sigpipe::run(
-            "clipboard::tests::a_zmx_that_exits_without_reading_stdin_still_reports_its_status",
+            "clipboard::tests::a_print_that_exits_without_reading_stdin_still_reports_its_status",
             || {
                 let fixture = Fixture::new();
-                let zmx = fixture.fake_zmx(4, None, false);
+                let print = fixture.fake_print(4, None, false);
                 let text = vec![0; 1024 * 1024];
                 assert_eq!(
-                    copy(&text, None, &live(), Some(&zmx)),
+                    copy(&text, None, &live(), Some(&print)),
                     Err(CopyFailure::PrintFailed {
                         status: 4,
                         stderr: String::new()
@@ -542,11 +571,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_that_is_not_live_never_starts_zmx() {
+    fn a_pane_that_is_not_live_never_starts_the_print() {
         let fixture = Fixture::new();
-        let zmx = fixture.fake_zmx(0, None, true);
+        let print = fixture.fake_print(0, None, true);
         assert_eq!(
-            copy(b"hello", None, &HashMap::new(), Some(&zmx)),
+            copy(b"hello", None, &HashMap::new(), Some(&print)),
             Err(CopyFailure::NotLivePane)
         );
         assert!(!fixture.path("args").exists());

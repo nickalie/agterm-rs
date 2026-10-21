@@ -30,7 +30,7 @@ libc.workspace = true
 windows-sys = { workspace = true, features = ["Win32_System_WindowsProgramming"] }
 
 [dev-dependencies]
-# the `SessionHost` the real zmx tests kill a daemon through
+# the `SessionHost` the live tests list and kill their sessions through
 agterm-host.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
@@ -38,10 +38,6 @@ uuid.workspace = true
 [target.'cfg(windows)'.dev-dependencies]
 # whether a killed child is gone (`OpenProcess`, `GetExitCodeProcess`)
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
-
-[target.'cfg(unix)'.dev-dependencies]
-# the zmx client the real zmx tests kill a daemon with (zmx runs on Unix only)
-agterm-zmx.workspace = true
 
 [lints]
 workspace = true

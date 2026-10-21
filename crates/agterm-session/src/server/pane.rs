@@ -49,7 +49,8 @@
 //! by [`Pane::resync`]: a new snapshot, led by [`super::snapshot::RESYNC_RESET`], in place of the output it was not
 //! sent, opening its next epoch; it keeps its place in the lead. Past its [`ResyncBudget`], or without a cut in time,
 //! it is detached instead, and its connection is closed. One that fell behind and was not resynced when the session
-//! ends is sent the session's last snapshot ahead of its exit ([`super::snapshot::Kind::Last`]).
+//! ends is sent the session's last snapshot ahead of its exit ([`super::snapshot::Kind::Last`]). Either snapshot
+//! gives it back each clipboard's latest write it missed, the program's or printed ([`super::recovery`]).
 //!
 //! # Leadership
 //!
@@ -96,6 +97,7 @@ use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, ExitReason, Killer, Rea
 
 use super::clients::{ClientId, Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget, Subscription};
 use super::lead::{Change, Lead, RoleNotice};
+use super::recovery::Recovery;
 use super::replies::{
     Answer, DELEGATION_WAIT, Facts, KITTY_STORAGE_LIMIT, KITTY_WAIT, Outlet, PARK_LOW, Replies, ServerEffects,
 };
@@ -310,6 +312,8 @@ pub(super) struct State {
     on_end: Vec<Box<dyn FnOnce() + Send>>,
     /// What an update handoff's cut holds ([`handoff`]).
     hold: Hold,
+    /// Each clipboard's latest write, which a client that fell behind gets back ([`super::recovery`]).
+    pub(super) recovery: Recovery,
 }
 
 /// An update handoff's hold on a pane ([`handoff`]).
@@ -691,7 +695,8 @@ impl Pane {
             return Err(ResyncError::Detached);
         }
         match capture(&mut state, Kind::Resync) {
-            Ok(data) => {
+            Ok(mut data) => {
+                recover(&state, id, &mut data);
                 let (offset, size) = (state.offset, state.size);
                 state.clients.snapshot(id, offset, size, data);
                 self.release(state);
@@ -965,11 +970,8 @@ impl Pane {
         self.core.outlet.discard(false);
         // the clipboard-read scanner follows the terminal's parser
         let kitty = state.replies.observe(data);
-        let offset = state.offset;
-        state.offset += data.len() as u64;
-        state.revision = state.revision.wrapping_add(1);
-        state.prune();
-        state.clients.output(offset, data);
+        // a clipboard write printed is kept for a client that falls behind on it, as the program's are
+        state.advance(data);
         if kitty {
             // the owner's terminal answers the printed Kitty commands too: a barrier takes those answers, dropped
             state.barrier(true);
@@ -1240,6 +1242,7 @@ fn assemble(parts: Parts, timer: Arc<Condvar>, outlet: Arc<Outlet>) -> Arc<Core>
                 frozen: parts.frozen,
                 ..Hold::default()
             },
+            recovery: Recovery::default(),
         }),
         changed: Condvar::new(),
         timer,
@@ -1270,12 +1273,22 @@ fn last_snapshots(state: &mut State) {
         Ok(data) => {
             let (offset, size) = (state.offset, state.size);
             for id in behind {
-                state.clients.snapshot(id, offset, size, data.clone());
+                let mut data = data.clone();
+                recover(state, id, &mut data);
+                state.clients.snapshot(id, offset, size, data);
             }
         }
         Err(err) => {
             tracing::warn!(%err, "a live session's clients that fell behind end without its last snapshot");
         }
+    }
+}
+
+/// Put into the resync or last `snapshot` of the client `id` the clipboard writes it missed since its copy of the
+/// stream stopped ([`super::recovery`]), right after the snapshot's reset.
+fn recover(state: &State, id: ClientId, snapshot: &mut Vec<u8>) {
+    if let Some(missed_since) = state.clients.missed_since(id) {
+        snapshot::insert_after_reset(snapshot, &state.recovery.since(missed_since));
     }
 }
 

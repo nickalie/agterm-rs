@@ -447,3 +447,137 @@ fn a_session_ending_while_a_resync_waits_for_a_cut_gives_the_last_snapshot() -> 
     assert_last_snapshot(&pane, &mut slow)?;
     Ok(())
 }
+
+// -- the clipboard writes a client that fell behind gets back
+
+/// The OSC 52 write of `text` to the clipboard `name` (`c`, `s` or `p`), as `ngtermctl clipboard set` prints one.
+fn clipboard_write(name: char, text: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    format!(
+        "\x1b]52;{name};{}\x07",
+        base64::engine::general_purpose::STANDARD.encode(text)
+    )
+    .into_bytes()
+}
+
+/// The bytes the snapshot `data` carries between its reset and its own state: what the client got back.
+fn recovered(data: &[u8]) -> TestResult<Vec<u8>> {
+    let after = data
+        .strip_prefix(RESYNC_RESET)
+        .ok_or("the snapshot does not start with its reset")?;
+    let mut recovered = Vec::new();
+    let mut rest = after;
+    while let Some(write) = rest.strip_prefix(b"\x1b]52;") {
+        let end = write.iter().position(|byte| *byte == 0x07).ok_or("an unended write")?;
+        recovered.extend_from_slice(&rest[..=(5 + end)]);
+        rest = &write[end + 1..];
+    }
+    Ok(recovered)
+}
+
+/// The last snapshot the client received.
+fn last_snapshot(client: &Client) -> TestResult<Vec<u8>> {
+    client
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            ClientEvent::Snapshot { data, .. } => Some(data.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| format!("no snapshot: {:?}", client.events).into())
+}
+
+#[test]
+fn a_resync_gives_a_client_each_clipboards_latest_write_it_missed() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, mut slow, mut watcher) = slow_session("clipboard", &dir, ResyncBudget::default())?;
+    // printed while it read nothing yet, then overwritten while it was behind: only the latest is its to get
+    pane.print(&clipboard_write('c', "first"))?;
+    flood_past(&pane, &mut watcher, 1..=2)?;
+    pane.print(&clipboard_write('c', "latest"))?;
+    pane.print(&clipboard_write('p', "primary"))?;
+    flood_past(&pane, &mut watcher, 3..=3)?;
+    slow.drain();
+    pane.resync(slow.id())?;
+    slow.receive(PATIENCE);
+    let mut expected = clipboard_write('c', "latest");
+    expected.extend(clipboard_write('p', "primary"));
+    assert_eq!(
+        String::from_utf8_lossy(&recovered(&last_snapshot(&slow)?)?),
+        String::from_utf8_lossy(&expected),
+        "each clipboard's latest, in the order they were written"
+    );
+    // the client that kept up was sent each write once, as printed, and a later attach's snapshot carries none
+    let sent = String::from_utf8_lossy(&watcher.output).into_owned();
+    for text in ["first", "latest", "primary"] {
+        let write = String::from_utf8(clipboard_write(if text == "primary" { 'p' } else { 'c' }, text))?;
+        assert_eq!(sent.matches(&write).count(), 1, "{write:?} in {sent:?}");
+    }
+    let mut later = Client::attach(&pane)?;
+    later.receive(PATIENCE);
+    let fresh = last_snapshot(&later)?;
+    assert!(!fresh.starts_with(RESYNC_RESET) && !fresh.windows(5).any(|window| window == b"\x1b]52;"));
+    // the resynced client reads on from its snapshot
+    type_line(&pane, &tagged("after"))?;
+    slow.expect("got:after");
+    quit(&pane)?;
+    for client in [&mut slow, &mut watcher, &mut later] {
+        client.finish();
+    }
+    Ok(())
+}
+
+#[test]
+fn a_resync_snapshot_dropped_unsent_leaves_the_missed_writes_to_the_next() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, mut slow, mut watcher) = slow_session("redrop", &dir, ResyncBudget::default())?;
+    flood_past(&pane, &mut watcher, 1..=2)?;
+    pane.print(&clipboard_write('c', "missed"))?;
+    pane.resync(slow.id())?;
+    // the resync's snapshot is dropped unsent with the flood after it
+    flood_past(&pane, &mut watcher, 3..=4)?;
+    slow.drain();
+    pane.resync(slow.id())?;
+    slow.receive(PATIENCE);
+    assert_eq!(recovered(&last_snapshot(&slow)?)?, clipboard_write('c', "missed"));
+    quit(&pane)?;
+    slow.finish();
+    watcher.finish();
+    Ok(())
+}
+
+#[test]
+fn a_client_behind_when_the_session_ends_gets_the_writes_it_missed_in_its_last_snapshot() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, mut slow, mut watcher) = slow_session("lastclip", &dir, ResyncBudget::default())?;
+    flood_past(&pane, &mut watcher, 1..=2)?;
+    pane.print(&clipboard_write('s', "selected"))?;
+    quit(&pane)?;
+    watcher.finish();
+    slow.finish();
+    assert_last_snapshot(&pane, &mut slow)?;
+    assert_eq!(recovered(&last_snapshot(&slow)?)?, clipboard_write('s', "selected"));
+    Ok(())
+}
+
+/// The program's own clipboard writes are kept as printed ones are (a Unix program: Windows' pseudoconsole keeps OSC
+/// 52 to itself).
+#[cfg(unix)]
+#[test]
+fn a_programs_own_clipboard_write_is_given_back_too() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, mut slow, mut watcher) = slow_session("programclip", &dir, ResyncBudget::default())?;
+    flood_past(&pane, &mut watcher, 1..=2)?;
+    // "bW9pbg==" is "moin"; then a line the watcher waits for (the shell's `read` takes a doubled backslash for one)
+    type_line(&pane, "printf '\\\\033]52;c;bW9pbg==\\\\007'; echo written\"\"-now")?;
+    watcher.expect("written-now");
+    slow.drain();
+    pane.resync(slow.id())?;
+    slow.receive(PATIENCE);
+    assert_eq!(recovered(&last_snapshot(&slow)?)?, clipboard_write('c', "moin"));
+    quit(&pane)?;
+    slow.finish();
+    watcher.finish();
+    Ok(())
+}

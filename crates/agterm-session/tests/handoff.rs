@@ -469,6 +469,38 @@ fn a_client_of_another_build_hands_the_server_over_and_the_staged_binary_can_be_
 }
 
 #[test]
+fn an_update_hands_a_running_server_of_another_build_over_and_starts_none() -> TestResult {
+    let namespace = Namespace::new()?;
+    let staged = tempfile::tempdir()?;
+    let first = stage(staged.path(), "build-a")?;
+    let update = agterm_session::client::Client::new(namespace.endpoint.directory());
+    // no server: nothing to hand over, and none is started
+    assert_eq!(update.update(&StartOptions::new(&first))?, None);
+    assert!(connect_existing(&namespace.endpoint, &hello(Role::Api), PATIENCE)?.is_none());
+    let _created = Client::attach(&namespace, &StartOptions::new(&first), "updated", Some(shell()))?;
+    let (sessions, old) = namespace.sessions()?;
+    // the server's own build: nothing either
+    assert_eq!(update.update(&StartOptions::new(&first))?, None);
+    // an unstaged executable expects no build: no handoff asked
+    let mut unstaged = StartOptions::new(EXE);
+    unstaged.build = None;
+    assert_eq!(update.update(&unstaged)?, None);
+    // the app launching a new build hands the sessions over to it
+    let second = stage(staged.path(), "build-b")?;
+    assert_eq!(
+        update.update(&StartOptions::new(&second))?,
+        Some(HandoffAttempt::Committed {
+            from: "build-a".to_owned()
+        })
+    );
+    let (now, pid) = namespace.sessions()?;
+    assert_eq!(now, sessions);
+    assert_ne!(pid, old);
+    assert_eq!(update.update(&StartOptions::new(&second))?, None, "and once only");
+    Ok(())
+}
+
+#[test]
 fn continuous_output_across_a_handoff_loses_no_byte() -> TestResult {
     const COUNT: u32 = 300;
     let namespace = Namespace::new()?;

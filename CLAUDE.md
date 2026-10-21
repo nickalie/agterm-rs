@@ -24,15 +24,15 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 |---|---|---|
 | `agterm-proto` | wire types: two-level `Command` (group → command, strum wire names), request/response, read-back results, events, `tree` projection | any |
 | `agterm-host` | the seams a frontend implements: `MainLoop`, `Surface`, `SessionHost`, `ProcessLauncher`, `ProcessTable`; in-memory fakes behind feature `fakes` | any |
-| `agterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, zmx/restore logic | any |
+| `agterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, live-session/restore logic | any |
 | `agterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | Linux, macOS |
 | `agterm-ctl` → `ngtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | Linux |
 | `agterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | any |
 | `agterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter with its extras, search, Kitty graphics, stream continuation, snapshot codec, clipboard-read scan | any |
 | `agterm-pty` | the PTY layer of plain and live panes: a child on a PTY (openpty, ConPTY; its process group or kill-on-close job), herdr's PTY actor (poll and wake pipe on Unix, reader and writer threads on Windows) with the handoff's quiesce, duplicate, rollback and release, over the vendored portable-pty | any |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed from a PTY by an IO thread per pane, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | any |
-| `agterm-session` | the live-session server on herdr's architecture: wire, endpoint, lifecycle and detached spawn per OS; the pane runtime (a session's program on a PTY, its terminal state, the fan-out to attached clients); the foreground job and its sweeper and the process table, on every OS; the live-launch inputs (session host executable, build id, login shell, resources, namespace); the `/proc` stat and cmdline parsers | any |
-| `agterm-zmx` | the `SessionHost` over the patched zmx: client, inventory, reaps, over `agterm-session`'s launch inputs | Linux, macOS |
+| `agterm-session` | the live-session server on herdr's architecture, the app's session host: wire, endpoint, lifecycle and detached spawn per OS; the pane runtime (a session's program on a PTY, its terminal state, the fan-out to attached clients); the update handoff; the client library and the `SessionHost` over it; the binary's server and its attach-contract CLI; the foreground job and its sweeper and the process table, on every OS; the live-launch inputs (session host executable, build id, login shell, resources, namespace); the `/proc` stat and cmdline parsers | any |
+| `agterm-zmx` | the `SessionHost` over the patched zmx, which nothing runs any more (the app's live sessions are `agterm-session`'s); it goes with zmx | Linux, macOS |
 | `agterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `ProcessTable` (`agterm-session`'s, re-exported), logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process | Linux |
 | `agterm-wpe-sys`, `agterm-wpe-platform-sys`, `agterm-wpe-javascriptcore-sys` | checked-in gir output over WPE WebKit, one crate per GObject namespace (`scripts/gen-wpe-bindings.sh`) | Linux |
 | `agterm-wpe` | WPE WebKit host for the HTML overlays: offscreen pages on an engine thread of their own (or in a worker process), frames out as dmabufs or SHM | Linux |
@@ -120,9 +120,10 @@ Every dev instance, probe or `ngtermctl` call stays off it:
 - Strip `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-gpui-dev.sh` and the harness do).
 - Give every `ngtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
   the CLI resolves the live instance's socket.
-- Use a private state dir, so the instance's live-session namespace is private too. Live sessions outlive the app by
-  design: reap only the session processes of that instance's namespace, never by name (`pkill zmx`), and never run
-  `zmx` outside that namespace.
+- Use a private state dir, so the instance's live-session namespace, and with it the one session server serving it,
+  is private too. Live sessions outlive the app by design: reap only through that namespace's own server, or the
+  processes the namespace names (its server's command line, its sessions' attach-contract environment), never by name
+  (`pkill agterm-session`), and never run `agterm-session` against any other namespace than that instance's.
 - Run the GUI headless (the suite's private compositor and dbus, or `xvfb-run` with a private bus for `cargo test`),
   never on the user's desktop: nothing a run starts draws on the user's display or joins its compositor or bus. GPUI
   renders through Vulkan, so a headless app instance (the suite's, the window tests') renders on Mesa's lavapipe alone

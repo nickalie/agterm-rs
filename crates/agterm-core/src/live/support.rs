@@ -1,4 +1,5 @@
-//! Whether and how a pane is wrapped in a zmx daemon (upstream's `ZmxSupport.swift`): the host's eligibility walk,
+//! Whether and how a pane is wrapped in a live session of the session server, `agterm-session` (upstream's zmx daemon,
+//! `ZmxSupport.swift`): the host's eligibility walk,
 //! shared with the launch probe ([`crate::restore::mode::LiveProbe`]) so the rejection order lives once, the wrap
 //! configuration, the launch disposition and the attach command a wrapped pane's surface runs. Upstream wraps a zsh
 //! login shell only; this build also wraps bash and fish ([`super::shell_integration`], capability `live-any-shell`).
@@ -11,16 +12,20 @@ use uuid::Uuid;
 use super::lead::{CLAIM_VARIABLE, LeadAttachment, NONCE_VARIABLE};
 use super::replay::FinalShell;
 use super::shell_integration::{self, Inherited, LoginShell};
-use super::{daemon_name, replay, socket_directory};
+use super::{
+    DIRECTORY_VARIABLE, NO_DETACH_KEY_VARIABLE, SESSION_PREFIX_VARIABLE, SESSION_VARIABLE, daemon_name, replay,
+    socket_directory,
+};
 use crate::command_restore::{shell_quoted_line, should_restore};
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::restore::mode::LiveRejection;
 
-/// What the host offers a wrap: the zmx executable, the login shell and its bundled integration, all checked.
+/// What the host offers a wrap: the `agterm-session` executable, the login shell and its bundled integration, all
+/// checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Eligible {
-    /// The zmx executable, standardized.
+    /// The `agterm-session` executable, standardized.
     pub executable: PathBuf,
     /// The password-database login shell.
     pub shell: String,
@@ -31,9 +36,9 @@ pub struct Eligible {
     pub resources: PathBuf,
 }
 
-/// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative zmx path,
-/// a zmx that is not an executable file, a login shell other than zsh, bash, fish or PowerShell (`$SHELL` cannot
-/// override the password database), a resources directory without that shell's integration: Ghostty's
+/// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative executable
+/// path, an executable path that is not an executable file, a login shell other than zsh, bash, fish or PowerShell
+/// (`$SHELL` cannot override the password database), a resources directory without that shell's integration: Ghostty's
 /// `resources_dir`, or for PowerShell, which Ghostty does not integrate, ngterm's own `own_resources_dir`.
 ///
 /// # Errors
@@ -126,7 +131,7 @@ pub struct Inputs {
     pub inherited: Inherited,
     /// A supervising session host (macOS's `agterm-session-host`); Linux has none.
     pub session_host_executable: Option<PathBuf>,
-    /// `None` leaves the attach unmanaged, as a zmx without explicit leadership expects.
+    /// `None` leaves the attach unmanaged: the client neither claims nor reports a lead.
     pub lead: Option<LeadAttachment>,
 }
 
@@ -144,7 +149,7 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    /// `zmx attach <daemon>`.
+    /// `agterm-session attach <daemon>`.
     #[must_use]
     pub fn attach_arguments(&self) -> Vec<String> {
         vec![self.executable.clone(), "attach".to_owned(), self.daemon_name.clone()]
@@ -175,10 +180,10 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
     let mut set = |key: &str, value: &str| environment.insert(key.to_owned(), value.to_owned());
     set("AGTERM_PANE_ID", &pane_id);
     set("SHELL", &eligible.shell);
-    set("ZMX_DIR", &socket_directory);
-    set("ZMX_SESSION", "");
-    set("ZMX_SESSION_PREFIX", "");
-    set("ZMX_NO_DETACH_KEY", "1");
+    set(DIRECTORY_VARIABLE, &socket_directory);
+    set(SESSION_VARIABLE, "");
+    set(SESSION_PREFIX_VARIABLE, "");
+    set(NO_DETACH_KEY_VARIABLE, "1");
     shell_integration::inject(eligible.kind, &eligible.resources, &inputs.inherited, &mut environment);
     // a stale value inherited from the app's own environment would opt the client in under a nonce no pane expects
     environment.remove(NONCE_VARIABLE);
@@ -247,7 +252,7 @@ const SETTLE_PREFIX: &str = "s=$(stty size 2>/dev/null); i=0; \
 /// adaptation made for the GTK build: libghostty spawned a surface's program at its 800×600 px initial size and
 /// applied the widget's size a moment later. A GTK pane was often narrower than that, so a daemon the attach created
 /// would start its shell at the initial width and reflow the first prompt row (zsh's `PROMPT_SP` spaces fill it) into
-/// soft-wrapped rows on the shrink, which every `zmx screen` read then joins to the next line. Upstream's macOS views
+/// soft-wrapped rows on the shrink, which every screen read then joins to the next line. Upstream's macOS views
 /// only ever grow from that size, which reflows nothing. An attach to a daemon that exists waits the same, harmlessly.
 #[must_use]
 pub fn settled(line: &str) -> String {
@@ -360,7 +365,7 @@ mod tests {
 
     fn replay_configuration(host: Option<&str>) -> Configuration {
         Configuration {
-            executable: "/bin/zmx".to_owned(),
+            executable: "/bin/agterm-session".to_owned(),
             session_host_executable: host.map(str::to_owned),
             environment: BTreeMap::from([
                 ("SHELL".to_owned(), "/bin/zsh".to_owned()),
@@ -368,7 +373,7 @@ mod tests {
                 ("GHOSTTY_ZSH_ZDOTDIR".to_owned(), "/user/zsh".to_owned()),
             ]),
             daemon_name: "agterm-pane".to_owned(),
-            socket_directory: "/tmp/zmx".to_owned(),
+            socket_directory: "/tmp/ngterm-live-x".to_owned(),
             pane_id: "pane".to_owned(),
         }
     }
@@ -381,8 +386,8 @@ mod tests {
         inputs.base_environment = BTreeMap::from([
             ("AGTERM_ENABLED".to_owned(), "1".to_owned()),
             ("AGTERM_PANE_ID".to_owned(), "old".to_owned()),
-            ("ZMX_SESSION".to_owned(), "parent-session".to_owned()),
-            ("ZMX_SESSION_PREFIX".to_owned(), "parent.".to_owned()),
+            ("AGTERM_LIVE_SESSION".to_owned(), "parent-session".to_owned()),
+            ("AGTERM_LIVE_SESSION_PREFIX".to_owned(), "parent.".to_owned()),
         ]);
         inputs.inherited.zdotdir = Some("/home/test/.config/zsh".to_owned());
         let configuration = configuration(&inputs).unwrap();
@@ -407,9 +412,12 @@ mod tests {
         let integration = resources.path().join("shell-integration/zsh");
         assert_eq!(env("ZDOTDIR").map(Path::new), Some(integration.as_path()));
         assert_eq!(env("GHOSTTY_ZSH_ZDOTDIR"), Some("/home/test/.config/zsh"));
-        assert_eq!(env("ZMX_DIR"), Some(configuration.socket_directory.as_str()));
-        assert_eq!(env("ZMX_NO_DETACH_KEY"), Some("1"));
-        assert_eq!((env("ZMX_SESSION"), env("ZMX_SESSION_PREFIX")), (Some(""), Some("")));
+        assert_eq!(env("AGTERM_LIVE_DIR"), Some(configuration.socket_directory.as_str()));
+        assert_eq!(env("AGTERM_LIVE_NO_DETACH_KEY"), Some("1"));
+        assert_eq!(
+            (env("AGTERM_LIVE_SESSION"), env("AGTERM_LIVE_SESSION_PREFIX")),
+            (Some(""), Some(""))
+        );
         assert_eq!(configuration.session_host_executable, None);
     }
 
@@ -419,26 +427,26 @@ mod tests {
         let environment = |lead: Option<LeadAttachment>| {
             let mut inputs = inputs(resources.path());
             inputs.base_environment = BTreeMap::from([
-                ("ZMX_MANAGED".to_owned(), "stale".to_owned()),
-                ("ZMX_MANAGED_CLAIM".to_owned(), "1".to_owned()),
+                ("AGTERM_LIVE_MANAGED".to_owned(), "stale".to_owned()),
+                ("AGTERM_LIVE_MANAGED_CLAIM".to_owned(), "1".to_owned()),
             ]);
             inputs.lead = lead;
             configuration(&inputs).unwrap().environment
         };
         let unmanaged = environment(None);
-        assert!(!unmanaged.contains_key("ZMX_MANAGED") && !unmanaged.contains_key("ZMX_MANAGED_CLAIM"));
+        assert!(!unmanaged.contains_key("AGTERM_LIVE_MANAGED") && !unmanaged.contains_key("AGTERM_LIVE_MANAGED_CLAIM"));
         let recovering = environment(Some(LeadAttachment {
             nonce: "n1".to_owned(),
             claim: false,
         }));
-        assert_eq!(recovering.get("ZMX_MANAGED").map(String::as_str), Some("n1"));
-        assert!(!recovering.contains_key("ZMX_MANAGED_CLAIM"));
+        assert_eq!(recovering.get("AGTERM_LIVE_MANAGED").map(String::as_str), Some("n1"));
+        assert!(!recovering.contains_key("AGTERM_LIVE_MANAGED_CLAIM"));
         let claiming = environment(Some(LeadAttachment {
             nonce: "n2".to_owned(),
             claim: true,
         }));
-        assert_eq!(claiming.get("ZMX_MANAGED").map(String::as_str), Some("n2"));
-        assert_eq!(claiming.get("ZMX_MANAGED_CLAIM").map(String::as_str), Some("1"));
+        assert_eq!(claiming.get("AGTERM_LIVE_MANAGED").map(String::as_str), Some("n2"));
+        assert_eq!(claiming.get("AGTERM_LIVE_MANAGED_CLAIM").map(String::as_str), Some("1"));
     }
 
     #[test]
@@ -489,10 +497,10 @@ mod tests {
         let with_loader = resources(true);
         let without_loader = resources(false);
         let mut relative = inputs(with_loader.path());
-        relative.executable = PathBuf::from("zmx");
+        relative.executable = PathBuf::from("agterm-session");
         assert_eq!(configuration(&relative), Err(LiveRejection::ExecutablePathNotAbsolute));
         let mut missing = inputs(with_loader.path());
-        missing.executable = with_loader.path().join("no-such-zmx");
+        missing.executable = with_loader.path().join("no-such-agterm-session");
         assert_eq!(configuration(&missing), Err(LiveRejection::ExecutableUnavailable));
         let mut not_executable = inputs(with_loader.path());
         not_executable.executable = with_loader.path().join("shell-integration/zsh/.zshenv");
@@ -663,7 +671,7 @@ mod tests {
                 "client",
                 "agterm-pane",
                 "--",
-                "/bin/zmx",
+                "/bin/agterm-session",
                 "attach",
                 "agterm-pane",
                 "/bin/zsh",
@@ -755,7 +763,7 @@ mod tests {
         assert_eq!(env("HISTFILE"), Some("/home/u/.bash_history"));
         assert_eq!(env("GHOSTTY_BASH_UNEXPORT_HISTFILE"), Some("1"));
         assert_eq!(env("ZDOTDIR"), None);
-        assert_eq!(env("ZMX_DIR"), Some(configuration.socket_directory.as_str()));
+        assert_eq!(env("AGTERM_LIVE_DIR"), Some(configuration.socket_directory.as_str()));
         // nothing to run: the attach still names bash in POSIX mode, the one way it reads ENV
         let posix_login = format!(
             "{} {}",
@@ -799,7 +807,7 @@ mod tests {
         assert_eq!(env("GHOSTTY_SHELL_INTEGRATION_XDG_DIR"), Some(integration.as_str()));
         assert_eq!(env("XDG_DATA_DIRS"), Some(format!("{integration}:/usr/share").as_str()));
         assert_eq!((env("ENV"), env("ZDOTDIR")), (None, None));
-        // zmx starts fish as a login shell itself
+        // the attach starts fish as a login shell itself
         assert_eq!(
             attach_command(&configuration, None, None, &NO_DENYLIST),
             configuration.command()

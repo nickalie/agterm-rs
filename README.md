@@ -11,9 +11,9 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
   (keymap, hooks, agterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
   `io.github.melonamin.agterm`, `~/.local/share/agterm`, `~/.config/agterm`), so the two run side by side without
   sharing windows, settings, config or Live sessions. To carry the fork's state and config over, quit it and copy both
-  directories to the new ones before the first launch. Live sessions do not carry over: their zmx namespace is derived
-  from the state dir, so end them in the fork first, or they restore here as fresh shells while the fork's daemons
-  keep running. Leave out `~/.config/agterm/agent-status`: run Help ▸ Install Agent Status Hooks… again instead,
+  directories to the new ones before the first launch. Live sessions do not carry over: the fork's are zmx daemons
+  this build does not run, so end them in the fork first, or they restore here as fresh shells while the fork's
+  daemons keep running. Leave out `~/.config/agterm/agent-status`: run Help ▸ Install Agent Status Hooks… again instead,
   which installs into `~/.config/ngterm/agent-status` and moves the rc files, Claude Code, Codex, Pi and OpenCode
   hooks the old install wired over to it.
   One instance runs per application id: the first owns the id's name on the session bus and serves `GApplication`'s
@@ -95,9 +95,9 @@ Run-time dependencies of every `agterm` binary:
 - WPE WebKit, linked under `agterm-gpui`'s default `html` feature (HTML overlays). Without the feature
   (`--no-default-features`) the app refuses every page. On Ubuntu 23.10+ see
   [WebKit sandbox on Ubuntu (AppArmor)](#webkit-sandbox-on-ubuntu-apparmor);
-- for Live sessions, `zmx`, built into its vendored prefix and staged next to the binaries. libghostty-vt is linked
-  statically; the quick terminal's layer-shell panel is GPUI's own Wayland surface, a window where the compositor
-  offers no layer-shell.
+- for Live sessions, `agterm-session`, the live-session server the workspace builds, staged next to the binaries with
+  its build id. libghostty-vt is linked statically; the quick terminal's layer-shell panel is GPUI's own Wayland
+  surface, a window where the compositor offers no layer-shell.
 
 ### WebKit sandbox on Ubuntu (AppArmor)
 
@@ -209,7 +209,7 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   started in it (no `sudo` or setuid program, root's files shown as `nobody`'s), so the app never enters it: the
   engine runs in a worker process under it (`agterm_wpe::worker`: the app's own executable re-run, driven over a
   socket; every `main` that may start an engine calls `agterm_wpe::worker::serve_if_asked` first), and the app, its
-  terminals, their zmx sessions and everything they start keep the user's privileges (`cargo test -p agterm-gpui --test
+  terminals, their live sessions and everything they start keep the user's privileges (`cargo test -p agterm-gpui --test
   privileges`). `agterm-wpe`'s engine tests (`cargo test -p agterm-wpe`) run every case through a worker and again in
   process inside the overlay (`agterm_wpe::launcher::command`). Pick the distribution package whenever you can: with
   it the engine runs in the app's own process.
@@ -242,7 +242,7 @@ Cargo does not notice the provider changing: after installing or removing either
 
 ```sh
 cargo build --workspace --release      # without WPE WebKit: "${WORKSPACE_WITHOUT_WPE[@]}" and "${GPUI_WITHOUT_HTML[@]}"
-scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,ngtermctl,zmx}, share/{ghostty,terminfo,ngterm}
+scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,ngtermctl,agterm-session}, share/{ghostty,terminfo,ngterm}
 scripts/run-gpui-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]   # an isolated dev instance
 ```
 

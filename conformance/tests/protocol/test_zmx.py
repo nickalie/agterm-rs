@@ -5,9 +5,10 @@ Every group command, result key, tree key and error text goes through the instan
 
 The module's shared instance runs without Live, so its daemons are only claimed, never observed: the inventory,
 prune, the hostless `zmx.tree` and every refusal are checked there. The Live tests share one instance launched with
-`restoreMode: live` seeded; a pane in it runs the account's zsh inside a zmx daemon, so a line typed there only
-prints a marker. Each test ends the sessions it opens, which ends their daemons; the harness's stop then finds no
-process left under the instance's `ZMX_DIR`.
+`restoreMode: live` seeded; a pane in it runs the account's zsh inside a live session (a zmx daemon in the references,
+a session of the Rust build's server), so a line typed there only prints a marker. Each test ends the sessions it
+opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
+vocabulary's directory variable, or the session server of the namespace).
 
 `zmx.reset` is refused here without `--force` only: a confirmed reset quits the app and relaunches it outside the
 harness (see the catalog exemption)."""
@@ -413,7 +414,7 @@ def _subscribed(live, sid, mode):
 
 
 def _wait_leads(live, sid):
-    """Until the left pane's zmx has reported its role: before that `session.lead` has no lead to take."""
+    """Until the left pane's attach client has reported its role: before that `session.lead` has no lead to take."""
 
     def leads(tree):
         left = next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left")
@@ -425,7 +426,7 @@ def _wait_leads(live, sid):
 
 def _follows(tree, sid, viewer):
     left = next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left")
-    assert left.get("lead") == "follower", f"lead {left.get('lead')!r}; viewer's zmx: {viewer.output()[-500:]!r}"
+    assert left.get("lead") == "follower", f"lead {left.get('lead')!r}; viewer's client: {viewer.output()[-500:]!r}"
     return True
 
 
@@ -462,7 +463,7 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
     sid = _live_session(live)
     endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
     # Both references hand an overlay to the presenter only while the pane's own client follows, and open it
-    # locally otherwise; a viewer's zmx client claiming the lead makes it follow.
+    # locally otherwise; a viewer's client claiming the lead makes it follow.
     daemon = _entries(live, sid)["left"]["daemon"]
     with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
         live.wait_tree(lambda tree: _follows(tree, sid, viewer))

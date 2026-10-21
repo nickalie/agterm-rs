@@ -1,14 +1,15 @@
 //! The GPUI build keeps the user's privileges while its HTML pages run. A vendored WPE `WebKit` runs only inside an
 //! overlay of `/usr/lib` (`bwrap`: a user namespace with `PR_SET_NO_NEW_PRIVS`), so its engine runs in a worker there
-//! (`agterm_wpe::worker`) and nothing else may: the app itself, a Live pane's zmx daemon, its shell and what the shell
-//! starts keep `NoNewPrivs: 0`, this test's uid and gid maps and user namespace, and see root's files as root's (so
-//! `sudo` and every setuid program work in a pane), while a page loads, and again after the app quit, in a command the
-//! surviving session runs. Under the vendored package the worker is the one process with the overlay's flag and
-//! namespace, which shows the test tells them apart. Nothing runs `sudo`: `/proc` says what it would need.
+//! (`agterm_wpe::worker`) and nothing else may: the app itself, the live sessions' server (`agterm-session`), a Live
+//! pane's shell and what the shell starts keep `NoNewPrivs: 0`, this test's uid and gid maps and user namespace, and
+//! see root's files as root's (so `sudo` and every setuid program work in a pane), while a page loads, and again after
+//! the app quit, in a command the surviving session runs. Under the vendored package the worker is the one process
+//! with the overlay's flag and namespace, which shows the test tells them apart. Nothing runs `sudo`: `/proc` says what it would need.
 //!
-//! Everything runs in a [`support::Sandbox`] (private bus, state, zmx directory and Xvfb, lavapipe); its zmx sessions
-//! are killed through their own zmx directory at the end. Without Xvfb, lavapipe, the vendored zmx and Ghostty's
-//! shell integration, or with a login shell Live sessions do not run in, the test skips (fails under
+//! Everything runs in a [`support::Sandbox`] (private bus, state, live-session namespace and Xvfb, lavapipe); its live
+//! sessions are killed through their own namespace's server at the end. The app runs the cargo-built `agterm-session`
+//! beside it, as the staged layout has it; without one the test fails. Without Xvfb, lavapipe and Ghostty's shell
+//! integration, or with a login shell Live sessions do not run in, it skips (fails under
 //! `AGTERM_REQUIRE_DISPLAY_TESTS`).
 
 #[macro_use]
@@ -20,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use agterm_host::SessionHost as _;
 use serde_json::{Value, json};
 use support::{DEADLINE, Sandbox, TestResult, have, lavapipe_icd};
 
@@ -132,7 +134,7 @@ fn eventually<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> TestResult
     }
 }
 
-/// A script of the repository, run for its output (`scripts/build-zmx.sh --print-prefix`, say).
+/// A script of the repository, run for its output (`ghostty_vt_prefix`, say).
 fn script(args: &[&str]) -> Option<String> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new("bash").args(args).current_dir(repo).output().ok()?;
@@ -142,13 +144,25 @@ fn script(args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// The vendored zmx and Ghostty's resources (with its shell integration), as `scripts/stage.sh` stages them.
-fn live_inputs() -> Option<(PathBuf, PathBuf)> {
-    script(&["scripts/build-zmx.sh", "--verify"])?;
-    let zmx = PathBuf::from(script(&["scripts/build-zmx.sh", "--print-prefix"])?).join("bin/zmx");
+/// Ghostty's resources (with its shell integration), as `scripts/stage.sh` stages them.
+fn ghostty_resources() -> Option<PathBuf> {
     let ghostty = script(&["-c", "source scripts/lib/native.sh && ghostty_vt_prefix"])?;
     let resources = PathBuf::from(ghostty).join("share/ghostty");
-    (zmx.is_file() && resources.join("shell-integration").is_dir()).then_some((zmx, resources))
+    resources.join("shell-integration").is_dir().then_some(resources)
+}
+
+/// The cargo-built `agterm-session` beside the app's binary (`target/<profile>/`), where the app looks for it as in
+/// the staged layout's `bin/`; `cargo test` builds it with the workspace, or with `-p agterm-session`.
+fn session_executable() -> TestResult<PathBuf> {
+    let executable = Path::new(support::GPUI).with_file_name("agterm-session");
+    if !executable.is_file() {
+        return Err(format!(
+            "no cargo-built {} (build it with `cargo build -p agterm-session`, or test with the workspace)",
+            executable.display()
+        )
+        .into());
+    }
+    Ok(executable)
 }
 
 /// The pids whose parent is `parent`.
@@ -179,59 +193,59 @@ fn parent_of(pid: u32) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// zmx with the sandbox's own zmx directory (never the user's).
-fn zmx(zmx: &Path, dir: &str, args: &[&str]) -> TestResult<String> {
-    let output = Command::new(zmx)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("ZMX_DIR", dir)
-        .output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+/// The session host of the sandbox's own namespace (never the user's): its server alone is asked.
+fn session_host(executable: &Path, dir: &str) -> agterm_session::host::ServerHost {
+    agterm_session::host::ServerHost::new(executable, dir)
 }
 
-/// Kills every zmx session of the sandbox's zmx directory, however the test ended.
+/// Kills every live session of the sandbox's namespace through its own server, however the test ended; the server
+/// then stops by itself.
 struct Sessions {
-    zmx: PathBuf,
+    executable: PathBuf,
     dir: String,
+}
+
+impl Sessions {
+    /// The names of the namespace's sessions.
+    fn names(&self) -> TestResult<Vec<String>> {
+        Ok(session_host(&self.executable, &self.dir)
+            .list()?
+            .into_iter()
+            .map(|record| record.name)
+            .collect())
+    }
 }
 
 impl Drop for Sessions {
     fn drop(&mut self) {
-        let Ok(listing) = zmx(&self.zmx, &self.dir, &["list", "--short"]) else {
-            return;
-        };
-        for name in listing.split_whitespace() {
-            let _ = zmx(&self.zmx, &self.dir, &["kill", name, "--force"]);
+        if let Ok(names) = self.names() {
+            session_host(&self.executable, &self.dir).kill_batch(&names);
         }
-        // the sandbox's own: named after its state dir, which goes with it
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
-/// A primary on a private Xvfb in Live mode, its zmx sessions killed when the returned guard drops.
-fn start_live(lavapipe: &Path, zmx_bin: &Path, resources: &Path) -> TestResult<(Sandbox, usize, Sessions)> {
+/// A primary on a private Xvfb in Live mode, its live sessions killed when the returned guard drops.
+fn start_live(lavapipe: &Path, executable: &Path, resources: &Path) -> TestResult<(Sandbox, usize, Sessions)> {
     let mut sandbox = Sandbox::new()?;
     sandbox.start_xvfb()?;
     sandbox.use_software_rendering(lavapipe);
-    sandbox.set_env("AGTERM_ZMX_PATH", zmx_bin.to_string_lossy());
     sandbox.set_env("GHOSTTY_RESOURCES_DIR", resources.to_string_lossy());
     std::fs::write(sandbox.path("state/settings.json"), r#"{"restoreMode":"live"}"#)?;
     let sessions = Sessions {
-        zmx: zmx_bin.to_owned(),
+        executable: executable.to_owned(),
         dir: agterm_core::live::socket_directory(&sandbox.path("state")),
     };
     let primary = sandbox.start_gpui_primary("primary.log")?;
     Ok((sandbox, primary, sessions))
 }
 
-/// A new session, once its pane runs in zmx; its id.
+/// A new session, once its pane runs in a live session; its id.
 fn live_session(sandbox: &Sandbox) -> TestResult<String> {
     let sid = call(sandbox, "session.new", None, json!({}))?["id"]
         .as_str()
         .ok_or("no session id")?
         .to_owned();
-    eventually("the session in zmx", || {
+    eventually("the session live", || {
         call(sandbox, "tree", None, json!({}))
             .ok()
             .filter(|tree| find(tree, &sid).is_some_and(|session| session["backedByLive"] == json!(true)))
@@ -270,7 +284,7 @@ fn report(path: &Path, what: &str) -> TestResult<(Identity, String)> {
     Identity::reported(&text)
 }
 
-/// The pid of the shell zmx runs for session `sid`.
+/// The pid of the shell the live session of session `sid` runs.
 fn shell_of(sandbox: &Sandbox, sid: &str) -> TestResult<u32> {
     let entries = call(sandbox, "live.list", None, json!({}))?;
     entries["live"]["entries"]
@@ -316,9 +330,10 @@ fn panes_and_their_sessions_keep_the_users_privileges_while_pages_run() -> TestR
     let Some(lavapipe) = lavapipe_icd() else {
         skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
     };
-    let Some((zmx_bin, resources)) = live_inputs() else {
-        skip!("no vendored zmx (scripts/build-zmx.sh) or Ghostty shell integration");
+    let Some(resources) = ghostty_resources() else {
+        skip!("no Ghostty shell integration (scripts/build-ghostty-vt.sh)");
     };
+    let executable = session_executable()?;
     let outside = Identity::of("self")?;
     assert_eq!(
         outside.no_new_privs, "0",
@@ -329,13 +344,13 @@ fn panes_and_their_sessions_keep_the_users_privileges_while_pages_run() -> TestR
         agterm_wpe::launcher::Provider::Vendored { .. }
     );
     println!("WPE WebKit: {}", if vendored { "vendored" } else { "the system's" });
-    let (mut sandbox, primary, sessions) = start_live(&lavapipe, &zmx_bin, &resources)?;
+    let (mut sandbox, primary, sessions) = start_live(&lavapipe, &executable, &resources)?;
     let app = sandbox.child(primary).id();
     let sid = live_session(&sandbox)?;
     // a page loads meanwhile
     load_page(&sandbox, &sid)?;
 
-    // the pane's command, the shell, its zmx daemon and the app: all as this test
+    // the pane's command, the shell, the session server and the app: all as this test
     let before = sandbox.path("home/before.txt");
     call(
         &sandbox,
@@ -347,29 +362,29 @@ fn panes_and_their_sessions_keep_the_users_privileges_while_pages_run() -> TestR
     assert_eq!(command, outside, "a pane's command runs as the user's login does");
     assert_eq!(root_owner, "0", "root's files are root's in a pane");
     let shell = shell_of(&sandbox, &sid)?;
-    let daemon = parent_of(shell).ok_or("the shell has no parent")?;
+    let server = parent_of(shell).ok_or("the shell has no parent")?;
     for (what, pid) in [
         ("the app", app),
-        ("the zmx daemon", daemon),
+        ("the session server", server),
         ("the pane's shell", shell),
     ] {
         assert_eq!(Identity::of(&pid.to_string())?, outside, "{what} ({pid})");
     }
     check_overlaid(app, &outside, vendored)?;
 
-    // the quit: SIGTERM, status 0, the quit save written; the daemon and its shell live on as the user's
+    // the quit: SIGTERM, status 0, the quit save written; the server and the shell live on as the user's
     sandbox.terminate(primary)?;
     let (status, _) = sandbox.wait_exit(primary, Duration::from_secs(10))?;
     assert_eq!(status.code(), Some(0), "{}", sandbox.log("primary.log"));
     assert!(sandbox.path("state/windows.json").is_file(), "the quit save ran");
-    assert_eq!(Identity::of(&daemon.to_string())?, outside, "the surviving daemon");
+    assert_eq!(Identity::of(&server.to_string())?, outside, "the surviving server");
     let after = sandbox.path("home/after.txt");
-    let name = zmx(&zmx_bin, &sessions.dir, &["list", "--short"])?
-        .split_whitespace()
+    let name = sessions
+        .names()?
+        .into_iter()
         .next()
-        .ok_or("no surviving zmx session")?
-        .to_owned();
-    zmx(&zmx_bin, &sessions.dir, &["send", &name, &report_command(&after)])?;
+        .ok_or("no surviving live session")?;
+    session_host(&executable, &sessions.dir).type_input(&name, report_command(&after).as_bytes())?;
     let (survivor, root_owner) = report(&after, "the surviving session's report")?;
     assert_eq!(survivor, outside, "a command the surviving session runs after the quit");
     assert_eq!(root_owner, "0");

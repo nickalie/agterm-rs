@@ -38,8 +38,8 @@ pub struct RemoteBinding {
 }
 
 impl RemoteBinding {
-    /// `daemons_by_local` is what an attach knows: the daemon each local pane runs `zmx attach` against. A daemon name
-    /// encodes the origin's pane identity, so the mapping is decoded once, here.
+    /// `daemons_by_local` is what an attach knows: the daemon each local pane runs `agterm-session attach` against. A
+    /// daemon name encodes the origin's pane identity, so the mapping is decoded once, here.
     #[must_use]
     pub fn new(
         remote_session_id: impl Into<String>,

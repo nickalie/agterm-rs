@@ -1,16 +1,16 @@
 //! Live sessions, the host-free half (upstream's `ZmxSupport.swift`, `ZmxReplayScript.swift`,
-//! `ZmxLifecycle.swift`, `ZmxInventory.swift`, `LiveReset.swift`, `ZmxBuildRecord.swift`, `ZmxLead.swift`). Running the
-//! session host binary (zmx today) and collecting the host's launch inputs live in the `agterm-zmx` crate, which
-//! implements [`agterm_host::SessionHost`] over these.
+//! `ZmxLifecycle.swift`, `ZmxInventory.swift`, `LiveReset.swift`, `ZmxBuildRecord.swift`, `ZmxLead.swift`). The session
+//! server that hosts the sessions (`agterm-session`, in zmx's place) and the host's launch inputs live in the
+//! `agterm-session` crate, which implements [`agterm_host::SessionHost`] over these.
 //!
-//! - this module: a pane's daemon name and back, and the instance's socket directory;
+//! - this module: a pane's daemon name and back, the instance's socket directory and the attach contract's variables;
 //! - [`support`]: the wrap configuration of a pane, its rejections, the launch disposition and the attach command;
 //! - [`replay`]: the shell script a wrapped pane runs a captured or creation command with;
 //! - [`shell_integration`]: the shell integration a wrapped zsh, bash, fish or PowerShell login shell starts with;
 //! - [`lifecycle`]: the `zmx list` parser, the leader map, the launch reap policy and the refresh gate;
 //! - [`inventory`]: pane claims joined against the observed daemons, and the prune policy;
 //! - [`reset`]: Reset Live Sessions: selection, the one-shot marker, next-launch narrowing and the outcome;
-//! - [`build_record`]: when this state directory first launched the bundled zmx build;
+//! - [`build_record`]: when this state directory first launched the bundled session server build;
 //! - [`lead`]: which client of a daemon leads its grid, from the role reports in terminal titles;
 //! - [`screen`]: the `zmx screen` reply;
 //! - [`sweep`]: the foreground job a killed daemon's shell leaves behind.
@@ -34,6 +34,17 @@ use crate::paths::APP_DIR_NAME;
 
 /// The prefix of every daemon name this app emits.
 pub const NAME_PREFIX: &str = "agterm-";
+
+/// The attach contract's variable naming the namespace directory every `agterm-session` command reaches, which the
+/// server also sets in each session's programs (`agterm_session::cli`).
+pub const DIRECTORY_VARIABLE: &str = "AGTERM_LIVE_DIR";
+/// The variable the server sets in each session's programs to the session's name; an attach run where it is set is
+/// refused, so an attach line clears it (empty means unset).
+pub const SESSION_VARIABLE: &str = "AGTERM_LIVE_SESSION";
+/// The prefix the `agterm-session` commands put before every session name they are given.
+pub const SESSION_PREFIX_VARIABLE: &str = "AGTERM_LIVE_SESSION_PREFIX";
+/// Set, the attach's detach key (`Ctrl+\`) goes to the program.
+pub const NO_DETACH_KEY_VARIABLE: &str = "AGTERM_LIVE_NO_DETACH_KEY";
 
 /// The daemon of pane `pane_identity`: the prefix and the identity's 32 lower-case hex digits.
 #[must_use]
@@ -84,11 +95,12 @@ pub fn state_dir_hash(state_dir: &Path) -> String {
     fnv1a64(resolved_state_dir(state_dir).as_os_str().as_encoded_bytes())
 }
 
-/// The Unix socket directory of the state directory hashed `hash` ([`state_dir_hash`]): `/tmp/ngterm-zmx-<hash>`,
-/// upstream's shape under this build's name (upstream's prefix is `agterm`), so the harness derives it the same way.
+/// The Unix socket directory of the state directory hashed `hash` ([`state_dir_hash`]): `/tmp/ngterm-live-<hash>`,
+/// upstream's shape (`/tmp/agterm-zmx-<hash>`, `ZmxSupport.socketDirectory`) under this build's name and the session
+/// server's group, so the harness derives it the same way.
 #[must_use]
 pub fn unix_socket_directory(hash: &str) -> String {
-    format!("/tmp/{APP_DIR_NAME}-zmx-{hash}")
+    format!("/tmp/{APP_DIR_NAME}-live-{hash}")
 }
 
 /// The Windows namespace directory of the state directory hashed `hash` ([`state_dir_hash`]):
@@ -232,7 +244,7 @@ mod tests {
         assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");
         let state = Path::new("/nonexistent-agterm/state");
         #[cfg(unix)]
-        assert_eq!(socket_directory(state), "/tmp/ngterm-zmx-22c4fb0b9e3e04dc");
+        assert_eq!(socket_directory(state), "/tmp/ngterm-live-22c4fb0b9e3e04dc");
         assert_eq!(
             socket_directory(Path::new("/nonexistent-agterm/./x/../state")),
             socket_directory(state)
@@ -243,7 +255,7 @@ mod tests {
     fn the_unix_socket_directory_is_upstreams_shape() {
         assert_eq!(
             unix_socket_directory("22c4fb0b9e3e04dc"),
-            "/tmp/ngterm-zmx-22c4fb0b9e3e04dc"
+            "/tmp/ngterm-live-22c4fb0b9e3e04dc"
         );
         #[cfg(unix)]
         {

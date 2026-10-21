@@ -7,8 +7,10 @@ use agterm_proto::ControlLiveEndpoint;
 use super::reconnect::RemoteLinkNotice;
 use super::tree::{InvocationError, REMOTE_CLI, is_plain, remote_cli_chain, ssh_arguments, validate};
 use crate::command_restore::shell_quoted_line;
-use crate::live::is_daemon_name;
 use crate::live::lead::LeadAttachment;
+use crate::live::{
+    DIRECTORY_VARIABLE, NO_DETACH_KEY_VARIABLE, SESSION_PREFIX_VARIABLE, SESSION_VARIABLE, is_daemon_name,
+};
 
 /// A filesystem path, which may hold spaces: only control characters and NUL are refused, neither of which survives a
 /// path anyway (upstream's `isPath`).
@@ -59,10 +61,11 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
 /// attach never hands back a fresh shell wearing the old session's name.
 const GONE_GUARD: &str = "printf '%s\\n' 'agterm: remote session is gone'; exit 1";
 
-/// One ssh invocation attaching to `daemon` on `host` for the lifetime of the pane (upstream's `attachCommand`): `-tt`,
-/// as zmx reads termios and the window size, no lifetime deadline, and `LogLevel=ERROR` so ssh's own banners stay off
-/// the pane. The account's own zmx variables are cleared, as an inherited `ZMX_SESSION` would switch session instead
-/// of reaching the guard; `lead` opts the far zmx client into explicit leadership.
+/// One ssh invocation attaching to `daemon` on `host` for the lifetime of the pane (upstream's `attachCommand`, which
+/// runs the far machine's zmx): `-tt`, as `agterm-session attach` reads termios and the window size, no lifetime
+/// deadline, and `LogLevel=ERROR` so ssh's own banners stay off the pane. The attach contract's variables the account
+/// may carry are cleared, as an inherited `AGTERM_LIVE_SESSION` refuses the attach (zmx switched session there) and a
+/// prefix would rename the daemon; `lead` opts the far attach client into explicit leadership.
 ///
 /// # Errors
 ///
@@ -80,16 +83,13 @@ pub fn attach_command(
     if !is_path(&endpoint.executable) || !is_path(&endpoint.socket_directory) {
         return Err(InvocationError::InvalidEndpoint);
     }
-    let mut words: Vec<String> = [
-        "/usr/bin/env",
-        "ZMX_SESSION=",
-        "ZMX_SESSION_PREFIX=",
-        "ZMX_NO_DETACH_KEY=1",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    words.push(format!("ZMX_DIR={}", endpoint.socket_directory));
+    let mut words = vec![
+        "/usr/bin/env".to_owned(),
+        format!("{SESSION_VARIABLE}="),
+        format!("{SESSION_PREFIX_VARIABLE}="),
+        format!("{NO_DETACH_KEY_VARIABLE}=1"),
+    ];
+    words.push(format!("{DIRECTORY_VARIABLE}={}", endpoint.socket_directory));
     words.extend(lead.map(LeadAttachment::assignments).unwrap_or_default());
     words.extend(
         [
@@ -199,8 +199,8 @@ mod tests {
 
     fn endpoint() -> ControlLiveEndpoint {
         ControlLiveEndpoint {
-            executable: "/opt/agterm/bin/zmx".to_owned(),
-            socket_directory: "/tmp/agterm-zmx-abc".to_owned(),
+            executable: "/opt/ngterm/bin/agterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-abc".to_owned(),
         }
     }
 
@@ -251,12 +251,20 @@ mod tests {
         assert_eq!(plain[1], "-tt");
         assert_eq!(&plain[plain.len() - 4..plain.len() - 2], ["-o", "LogLevel=ERROR"]);
         assert_eq!(plain[plain.len() - 2], "buildbox");
-        assert!(!plain.last().unwrap().contains("ZMX_MANAGED"));
+        assert!(!plain.last().unwrap().contains("AGTERM_LIVE_MANAGED"));
+        assert!(
+            plain.last().unwrap().starts_with(
+                "'/usr/bin/env' 'AGTERM_LIVE_SESSION=' 'AGTERM_LIVE_SESSION_PREFIX=' 'AGTERM_LIVE_NO_DETACH_KEY=1' \
+                 'AGTERM_LIVE_DIR=/tmp/ngterm-live-abc' "
+            ),
+            "{}",
+            plain.last().unwrap()
+        );
         let claimed = attach_command("buildbox", &endpoint(), &daemon, Some(&lead("n1", true))).unwrap();
         let remote = claimed.last().unwrap();
-        let managed = remote.find("'ZMX_MANAGED=n1'").unwrap();
-        assert!(managed < remote.find("'/opt/agterm/bin/zmx'").unwrap());
-        assert!(remote.contains("'ZMX_MANAGED_CLAIM=1'"));
+        let managed = remote.find("'AGTERM_LIVE_MANAGED=n1'").unwrap();
+        assert!(managed < remote.find("'/opt/ngterm/bin/agterm-session' 'attach'").unwrap());
+        assert!(remote.contains("'AGTERM_LIVE_MANAGED_CLAIM=1'"));
     }
 
     #[test]
@@ -270,12 +278,12 @@ mod tests {
         }
         let daemon = daemon_name(Uuid::new_v4());
         let spaced = ControlLiveEndpoint {
-            executable: "/home/me/My Apps/agterm/bin/zmx".to_owned(),
+            executable: "/home/me/My Apps/ngterm/bin/agterm-session".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };
         assert!(attach_command("buildbox", &spaced, &daemon, None).is_ok());
         let hostile = ControlLiveEndpoint {
-            executable: "/opt/zmx\n".to_owned(),
+            executable: "/opt/agterm-session\n".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };
         assert_eq!(

@@ -1,11 +1,14 @@
 //! What every pane runs under (the GTK build's `zmx_runtime.rs` launch part and `ghostty_app.rs` config part, over
-//! `agterm-term` instead of libghostty): the staged zmx as the core's session host, the live capabilities this host
-//! claims, the ghostty config the terminals draw with, and the [`Host`] their launches start under.
+//! `agterm-term` instead of libghostty): the staged session server (`agterm-session`, in upstream's zmx's place) as the
+//! core's session host, the live capabilities this host claims, the ghostty config the terminals draw with, and the
+//! [`Host`] their launches start under.
 //!
-//! - **Live sessions** (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`): [`install`] gives the core the
-//!   zmx client and this host's wrap inputs before any window mounts, then runs the launch reap and a pending Live
-//!   sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh login shell, as upstream) and
-//!   `live-any-shell` (zsh, bash or fish) where zmx and the shell's integration are staged.
+//! - **Live sessions** (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`): [`install`] hands a running
+//!   server of an older build over to the staged one (the update handoff, recorded for the outdated cutoff), gives the
+//!   core the server's `SessionHost` and this host's wrap inputs before any window mounts, then runs the launch reap
+//!   and a pending Live sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh login shell, as upstream)
+//!   and `live-any-shell` (zsh, bash, fish or PowerShell) where `agterm-session` and the shell's integration are
+//!   staged. A live pane runs `agterm-session attach` in its PTY, which is the session's reply owner there.
 //! - **Config**: [`AppConfig::load`] loads the ghostty config as libghostty did for the GTK build (defaults, the
 //!   user's files, their includes; the theme under them), on the side of a dual theme the desktop's appearance picks
 //!   (`appearance.rs`); its diagnostic count is what `config.reload` answers.
@@ -21,48 +24,77 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use agterm_core::ghostty_config::{self, FinalConfig, GhosttyConfig, LoadedConfig, Step};
-use agterm_core::live::build_record::launch_cutoff;
+use agterm_core::live::build_record::{launch_cutoff, record_handoff};
 use agterm_core::live::shell_integration::LoginShell;
 use agterm_core::live::support::Inputs;
 use agterm_core::paths::{self, Env};
 use agterm_core::{Core, LiveInstall};
 use agterm_proto::ControlLiveEndpoint;
+use agterm_session::client::Client;
+use agterm_session::host::ServerHost;
+use agterm_session::launch::{Runtime, bundled_build_id};
+use agterm_session::server::spawn::{HandoffAttempt, StartOptions};
 use agterm_term::{Host, Launch, Pane};
-use agterm_zmx::Runtime;
-use agterm_zmx::launch::bundled_build_id;
 
 use crate::pane::Launcher;
 use crate::terminal::{Spawn, TerminalConfig};
 
-/// The capability a host claims when its panes can run in zmx daemons in a zsh login shell, upstream's only one
+/// The capability a host claims when its panes can run in live sessions in a zsh login shell, upstream's only one
 /// (`conformance/docs/rust-build.md`).
 pub const LIVE_SESSIONS: &str = "live-sessions";
-/// The Rust-only capability a host claims when its panes can run in zmx daemons in its login shell, zsh, bash or fish.
+/// The Rust-only capability a host claims when its panes can run in live sessions in its login shell, zsh, bash, fish
+/// or PowerShell.
 pub const LIVE_ANY_SHELL: &str = "live-any-shell";
 
-/// The core's session host over the staged zmx and the wrap inputs of this host, installed before the first terminal;
-/// then the launch reap and a pending Live sessions reset run. Call it once the restore decision and the process
-/// table are in.
+/// The core's session host over the staged `agterm-session` and the wrap inputs of this host, installed before the
+/// first terminal, once a running server of an older build handed its sessions over ([`update`]); then the launch
+/// reap and a pending Live sessions reset run. Call it once the restore decision and the process table are in.
 pub fn install(core: &mut Core, env: &dyn Env) {
     let runtime = Runtime::capture(env);
-    let client = agterm_zmx::launch::client(&runtime);
+    let directory = agterm_core::live::socket_directory(&runtime.state_dir);
     let endpoint = ControlLiveEndpoint {
         executable: runtime.executable.to_string_lossy().into_owned(),
-        socket_directory: client.socket_directory().to_owned(),
+        socket_directory: directory.clone(),
     };
     let bundled = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().and_then(bundled_build_id));
+    update(&runtime, &directory, bundled.as_deref());
     let outdated_before = launch_cutoff(bundled.as_deref(), &runtime.state_dir, SystemTime::now());
     let wrap = wrap_inputs(&runtime);
     core.install_live_sessions(LiveInstall {
-        host: Arc::new(client),
+        host: Arc::new(ServerHost::new(runtime.executable.clone(), directory)),
         endpoint,
         wrap,
         state_dir: runtime.state_dir.clone(),
         outdated_before,
     });
     core.run_live_launch();
+}
+
+/// The update handoff (`agterm_session::server::handoff`): a server of another build than the staged `bundled` one
+/// running in `directory` is asked to hand its sessions over to the staged `agterm-session`, and a committed handoff is
+/// recorded, so the sessions it carried over are not offered for reset as predating this build
+/// ([`record_handoff`]); a failed one records nothing, and the reset offer stands. Nothing without a running server
+/// or a staged id (an unstaged build checks no build). Before any pane attaches, so each pane's `agterm-session attach`
+/// finds the staged build and asks for nothing itself.
+fn update(runtime: &Runtime, directory: &str, bundled: Option<&str>) {
+    if bundled.is_none() || !agterm_core::live::support::is_executable_file(&runtime.executable) {
+        return;
+    }
+    let mut options = StartOptions::new(&runtime.executable);
+    options.build = bundled.map(str::to_owned);
+    match Client::new(directory).update(&options) {
+        Ok(None) => {}
+        Ok(Some(HandoffAttempt::Committed { from })) => {
+            tracing::info!(%from, to = bundled, "live sessions handed over to this build");
+            record_handoff(bundled, &runtime.state_dir, SystemTime::now());
+        }
+        Ok(Some(HandoffAttempt::Failed { from, reason })) => {
+            tracing::warn!(%from, to = bundled, %reason, "the live sessions stay with the older build");
+        }
+        Err(error) => tracing::warn!(%error, "the live session server could not be updated"),
+    }
 }
 
 /// What every pane's wrap configuration starts from on this host; the pane's identity, environment and lead are
@@ -80,9 +112,9 @@ pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
     }
 }
 
-/// The live capabilities this host claims: none unless it can wrap panes in zmx daemons (zmx staged beside the app, a
-/// zsh, bash or fish password-database login shell and that shell's bundled integration); then `live-sessions` for a
-/// zsh login shell, as upstream, and `live-any-shell` for any of the three.
+/// The live capabilities this host claims: none unless it can wrap panes in live sessions (`agterm-session` staged
+/// beside the app, a zsh, bash, fish or PowerShell login shell and that shell's bundled integration); then
+/// `live-sessions` for a zsh login shell, as upstream, and `live-any-shell` for any of them.
 #[must_use]
 pub fn live_capabilities(env: &dyn Env) -> Vec<&'static str> {
     claims(&Runtime::capture(env), env)
@@ -299,9 +331,9 @@ mod tests {
     }
 
     #[test]
-    fn a_host_without_zmx_claims_no_live_capability() {
+    fn a_host_without_the_session_server_claims_no_live_capability() {
         let runtime = Runtime {
-            executable: PathBuf::from("/nonexistent/zmx"),
+            executable: PathBuf::from("/nonexistent/agterm-session"),
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: None,
             own_resources_dir: None,

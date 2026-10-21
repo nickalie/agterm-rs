@@ -99,7 +99,7 @@ fn tree_answer(origin: (Uuid, Uuid), split: bool) -> String {
         panes.push(json!({"pane": "right", "daemon": daemon_name(origin.1)}));
     }
     json!({"ok": true, "result": {"remote": {
-        "endpoint": {"executable": "/opt/agterm/bin/zmx", "socketDirectory": "/tmp/agterm-zmx-o"},
+        "endpoint": {"executable": "/opt/ngterm/bin/agterm-session", "socketDirectory": "/tmp/ngterm-live-o"},
         "presentation": 1,
         "sessions": [{
             "id": ORIGIN_SESSION, "name": "build", "windowID": "W", "windowName": "main", "workspaceID": "WS",
@@ -282,7 +282,10 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
     let session = viewer.session();
     let primary = session.launch.command.clone().unwrap();
     assert!(primary.contains(&daemon_name(viewer.origin.0)), "{primary}");
-    assert!(primary.contains("ZMX_MANAGED_CLAIM=1"), "the attach claims the lead");
+    assert!(
+        primary.contains("AGTERM_LIVE_MANAGED_CLAIM=1"),
+        "the attach claims the lead"
+    );
     let split = session.split_launch.command.clone().unwrap();
     assert!(split.contains(&daemon_name(viewer.origin.1)));
     assert!(!session.is_persistable());
@@ -620,7 +623,7 @@ fn a_lost_link_waits_probes_with_backoff_and_attaches_the_pane_again() {
     assert!(replacement.remote && replacement.token == token);
     assert!(replacement.command.contains(&daemon_name(viewer.origin.0)));
     assert!(
-        !replacement.command.contains("ZMX_MANAGED_CLAIM"),
+        !replacement.command.contains("AGTERM_LIVE_MANAGED_CLAIM"),
         "a reconnect never claims the lead"
     );
     assert!(!viewer.fixture.core.reconnect_waiting(&token));

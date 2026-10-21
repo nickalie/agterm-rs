@@ -3,7 +3,7 @@
 //! `RemoteSession.swift` and `RemoteCommandProcessRunner.swift` the remote form runs on).
 //!
 //! The local form joins every open window's projection against the daemon inventory: only a session whose every pane
-//! resolves to a claimed, running daemon is offered, since `zmx attach` creates a missing daemon and would hand back a
+//! resolves to a claimed, running daemon is offered, since an attach creates a missing session and would hand back a
 //! fresh shell wearing the session's name. The remote form runs that same bare form on the far side over ssh and reads
 //! its one document back.
 
@@ -295,7 +295,7 @@ pub fn candidates(
         let (Some(session), Some(pane)) = (entry.session_id.as_deref(), entry.pane.as_deref()) else {
             continue;
         };
-        // every row returned must be attachable, so a name `zmx attach` would refuse never reaches the caller
+        // every row returned must be attachable, so a name the attach would refuse never reaches the caller
         if !is_daemon_name(&entry.daemon) {
             continue;
         }
@@ -369,8 +369,8 @@ mod tests {
 
     fn endpoint() -> ControlLiveEndpoint {
         ControlLiveEndpoint {
-            executable: "/opt/agterm/bin/zmx".to_owned(),
-            socket_directory: "/tmp/agterm-zmx-abc".to_owned(),
+            executable: "/opt/ngterm/bin/agterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-abc".to_owned(),
         }
     }
 

@@ -15,9 +15,11 @@ HARD RULES (agterm-rs upstream sync). They hold for every command you run, no ma
    - Every `ngtermctl` call gets an explicit `--socket <dev instance socket>`, written after the subcommand name
      (`ngtermctl tree --socket /tmp/agterm-dev-.../state/ngterm.sock`). Without it the CLI resolves
      `$XDG_DATA_HOME/ngterm/ngterm.sock`, the live instance's; `AGTERM_CONTROL_SOCKET` is ignored by ngtermctl.
-   - A dev instance gets a private state dir, so its zmx dir (`/tmp/ngterm-zmx-<FNV-1a 64 of the state dir>`) is
-     private too. Reap only zmx processes carrying that instance's `ZMX_DIR`. Never `pkill zmx`, never `killall`,
-     never run `zmx` without that instance's `ZMX_DIR`.
+   - A dev instance gets a private state dir, so its live-session namespace (`/tmp/ngterm-live-<FNV-1a 64 of the
+     state dir>`) and the one session server serving it (`agterm-session server <that dir>`) are private too. Reap
+     only through that server (`AGTERM_LIVE_DIR=<that dir> agterm-session kill --force <name>...`) or processes
+     carrying that instance's `AGTERM_LIVE_DIR`. Never `pkill agterm-session` or `pkill zmx`, never `killall`, never
+     run `agterm-session` without that instance's `AGTERM_LIVE_DIR`.
    - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-rust-linux.sh`), or
      `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`. Never a window on the user's desktop. A hand-started
      headless weston needs `--renderer=gl` and, on NVIDIA, Mesa's EGL vendor (`__EGL_VENDOR_LIBRARY_FILENAMES`), as

@@ -45,11 +45,15 @@ The Rust build (GPUI) gets, on top of that:
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
 SIGTERM must quit without a prompt within 10 seconds.
-Live sessions keep their zmx sockets in `/tmp/ngterm-zmx-%016x` (lowercase hex) of the FNV-1a 64 hash over the UTF-8
-bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists
-(`upstream_socket_directory` in `agterm_conformance/vocabulary.py`, which the adapter's vocabulary names, prefixed
-with the adapter's `app_dir_name`; the instance's `live_dir`); upstream's and the fork's prefix is `agterm`.
-Every zmx or session-host process carries `ZMX_DIR=<that dir>`: one left running after the stop fails it.
+Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
+the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
+upstream's and the fork's zmx sockets in `/tmp/agterm-zmx-<hash>` (`upstream_socket_directory` in
+`agterm_conformance/vocabulary.py`), the Rust build's session server in `/tmp/ngterm-live-<hash>`
+(`live_socket_directory`); the adapter's vocabulary names it, prefixed with the adapter's `app_dir_name` (the
+instance's `live_dir`). Every zmx or session-host process of a reference carries `ZMX_DIR=<that dir>`; the Rust
+build's one server per instance runs as `agterm-session server <that dir>`, and its sessions' programs and their
+attach clients carry `AGTERM_LIVE_DIR=<that dir>`. One left running after the stop fails it (the server gets its idle
+grace to stop by itself once its sessions are reaped).
 The CLI (`agtermctl` for the Swift builds, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
 else from beside `--bin`.
 
@@ -63,8 +67,8 @@ Rust-only extensions below.
 | capability | swift-macos | swift-linux | meaning |
 |---|---|---|---|
 | `posix-shell` | yes | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
-| `live-sessions` | host | host | restoreMode live keeps panes in zmx daemons that outlive the app |
-| `live-any-shell` |  |  | Rust-only: Live sessions in a zsh, bash or fish login shell, each started with Ghostty's shell integration; claimed where the password-database login shell is one of the three and zmx is staged |
+| `live-sessions` | host | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, agterm-session) |
+| `live-any-shell` |  |  | Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and agterm-session is staged |
 | `window-geometry` | yes |  | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes |  | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `select-takes-frontmost` | yes |  | `window.select`/`window.go` make their window `active` without waiting on window focus |
@@ -101,9 +105,9 @@ claims:
 - `quick-validates-input`, `modal-blocks-covers`, `pick-names-pending-ask`, `overlay-size-validated`,
   `sidebar-min-width`, `theme-slots-by-sync`, `config-reload-counts`: upstream's validation and read-back;
 - `keymap-menu`: the app menu (`agterm-gpui`'s `app_menu.rs`) carries the actions' live accelerators;
-- `live-sessions`: by host, where the login shell is zsh and zmx is staged;
-- `live-any-shell`: by host, live sessions for bash and fish login shells too, the one Rust-only extension (below):
-  claimed together with `live-sessions` for a zsh login shell, alone for bash or fish.
+- `live-sessions`: by host, where the login shell is zsh and `agterm-session` is staged;
+- `live-any-shell`: by host, live sessions for bash, fish and PowerShell login shells too, the one Rust-only
+  extension (below): claimed together with `live-sessions` for a zsh login shell, alone for the others.
 
 It does not claim:
 
@@ -125,9 +129,10 @@ mounts a pane only on screen.
 A Rust-only extension is a capability no reference claims, so its tests (`requires` on it) skip as `unsupported` on
 both references and the reference discipline holds them to nothing there: the Rust CI validates them instead, with
 `--must-pass` on the capability in every job whose host can claim it.
-Today there is one, `live-any-shell`: a Live pane runs the password database's login shell in its zmx daemon, zsh as
-upstream, bash and fish as well, each started with Ghostty's shell integration the way libghostty starts a shell it
-spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish).
+Today there is one, `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
+as upstream, bash, fish and PowerShell as well, each started with its shell integration the way libghostty starts a
+shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish; ngterm's own
+script for PowerShell, which Ghostty does not integrate).
 Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
@@ -172,9 +177,15 @@ Every other field, every semantic and every error string that names no zmx is up
 | `no zmx next to this agtermctl[; looked for PATH]`, `zmx print exited N: …` (`clipboard set`) | `no live-session executable next to this ngtermctl[; looked for PATH]`, `the live-session print exited N: …` |
 
 The help texts of `ngtermctl live` and `restore mode` speak of live-session daemons and the session host the same way.
-What the bundled zmx binary itself speaks is unchanged until the session server replaces it: its `attach` command line
-and `ZMX_*` variables, the socket directory, the `zmx-role;` title its patch writes, its `list` and `screen` output,
-`bin/zmx`, `share/ngterm/zmx-BUILD` and `AGTERM_ZMX_PATH`, and the `zmx-build.json` record in the state dir.
+
+The session server (`agterm-session`) takes zmx's place with names of its own, which no control-protocol field or
+error string carries: `bin/agterm-session` and `share/ngterm/session-BUILD` in the stage (upstream's bundled zmx and
+its build stamp), `AGTERM_SESSION_PATH` (upstream's `AGTERM_ZMX_PATH`), the `session-build.json` record in the state
+dir (`zmx-build.json`), the namespace `/tmp/ngterm-live-<hash>` (`/tmp/agterm-zmx-<hash>`), its attach contract's
+`agterm-session attach` line and `AGTERM_LIVE_*` variables (zmx's `ZMX_*`), and the role title `ngterm-live-role;`
+(the patched zmx's `zmx-role;`). `clipboard set` prints through `agterm-session print`, so its texts are the table's
+above with the print's own complaint after `the live-session print exited N: ` (the session gone, or no server:
+`agterm-session print: no live session named NAME`) where upstream shows zmx's.
 
 The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift references
 answer to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object

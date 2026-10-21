@@ -296,9 +296,6 @@ jobs:
         run: scripts/build-ghostty-vt.sh
       - name: terminal fonts
         run: scripts/fetch-fonts.sh
-      # stage.sh stages bin/zmx from this prefix
-      - name: zmx prefix
-        run: scripts/build-zmx.sh
       - name: weston with --fake-seat
         shell: bash
         run: |
@@ -319,7 +316,11 @@ jobs:
         if: matrix.shell == 'bash'
         env:
           AGTERM_REQUIRE_DISPLAY_TESTS: "1"
-        run: cargo test -p agterm-gpui --test instance --test privileges --test quit
+        # the app's live panes attach through the cargo-built agterm-session beside it, which a gpui-only test run
+        # does not build
+        run: |
+          cargo build -p agterm-session --bin agterm-session
+          cargo test -p agterm-gpui --test instance --test privileges --test quit
       - name: install the suite
         run: |
           python -m venv /opt/suite

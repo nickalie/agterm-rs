@@ -1,7 +1,7 @@
 //! The restore decision this launch takes before its first terminal (upstream's `GhosttyApp.init` latching
 //! `restoreLaunchDecision` from the settings and `ZmxLaunch.liveUnavailableReason`), and the host facts the foreground
-//! reads need: the user's `$SHELL`. The live probe's inputs (the staged zmx, the password-database login shell, the
-//! zsh integration) are [`Runtime`]'s.
+//! reads need: the user's `$SHELL`. The live probe's inputs (the staged `agterm-session`, the password-database login
+//! shell, its integration) are [`Runtime`]'s.
 
 use agterm_core::command_restore::basename;
 use agterm_core::paths::Env;
@@ -38,7 +38,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_live_request_without_a_bundled_zmx_falls_back_with_the_reason() {
+    fn a_live_request_without_a_bundled_session_server_falls_back_with_the_reason() {
         let settings = AppSettings {
             restore_mode: Some(RestoreMode::Live),
             ..AppSettings::default()

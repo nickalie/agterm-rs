@@ -5,8 +5,10 @@ The tests, the catalog and the `covers(...)` markers speak upstream's vocabulary
 translates every vocabulary-dependent value a test or the harness sends or reads: the Swift references' is upstream's
 own, and the Rust build's renames the group to `live` (conformance/docs/rust-build.md > The `live` group).
 
-The attach contract's environment, the socket directory and the leading client are still the bundled zmx's in every
-implementation: they move with the session server, not with the rename.
+The live sessions' host differs too: the Swift references run upstream's zmx, a daemon per session under `ZMX_*`
+variables in `/tmp/<name>-zmx-<hash>`; the Rust build runs one session server per instance (`agterm-session`) under
+its attach contract's `AGTERM_LIVE_*` variables in `/tmp/ngterm-live-<hash>`. Each vocabulary carries its host's
+environment names, socket directory, leading client and leftover processes.
 """
 
 from __future__ import annotations
@@ -21,6 +23,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from agterm_conformance.zmx_client import PtyProcess
+
+# How long the Rust build's session server outlives its last client and session (`IDLE_GRACE`,
+# crates/agterm-session/src/server/lifecycle.rs): the leftover check gives it that long to exit by itself.
+SERVER_IDLE_GRACE = 3.0
 
 # Upstream's name for the group, as the shared tests spell it.
 UPSTREAM_GROUP = "zmx"
@@ -47,11 +53,24 @@ def upstream_socket_directory(state_dir: str | os.PathLike[str], name: str = "ag
     return f"/tmp/{name}-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
 
 
+def live_socket_directory(state_dir: str | os.PathLike[str], name: str = "ngterm") -> str:
+    """`agterm_core::live::socket_directory` on Unix: upstream's hash under `/tmp/<name>-live-`, the Rust build's
+    namespace of its session server."""
+    return f"/tmp/{name}-live-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
+
+
 def _zmx_leading_client(instance: Any, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
     # Late: zmx_client imports the adapter base, which imports this module.
     from agterm_conformance import zmx_client
 
     return zmx_client.leading_client(instance, endpoint, daemon)
+
+
+def _live_leading_client(instance: Any, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
+    # Late, as `_zmx_leading_client`.
+    from agterm_conformance import live_client
+
+    return live_client.leading_client(instance, endpoint, daemon)
 
 
 @dataclass(frozen=True)
@@ -78,6 +97,11 @@ class Vocabulary:
     socket_directory: Callable[[str | os.PathLike[str], str], str] = upstream_socket_directory
     # `leading_client(instance, endpoint, daemon)`: a second client of a daemon that claims its lead.
     leading_client: Callable[[Any, Mapping[str, Any], str], PtyProcess] = _zmx_leading_client
+    # The executable of the one server per namespace that hosts every live session (`<server> server <directory>`),
+    # or None where every session is a daemon of its own (zmx); with one, every process carrying the directory
+    # variable is the namespace's too, and the leftover check gives the server `server_idle` seconds more to exit.
+    server: str | None = None
+    server_idle: float = 0.0
 
     def command(self, upstream: str) -> str:
         """The wire name of upstream's `zmx.<name>`."""
@@ -143,9 +167,13 @@ LIVE = Vocabulary(
     result_key="live",
     backed_key="backedByLive",
     ui_test_opt_in="AGTERM_UITEST_ENABLE_LIVE",
-    # Still the bundled zmx's attach contract; the session server renames it to `AGTERM_LIVE_*`.
-    session_variable="ZMX_SESSION",
-    directory_variable="ZMX_DIR",
-    variable_prefix="ZMX_",
+    # The session server's attach contract (crates/agterm-session/src/cli.rs).
+    session_variable="AGTERM_LIVE_SESSION",
+    directory_variable="AGTERM_LIVE_DIR",
+    variable_prefix="AGTERM_LIVE_",
     texts=LIVE_TEXTS,
+    socket_directory=live_socket_directory,
+    leading_client=_live_leading_client,
+    server="agterm-session",
+    server_idle=SERVER_IDLE_GRACE,
 )

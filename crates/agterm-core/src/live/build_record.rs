@@ -1,12 +1,13 @@
-//! When this state directory first launched the zmx build it names (upstream's `ZmxBuildRecord.swift`). Live sessions
-//! keep their daemons through app updates, so a daemon created before the recorded change predates that launch and
-//! Reset Live Sessions offers it as outdated. The bundled build id is the staged `share/ngterm/zmx-BUILD`
-//! (`scripts/build-zmx.sh`).
+//! When this state directory first launched the session server build it names (upstream's `ZmxBuildRecord.swift`,
+//! there the bundled zmx's). Live sessions keep running through app updates, so a session created before the recorded
+//! change predates that launch and Reset Live Sessions offers it as outdated. The bundled build id is the one staged
+//! beside the `agterm-session` binary (`share/ngterm/session-BUILD`, `scripts/stage.sh`), as
+//! `agterm_session::build_id` reads it.
 //!
-//! The session server that takes zmx's place (`agterm-session`) hands its sessions over to a server of the new build
-//! instead (its update handoff): once that handoff committed ([`record_handoff`]), the sessions created before the
-//! launch run in the bundled build, and the outdated reason is off for that build ([`launch_cutoff`] gives no cutoff).
-//! A handoff that failed records nothing, so the sessions stay outdated and the reset offer stands.
+//! Unlike zmx, the session server hands its sessions over to a server of the new build (its update handoff): once
+//! that handoff committed ([`record_handoff`]), the sessions created before the launch run in the bundled build, and
+//! the outdated reason is off for that build ([`launch_cutoff`] gives no cutoff). A handoff that failed records
+//! nothing, so the sessions stay outdated and the reset offer stands.
 
 use std::fs;
 use std::path::Path;
@@ -16,14 +17,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::persist::json::write_atomic;
 
-/// The record's file name in the state directory.
-pub const FILE_NAME: &str = "zmx-build.json";
+/// The record's file name in the state directory (upstream's `zmx-build.json`, named for the session server here).
+pub const FILE_NAME: &str = "session-build.json";
 
 /// The build id and when this state directory first launched it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildRecord {
     pub id: String,
-    /// Whole seconds since the Unix epoch, the resolution of zmx's `created` time.
+    /// Whole seconds since the Unix epoch, the resolution of a session's `created` time.
     #[serde(rename = "changedAt", deserialize_with = "whole_seconds")]
     pub changed_at: u64,
     /// The sessions of the earlier build were handed over to a server of this one (an update handoff committed), so

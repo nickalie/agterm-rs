@@ -4,15 +4,15 @@
 //! that integration hands on, the state directory naming the socket namespace and the staged host's build id. Linux
 //! and Windows have no supervising session host (macOS's `agterm-session-host`), so no configuration names one.
 //!
-//! The staged session host is still zmx, so the executable, its override and its build id keep zmx's names
-//! ([`EXECUTABLE_FILE`], [`EXECUTABLE_OVERRIDE`], [`BUILD_ID_PATH`]) until the session server takes its place.
+//! The staged session host is this crate's server, the `agterm-session` binary ([`EXECUTABLE_FILE`], upstream's
+//! bundled zmx), with its build id staged beside it ([`BUILD_ID_PATH`], [`crate::build_id`]); a debug build reads
+//! another executable from [`EXECUTABLE_OVERRIDE`] (upstream's `AGTERM_ZMX_PATH`).
 //!
 //! The login shell is the password database's on Unix ([`login_shell`]); Windows has none, so there it is PowerShell:
 //! the first launchable `pwsh.exe` on `PATH`, else `powershell.exe` there or in the system directory (`windows_shell`,
 //! after herdr), none when there is neither: the live launch then refuses with the unsupported-shell reason.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use agterm_core::live::lead::LeadAttachment;
@@ -25,12 +25,17 @@ use uuid::Uuid;
 #[cfg(any(windows, test))]
 mod windows_shell;
 
-/// The variable a debug build reads for another session host executable (upstream honors it in DEBUG only).
-pub const EXECUTABLE_OVERRIDE: &str = "AGTERM_ZMX_PATH";
+/// The variable a debug build reads for another session host executable (upstream honors its `AGTERM_ZMX_PATH` in
+/// DEBUG only).
+pub const EXECUTABLE_OVERRIDE: &str = "AGTERM_SESSION_PATH";
 /// The staged session host's file name in the staged `bin` directory.
-pub const EXECUTABLE_FILE: &str = if cfg!(windows) { "zmx.exe" } else { "zmx" };
+pub const EXECUTABLE_FILE: &str = if cfg!(windows) {
+    "agterm-session.exe"
+} else {
+    "agterm-session"
+};
 /// The staged session host's build id, relative to the staged root (`scripts/stage.sh`).
-pub const BUILD_ID_PATH: &str = "share/ngterm/zmx-BUILD";
+pub const BUILD_ID_PATH: &str = crate::build_id::STAGED_FILE;
 /// The staged Ghostty resources, relative to the staged root: the fallback without `GHOSTTY_RESOURCES_DIR`.
 const BUNDLED_RESOURCES: &str = "share/ghostty";
 /// ngterm's own staged resources, relative to the staged root (`scripts/stage.sh`): the PowerShell integration
@@ -128,14 +133,12 @@ impl Runtime {
     }
 }
 
-/// The staged session host's build id beside an executable in `exe_dir`, trimmed; `None` when absent or blank, which
-/// turns the outdated reset reason off.
+/// The staged session host's build id beside an executable in `exe_dir`: the id staged for the `agterm-session` there
+/// as it is now ([`crate::build_id::expected`]), which a server it starts reports; `None` without one (unstaged, or
+/// staged for another binary: an update caught halfway), which turns the outdated reset reason off.
 #[must_use]
 pub fn bundled_build_id(exe_dir: &Path) -> Option<String> {
-    let root = exe_dir.parent()?;
-    let id = fs::read_to_string(root.join(BUILD_ID_PATH)).ok()?;
-    let id = id.trim();
-    (!id.is_empty()).then(|| id.to_owned())
+    crate::build_id::expected(&exe_dir.join(EXECUTABLE_FILE))
 }
 
 /// The login shell the password database names for this user; `None` when unreadable or empty.
@@ -170,6 +173,8 @@ pub fn login_shell() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use agterm_core::live::{daemon_name, socket_directory};
     use agterm_core::paths::MapEnv;
 
@@ -200,8 +205,7 @@ mod tests {
         let pwsh = root.path().join("share/ngterm/shell-integration/pwsh");
         fs::create_dir_all(&pwsh).unwrap();
         fs::copy(pwsh_integration_source(), pwsh.join("ngterm.ps1")).unwrap();
-        fs::create_dir_all(root.path().join("share/ngterm")).unwrap();
-        fs::write(root.path().join(BUILD_ID_PATH), "rev x86_64-linux-gnu.2.39 digest\n").unwrap();
+        crate::build_id::Staged::write_beside(&executable, "0123abcd").unwrap();
         root
     }
 
@@ -228,10 +232,7 @@ mod tests {
             configuration.environment.get("GHOSTTY_ZSH_ZDOTDIR").map(String::as_str),
             Some("/home/u/.zsh")
         );
-        assert_eq!(
-            bundled_build_id(&bin).as_deref(),
-            Some("rev x86_64-linux-gnu.2.39 digest")
-        );
+        assert_eq!(bundled_build_id(&bin).as_deref(), Some("0123abcd"));
     }
 
     #[test]
@@ -349,11 +350,11 @@ mod tests {
 
     #[test]
     fn the_executable_override_counts_only_in_a_debug_build() {
-        let env = MapEnv::new().with(EXECUTABLE_OVERRIDE, "/custom/zmx");
+        let env = MapEnv::new().with(EXECUTABLE_OVERRIDE, "/custom/agterm-session");
         let bin = Path::new("/staged/bin");
         assert_eq!(
             Runtime::resolve(&env, Some(bin), None, true).executable,
-            PathBuf::from("/custom/zmx")
+            PathBuf::from("/custom/agterm-session")
         );
         assert_eq!(
             Runtime::resolve(&env, Some(bin), None, false).executable,
@@ -406,9 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_build_id_turns_the_outdated_reason_off() {
+    fn a_build_id_staged_for_another_binary_or_blank_turns_the_outdated_reason_off() {
         let root = staged();
         let bin = root.path().join("bin");
+        assert_eq!(bundled_build_id(&bin).as_deref(), Some("0123abcd"));
+        // the binary replaced, its id not (yet)
+        fs::write(bin.join(EXECUTABLE_FILE), "#!/bin/sh\n# another build\n").unwrap();
+        assert_eq!(bundled_build_id(&bin), None);
         fs::write(root.path().join(BUILD_ID_PATH), " \n").unwrap();
         assert_eq!(bundled_build_id(&bin), None);
         assert_eq!(bundled_build_id(Path::new("/")), None, "no staged root above");

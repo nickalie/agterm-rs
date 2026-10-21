@@ -7,7 +7,14 @@ import pytest
 from agterm_conformance import cli_format
 from agterm_conformance.impls import ADAPTERS
 from agterm_conformance.impls.rust import RustAdapter
-from agterm_conformance.vocabulary import LIVE, LIVE_TEXTS, UPSTREAM, upstream_socket_directory
+from agterm_conformance.vocabulary import (
+    LIVE,
+    LIVE_TEXTS,
+    SERVER_IDLE_GRACE,
+    UPSTREAM,
+    live_socket_directory,
+    upstream_socket_directory,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 COMMANDS = ("list", "prune", "kill", "reset", "tree", "attach", "present", "screen")
@@ -36,15 +43,25 @@ def test_keys_and_variables_per_vocabulary():
         "AGTERM_UITEST_ENABLE_ZMX",
     )
     assert (LIVE.result_key, LIVE.backed_key, LIVE.ui_test_opt_in) == ("live", "backedByLive", "AGTERM_UITEST_ENABLE_LIVE")
-    # The attach contract, the namespace and the leading client are the bundled zmx's until the session server.
+    # The attach contract and the namespace: upstream's zmx's, and the Rust build's session server's.
+    assert (UPSTREAM.session_variable, UPSTREAM.directory_variable) == ("ZMX_SESSION", "ZMX_DIR")
+    assert (LIVE.session_variable, LIVE.directory_variable) == ("AGTERM_LIVE_SESSION", "AGTERM_LIVE_DIR")
     for vocabulary in (UPSTREAM, LIVE):
-        assert (vocabulary.session_variable, vocabulary.directory_variable) == ("ZMX_SESSION", "ZMX_DIR")
         assert vocabulary.session_variable.startswith(vocabulary.variable_prefix)
-        assert vocabulary.socket_directory("/nonexistent-agterm/state", "ngterm") == upstream_socket_directory(
-            "/nonexistent-agterm/state", "ngterm"
-        )
+        assert vocabulary.directory_variable.startswith(vocabulary.variable_prefix)
+    assert UPSTREAM.socket_directory("/nonexistent-agterm/state", "agterm") == upstream_socket_directory(
+        "/nonexistent-agterm/state"
+    )
+    assert LIVE.socket_directory("/nonexistent-agterm/state", "ngterm") == live_socket_directory(
+        "/nonexistent-agterm/state"
+    )
     assert upstream_socket_directory("/nonexistent-agterm/state").startswith("/tmp/agterm-zmx-")
-    assert upstream_socket_directory("/nonexistent-agterm/state", "ngterm").startswith("/tmp/ngterm-zmx-")
+    # the same hash under the session server's prefix: agterm_core::live::socket_directory's test pins its value
+    assert live_socket_directory("/nonexistent-agterm/state") == "/tmp/ngterm-live-22c4fb0b9e3e04dc"
+    assert upstream_socket_directory("/nonexistent-agterm/state").endswith("-22c4fb0b9e3e04dc")
+    # one server per namespace for the Rust build, a daemon per session for the references
+    assert (UPSTREAM.server, UPSTREAM.server_idle) == (None, 0.0)
+    assert (LIVE.server, LIVE.server_idle) == ("agterm-session", SERVER_IDLE_GRACE)
 
 
 @pytest.mark.parametrize("name", ["tree", "session.new", "zmx", "zmx.", "live.list"])
@@ -99,9 +116,19 @@ def test_the_live_vocabulary_renders_the_live_inventory():
     assert cli_format.human({"live": inventory}) == "ok"
 
 
-def test_both_vocabularies_lead_with_the_zmx_client(monkeypatch):
+def test_each_vocabulary_leads_with_its_own_hosts_client(monkeypatch):
     seen = []
-    monkeypatch.setattr("agterm_conformance.zmx_client.leading_client", lambda *args: seen.append(args) or "client")
+    monkeypatch.setattr("agterm_conformance.zmx_client.leading_client", lambda *args: seen.append(("zmx", *args)))
+    monkeypatch.setattr("agterm_conformance.live_client.leading_client", lambda *args: seen.append(("live", *args)))
     for vocabulary in (UPSTREAM, LIVE):
-        assert vocabulary.leading_client("instance", {"socketDirectory": "/d"}, "agterm-x") == "client"
-    assert seen == [("instance", {"socketDirectory": "/d"}, "agterm-x")] * 2
+        vocabulary.leading_client("instance", {"socketDirectory": "/d"}, "agterm-x")
+    assert seen == [
+        ("zmx", "instance", {"socketDirectory": "/d"}, "agterm-x"),
+        ("live", "instance", {"socketDirectory": "/d"}, "agterm-x"),
+    ]
+
+
+def test_the_server_idle_grace_is_the_session_servers():
+    lifecycle = (REPO / "crates/agterm-session/src/server/lifecycle.rs").read_text()
+    match = re.search(r"pub const IDLE_GRACE: Duration = Duration::from_secs\((\d+)\);", lifecycle)
+    assert match is not None and float(match.group(1)) == SERVER_IDLE_GRACE

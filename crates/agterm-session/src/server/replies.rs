@@ -101,6 +101,7 @@ use vt::{ReadCandidate, ReadScope, Stop};
 
 use super::clients::ClientId;
 use super::pane::State;
+use super::recovery::Recorder;
 use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, ReplyMetadata, Rgb};
 
 /// The foreground the server's terminal answers with while no owner gave one: Ghostty's default (`foreground` in its
@@ -333,13 +334,15 @@ impl Sequence {
 }
 
 /// What the server's terminal's effects share with its pane: the replies they queue for the program in order with the
-/// reply owner's Kitty answers ([`Sequence`]), the clipboard answer armed for a dispatch byte, and the appearance a
-/// colour scheme query is answered with. The replies change under the pane's lock only.
+/// reply owner's Kitty answers ([`Sequence`]), the clipboard answer armed for a dispatch byte, the appearance a
+/// colour scheme query is answered with, and the clipboard writes the terminal completed, which a client that fell
+/// behind gets back ([`super::recovery`]). The replies change under the pane's lock only.
 #[derive(Debug, Default)]
 pub struct Outlet {
     sequence: Mutex<Sequence>,
     armed: Mutex<Option<Armed>>,
     dark: AtomicBool,
+    pub(super) written: Recorder,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -491,6 +494,13 @@ impl vt::Effects for ServerEffects {
 
     fn clipboard_read(&mut self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
         self.outlet.answer(request)
+    }
+
+    /// Recorded for the clients that fall behind on it ([`super::recovery`]), and refused as the default refuses it: the
+    /// clients' terminals apply the write, each under its own policy.
+    fn clipboard_write(&mut self, request: &vt::ClipboardWriteRequest<'_>) -> vt::ClipboardWriteResult {
+        self.outlet.written.record(request);
+        vt::ClipboardWriteResult::Denied
     }
 
     fn device_attributes(&mut self) -> Option<vt::DeviceAttributes> {
@@ -783,11 +793,16 @@ impl State {
         self.advance(chunk);
     }
 
-    /// `chunk`, just written to the terminal, at the next offset for every client; the revision moves.
-    fn advance(&mut self, chunk: &[u8]) {
+    /// `chunk`, just written to the terminal, at the next offset for every client; the revision moves, and the
+    /// clipboard writes the terminal completed in it are kept for the clients that fall behind on it.
+    pub(super) fn advance(&mut self, chunk: &[u8]) {
         let offset = self.offset;
         self.offset += chunk.len() as u64;
         self.revision = self.revision.wrapping_add(1);
+        let written = self.replies.outlet.written.take();
+        if !written.is_empty() {
+            self.recovery.completed(written, self.offset);
+        }
         self.prune();
         self.clients.output(offset, chunk);
     }

@@ -1,7 +1,7 @@
-//! The lead cover over a live pane whose zmx client does not lead (upstream's `Views/PaneLeadCover.swift` and the key
-//! handling of `Ghostty/PaneLead.swift`; ported from the GTK build's `pane_lead.rs`): the terminal draws output laid
-//! out for another client's grid, so the pane shows an opaque cover saying so, and a key press on it takes the pane
-//! over in a fresh terminal. A click on the cover gives the pane the keyboard, so the next press can take it over.
+//! The lead cover over a live pane whose attach client does not lead (upstream's `Views/PaneLeadCover.swift` and the
+//! key handling of `Ghostty/PaneLead.swift`; ported from the GTK build's `pane_lead.rs`): the terminal draws output
+//! laid out for another client's grid, so the pane shows an opaque cover saying so, and a key press on it takes the
+//! pane over in a fresh terminal. A click on the cover gives the pane the keyboard, so the next press can take it over.
 //!
 //! The core decides what a cover says ([`Core::pane_lead_cover`]). A remote pane waiting to be attached again holds
 //! the keyboard too (a key press retries now) and shows what ssh said on its last failed probe, uncovered (upstream's

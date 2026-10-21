@@ -43,8 +43,8 @@ pub(crate) fn live_core(state_dir: &Path) -> Core {
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(&host) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
-            executable: "/opt/agterm/bin/zmx".to_owned(),
-            socket_directory: "/tmp/agterm-zmx-test".to_owned(),
+            executable: "/opt/ngterm/bin/agterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },
         wrap: Inputs {
             executable: "/bin/sh".into(),

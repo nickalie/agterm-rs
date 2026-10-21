@@ -208,7 +208,9 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - `cli` gives every `agtermctl` call the instance's `--socket`; a call without one must resolve under the root.
 - Stopping reaps Live daemons over the protocol (in the adapter's vocabulary: `zmx.kill` upstream, `live.kill` in the
   Rust build, [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on any zmx or
-  session-host process left with the instance's `ZMX_DIR`.
+  session-host process left with the instance's `ZMX_DIR`, or in the Rust build on its session server
+  (`agterm-session server <its namespace>`) or a process left with its `AGTERM_LIVE_DIR`, once the server's idle grace
+  has passed.
   The macOS session host outlives the app by design: the harness ends only the one started from the instance's own
   bundle copy, by exact pid, re-checking ownership before each signal.
 - A macOS instance runs from its own copy of the bundle, because a second launch of the same bundle path binds no

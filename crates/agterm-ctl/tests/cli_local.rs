@@ -1,8 +1,8 @@
 //! The two local-only subcommands, `clipboard set` and `terminfo install`, run as the built `ngtermctl` next to an
 //! in-process control server they must never talk to. Everything they touch is sandboxed: the CLI runs from a stage
-//! under cargo's test temp dir with a fake `zmx` beside it, `ssh` is a fake first on `PATH` whose remote side is a
-//! temp `HOME`, and no `AGTERM_*` or `ZMX_*` variable of the caller reaches a run, so neither a real pane nor the
-//! desktop clipboard nor the account's own terminfo is ever written.
+//! under cargo's test temp dir with a fake `agterm-session` beside it, `ssh` is a fake first on `PATH` whose remote
+//! side is a temp `HOME`, and no `AGTERM_*` or `ZMX_*` variable of the caller reaches a run, so neither a real pane nor
+//! the desktop clipboard nor the account's own terminfo is ever written.
 
 use std::error::Error;
 use std::fs;
@@ -55,7 +55,8 @@ impl Watched {
     }
 }
 
-/// One sandbox: a short state dir in `/tmp` for the socket, and a stage (`bin/ngtermctl`, optionally `bin/zmx` and
+/// One sandbox: a short state dir in `/tmp` for the socket, and a stage (`bin/ngtermctl`, optionally
+/// `bin/agterm-session` and
 /// `share/terminfo`) plus a remote `HOME` under cargo's test temp dir, on the build's own filesystem so the CLI can be
 /// hard-linked rather than copied.
 struct Sandbox {
@@ -88,15 +89,17 @@ impl Sandbox {
         agterm_host::fakes::write_executable(path, &format!("#!/bin/sh\n{body}\n"))
     }
 
-    /// A `zmx` beside the CLI that records its arguments, its `ZMX_*` environment and its stdin, then exits `code`.
-    fn fake_zmx(&self, code: i32) -> io::Result<()> {
+    /// An `agterm-session` beside the CLI that records its arguments, its `AGTERM_LIVE_*` environment and its stdin,
+    /// then exits `code`.
+    fn fake_session(&self, code: i32) -> io::Result<()> {
         Self::script(
-            &self.path("stage/bin/zmx"),
+            &self.path("stage/bin/agterm-session"),
             &format!(
-                "printf '%s\\n' \"$@\" > '{args}'\nenv | grep '^ZMX_' | sort > '{env}'\ncat > '{stdin}'\nexit {code}",
-                args = self.path("zmx.args").display(),
-                env = self.path("zmx.env").display(),
-                stdin = self.path("zmx.stdin").display(),
+                "printf '%s\\n' \"$@\" > '{args}'\nenv | grep '^AGTERM_LIVE_' | sort > '{env}'\ncat > '{stdin}'\n\
+                 exit {code}",
+                args = self.path("print.args").display(),
+                env = self.path("print.env").display(),
+                stdin = self.path("print.stdin").display(),
             ),
         )
     }
@@ -197,7 +200,7 @@ fn failed(message: &str) -> (Option<i32>, String, String) {
 fn clipboard_set_refuses_outside_a_live_pane_without_connecting() -> TestResult {
     let sandbox = Sandbox::new()?;
     let server = Watched::start(sandbox.state.path())?;
-    sandbox.fake_zmx(0)?;
+    sandbox.fake_session(0)?;
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hello"], &[], b"")?),
         failed(NOT_LIVE)
@@ -207,14 +210,14 @@ fn clipboard_set_refuses_outside_a_live_pane_without_connecting() -> TestResult 
         failed(NOT_LIVE)
     );
     let foreign = [
-        ("ZMX_SESSION", "someone-elses-session"),
-        ("ZMX_DIR", "/tmp/agterm-zmx-1"),
+        ("AGTERM_LIVE_SESSION", "someone-elses-session"),
+        ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
     ];
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hello"], &foreign, b"")?),
         failed(NOT_LIVE)
     );
-    assert!(!sandbox.path("zmx.args").exists());
+    assert!(!sandbox.path("print.args").exists());
     assert_eq!(server.requests(), 0);
     Ok(())
 }
@@ -261,43 +264,46 @@ fn clipboard_set_checks_the_text_before_the_pane() -> TestResult {
 fn clipboard_set_prints_the_write_into_the_panes_daemon() -> TestResult {
     let sandbox = Sandbox::new()?;
     let server = Watched::start(sandbox.state.path())?;
-    sandbox.fake_zmx(0)?;
+    sandbox.fake_session(0)?;
     let live = [
-        ("ZMX_SESSION", DAEMON),
-        ("ZMX_DIR", "/tmp/agterm-zmx-1"),
-        ("ZMX_SESSION_PREFIX", "work-"),
+        ("AGTERM_LIVE_SESSION", DAEMON),
+        ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
+        ("AGTERM_LIVE_SESSION_PREFIX", "work-"),
     ];
     let piped = sandbox.run(None, &["clipboard", "set"], &live, "héllo\n".as_bytes())?;
     assert_eq!(outcome(&piped), (Some(0), String::new(), String::new()));
     assert_eq!(
-        fs::read_to_string(sandbox.path("zmx.args"))?,
+        fs::read_to_string(sandbox.path("print.args"))?,
         format!("print\n{DAEMON}\n")
     );
-    assert_eq!(fs::read(sandbox.path("zmx.stdin"))?, b"\x1b]52;c;aMOpbGxvCg==\x07");
+    assert_eq!(fs::read(sandbox.path("print.stdin"))?, b"\x1b]52;c;aMOpbGxvCg==\x07");
     assert_eq!(
-        fs::read_to_string(sandbox.path("zmx.env"))?,
-        "ZMX_DIR=/tmp/agterm-zmx-1\nZMX_SESSION=\nZMX_SESSION_PREFIX=\n"
+        fs::read_to_string(sandbox.path("print.env"))?,
+        "AGTERM_LIVE_DIR=/tmp/ngterm-live-1\nAGTERM_LIVE_SESSION=\nAGTERM_LIVE_SESSION_PREFIX=\n"
     );
     let dashed = sandbox.run(None, &["clipboard", "set", "--", "-1"], &live, b"")?;
     assert_eq!(outcome(&dashed), (Some(0), String::new(), String::new()));
-    assert_eq!(fs::read(sandbox.path("zmx.stdin"))?, b"\x1b]52;c;LTE=\x07");
+    assert_eq!(fs::read(sandbox.path("print.stdin"))?, b"\x1b]52;c;LTE=\x07");
     assert_eq!(server.requests(), 0);
     Ok(())
 }
 
 #[test]
-fn clipboard_set_reports_zmx_failing_or_missing() -> TestResult {
+fn clipboard_set_reports_the_print_failing_or_missing() -> TestResult {
     let sandbox = Sandbox::new()?;
-    let live = [("ZMX_SESSION", DAEMON), ("ZMX_DIR", "/tmp/agterm-zmx-1")];
-    let zmx = fs::canonicalize(sandbox.path("stage/bin"))?.join("zmx");
+    let live = [
+        ("AGTERM_LIVE_SESSION", DAEMON),
+        ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
+    ];
+    let print = fs::canonicalize(sandbox.path("stage/bin"))?.join("agterm-session");
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hi"], &live, b"")?),
         failed(&format!(
             "no live-session executable next to this ngtermctl; looked for {}",
-            zmx.display()
+            print.display()
         ))
     );
-    Sandbox::script(&zmx, "cat >/dev/null\necho 'session not found' >&2\nexit 3")?;
+    Sandbox::script(&print, "cat >/dev/null\necho 'session not found' >&2\nexit 3")?;
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hi"], &live, b"")?),
         failed("the live-session print exited 3: session not found")
@@ -306,13 +312,16 @@ fn clipboard_set_reports_zmx_failing_or_missing() -> TestResult {
 }
 
 #[test]
-fn clipboard_set_reports_a_zmx_that_exits_without_reading_a_large_text() -> TestResult {
-    // the built CLI runs SIGPIPE at its default: a write past the pipe buffer into a zmx that has gone must get EPIPE
-    // and report zmx's own status, not end the CLI by the signal (141 under a shell)
+fn clipboard_set_reports_a_print_that_exits_without_reading_a_large_text() -> TestResult {
+    // the built CLI runs SIGPIPE at its default: a write past the pipe buffer into a print that has gone must get EPIPE
+    // and report its own status, not end the CLI by the signal (141 under a shell)
     let sandbox = Sandbox::new()?;
-    let live = [("ZMX_SESSION", DAEMON), ("ZMX_DIR", "/tmp/agterm-zmx-1")];
-    let zmx = sandbox.path("stage/bin/zmx");
-    Sandbox::script(&zmx, "echo 'session not found' >&2\nexit 4")?;
+    let live = [
+        ("AGTERM_LIVE_SESSION", DAEMON),
+        ("AGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
+    ];
+    let print = sandbox.path("stage/bin/agterm-session");
+    Sandbox::script(&print, "echo 'session not found' >&2\nexit 4")?;
     let large = vec![b'x'; 1024 * 1024];
     let output = sandbox.run(None, &["clipboard", "set"], &live, &large)?;
     assert_eq!(

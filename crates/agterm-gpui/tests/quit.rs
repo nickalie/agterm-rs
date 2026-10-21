@@ -1,13 +1,14 @@
 //! SIGTERM's deadline under load (`conformance/docs/rust-build.md`: quit without a prompt within 10 seconds): the
-//! GPUI build in Live mode on a private Xvfb (lavapipe) with three zmx-backed sessions, one of them flooding its pane,
-//! and an HTML page over two of them, one of whose engines spins in a script, quits on SIGTERM with status 0 within
-//! the deadline, its quit save written (every session in the saved state), the Live sessions surviving it and nothing
-//! else of the app's left running (the panes' zmx clients, the `WebKit` worker and web processes). The time the quit
-//! took is printed (seen with `--nocapture`).
+//! GPUI build in Live mode on a private Xvfb (lavapipe) with three live sessions, one of them flooding its pane, and an
+//! HTML page over two of them, one of whose engines spins in a script, quits on SIGTERM with status 0 within the
+//! deadline, its quit save written (every session in the saved state), the Live sessions and their one server
+//! surviving it and nothing else of the app's left running (the panes' `agterm-session attach` clients, the `WebKit`
+//! worker and web processes). The time the quit took is printed (seen with `--nocapture`).
 //!
-//! Everything runs in a [`support::Sandbox`] (private bus, state, zmx directory and Xvfb); its zmx sessions are killed
-//! through their own zmx directory at the end. Without Xvfb, lavapipe, the vendored zmx and Ghostty's shell
-//! integration the test skips (fails under `AGTERM_REQUIRE_DISPLAY_TESTS`).
+//! Everything runs in a [`support::Sandbox`] (private bus, state, live-session namespace and Xvfb); its live sessions
+//! are killed through their own namespace's server at the end. The app runs the cargo-built `agterm-session` beside
+//! it, as the staged layout has it; without one the test fails. Without Xvfb, lavapipe and Ghostty's shell integration
+//! it skips (fails under `AGTERM_REQUIRE_DISPLAY_TESTS`).
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use agterm_host::SessionHost as _;
 use serde_json::{Value, json};
 use support::{DEADLINE, Sandbox, TestResult, have, lavapipe_icd};
 
@@ -71,7 +73,7 @@ fn eventually<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> TestResult
     }
 }
 
-/// A script of the repository, run for its output (`scripts/build-zmx.sh --print-prefix`, say).
+/// A script of the repository, run for its output (`ghostty_vt_prefix`, say).
 fn script(args: &[&str]) -> Option<String> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new("bash").args(args).current_dir(repo).output().ok()?;
@@ -81,52 +83,65 @@ fn script(args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// The vendored zmx and Ghostty's resources (with its shell integration), as `scripts/stage.sh` stages them.
-fn live_inputs() -> Option<(PathBuf, PathBuf)> {
-    script(&["scripts/build-zmx.sh", "--verify"])?;
-    let zmx = PathBuf::from(script(&["scripts/build-zmx.sh", "--print-prefix"])?).join("bin/zmx");
+/// Ghostty's resources (with its shell integration), as `scripts/stage.sh` stages them.
+fn ghostty_resources() -> Option<PathBuf> {
     let ghostty = script(&["-c", "source scripts/lib/native.sh && ghostty_vt_prefix"])?;
     let resources = PathBuf::from(ghostty).join("share/ghostty");
-    (zmx.is_file() && resources.join("shell-integration").is_dir()).then_some((zmx, resources))
+    resources.join("shell-integration").is_dir().then_some(resources)
 }
 
-/// zmx with the sandbox's own zmx directory (never the user's).
-fn zmx(zmx: &Path, dir: &str, args: &[&str]) -> TestResult<String> {
-    let output = Command::new(zmx)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("ZMX_DIR", dir)
-        .output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+/// The cargo-built `agterm-session` beside the app's binary (`target/<profile>/`), where the app looks for it as in
+/// the staged layout's `bin/`; `cargo test` builds it with the workspace, or with `-p agterm-session`.
+fn session_executable() -> TestResult<PathBuf> {
+    let executable = Path::new(support::GPUI).with_file_name("agterm-session");
+    if !executable.is_file() {
+        return Err(format!(
+            "no cargo-built {} (build it with `cargo build -p agterm-session`, or test with the workspace)",
+            executable.display()
+        )
+        .into());
+    }
+    Ok(executable)
 }
 
-/// Kills every zmx session of the sandbox's zmx directory, however the test ended.
+/// The session host of the sandbox's own namespace (never the user's): its server alone is asked.
+fn session_host(executable: &Path, dir: &str) -> agterm_session::host::ServerHost {
+    agterm_session::host::ServerHost::new(executable, dir)
+}
+
+/// Kills every live session of the sandbox's namespace through its own server, however the test ended; the server
+/// then stops by itself.
 struct Sessions {
-    zmx: PathBuf,
+    executable: PathBuf,
     dir: String,
+}
+
+impl Sessions {
+    /// The names of the namespace's sessions.
+    fn names(&self) -> TestResult<Vec<String>> {
+        Ok(session_host(&self.executable, &self.dir)
+            .list()?
+            .into_iter()
+            .map(|record| record.name)
+            .collect())
+    }
 }
 
 impl Drop for Sessions {
     fn drop(&mut self) {
-        let Ok(listing) = zmx(&self.zmx, &self.dir, &["list", "--short"]) else {
-            return;
-        };
-        for name in listing.split_whitespace() {
-            let _ = zmx(&self.zmx, &self.dir, &["kill", name, "--force"]);
+        if let Ok(names) = self.names() {
+            session_host(&self.executable, &self.dir).kill_batch(&names);
         }
-        // the sandbox's own: named after its state dir, which goes with it
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
-/// A new session, once its pane runs in zmx; its id.
+/// A new session, once its pane runs in a live session; its id.
 fn live_session(sandbox: &Sandbox) -> TestResult<String> {
     let sid = call(sandbox, "session.new", None, json!({}))?["id"]
         .as_str()
         .ok_or("no session id")?
         .to_owned();
-    eventually("the session in zmx", || {
+    eventually("the session live", || {
         call(sandbox, "tree", None, json!({}))
             .ok()
             .filter(|tree| find(tree, &sid).is_some_and(|session| session["backedByLive"] == json!(true)))
@@ -188,15 +203,19 @@ fn parent_of(pid: u32) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// The zmx daemons of the app's sessions: the parents of the shells `live.list` names.
-fn live_processes(sandbox: &Sandbox) -> TestResult<Vec<u32>> {
+/// The live sessions' server of the app's sessions, each once: the parents of the shells `live.list` names; and how
+/// many shells it names.
+fn live_processes(sandbox: &Sandbox) -> TestResult<(Vec<u32>, usize)> {
     let entries = call(sandbox, "live.list", None, json!({}))?;
     let rows = entries["live"]["entries"].as_array().ok_or("no live.list entries")?;
-    Ok(rows
+    let shells: Vec<u32> = rows
         .iter()
         .filter_map(|row| u32::try_from(row["leaderPID"].as_u64()?).ok())
-        .filter_map(parent_of)
-        .collect())
+        .collect();
+    let mut servers: Vec<u32> = shells.iter().copied().filter_map(parent_of).collect();
+    servers.sort_unstable();
+    servers.dedup();
+    Ok((servers, shells.len()))
 }
 
 /// Every process under `pid`, its children's children included.
@@ -238,36 +257,15 @@ fn texts(dir: &Path) -> String {
     all
 }
 
-/// The last lines of every `.log` file under `dir` (zmx's session logs), each under its path.
-fn logs(dir: &Path) -> String {
-    let mut all = String::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return all;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            all.push_str(&logs(&path));
-        } else if path.extension().is_some_and(|extension| extension == "log") {
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
-            let lines: Vec<&str> = text.lines().collect();
-            let tail = lines[lines.len().saturating_sub(40)..].join("\n");
-            let _ = writeln!(all, "== {}\n{tail}", path.display());
-        }
-    }
-    all
-}
-
-/// A primary in Live mode on a private Xvfb (lavapipe), its zmx sessions killed when the returned guard drops.
-fn start_live(lavapipe: &Path, zmx_bin: &Path, resources: &Path) -> TestResult<(Sandbox, usize, Sessions)> {
+/// A primary in Live mode on a private Xvfb (lavapipe), its live sessions killed when the returned guard drops.
+fn start_live(lavapipe: &Path, executable: &Path, resources: &Path) -> TestResult<(Sandbox, usize, Sessions)> {
     let mut sandbox = Sandbox::new()?;
     sandbox.start_xvfb()?;
     sandbox.use_software_rendering(lavapipe);
-    sandbox.set_env("AGTERM_ZMX_PATH", zmx_bin.to_string_lossy());
     sandbox.set_env("GHOSTTY_RESOURCES_DIR", resources.to_string_lossy());
     std::fs::write(sandbox.path("state/settings.json"), r#"{"restoreMode":"live"}"#)?;
     let sessions = Sessions {
-        zmx: zmx_bin.to_owned(),
+        executable: executable.to_owned(),
         dir: agterm_core::live::socket_directory(&sandbox.path("state")),
     };
     let primary = sandbox.start_gpui_primary("primary.log")?;
@@ -294,16 +292,16 @@ fn load_up(sandbox: &Sandbox) -> TestResult<[String; 3]> {
     Ok([busy, quiet, flooding])
 }
 
-/// The app's processes outside its Live sessions (the zmx daemons the panes' first clients forked, and what runs in
-/// them, stay); and the daemons.
-fn app_processes(sandbox: &Sandbox, app: u32) -> TestResult<(Vec<u32>, Vec<u32>)> {
-    let live = live_processes(sandbox)?;
+/// The app's processes outside its Live sessions (the session server the first pane's attach started, while that
+/// attach runs, and what runs in its sessions, stay); the server; and how many sessions' shells it runs.
+fn app_processes(sandbox: &Sandbox, app: u32) -> TestResult<(Vec<u32>, Vec<u32>, usize)> {
+    let (live, shells) = live_processes(sandbox)?;
     let kept: Vec<u32> = live
         .iter()
-        .flat_map(|daemon| std::iter::once(*daemon).chain(descendants(*daemon)))
+        .flat_map(|server| std::iter::once(*server).chain(descendants(*server)))
         .collect();
     let helpers = descendants(app).into_iter().filter(|pid| !kept.contains(pid)).collect();
-    Ok((helpers, live))
+    Ok((helpers, live, shells))
 }
 
 /// Waits for every one of `pids` to end; the error names the ones left.
@@ -390,14 +388,20 @@ fn sigterm_saves_and_quits_within_its_deadline_with_live_sessions_busy_and_pages
     let Some(lavapipe) = lavapipe_icd() else {
         skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
     };
-    let Some((zmx_bin, resources)) = live_inputs() else {
-        skip!("no vendored zmx (scripts/build-zmx.sh) or Ghostty shell integration");
+    let Some(resources) = ghostty_resources() else {
+        skip!("no Ghostty shell integration (scripts/build-ghostty-vt.sh)");
     };
-    let (mut sandbox, primary, sessions) = start_live(&lavapipe, &zmx_bin, &resources)?;
+    let executable = session_executable()?;
+    let (mut sandbox, primary, sessions) = start_live(&lavapipe, &executable, &resources)?;
     let app = sandbox.child(primary).id();
     let sids = load_up(&sandbox)?;
-    let (helpers, live) = app_processes(&sandbox, app)?;
-    assert_eq!(live.len(), 4, "a daemon per session: the launch's own and the three");
+    let (helpers, live, shells) = app_processes(&sandbox, app)?;
+    assert_eq!(shells, 4, "a live session per session: the launch's own and the three");
+    assert_eq!(
+        live.len(),
+        1,
+        "one server holds every live session of the instance: {live:?}"
+    );
     assert!(
         !helpers.is_empty(),
         "the app runs its panes' clients and the page engine"
@@ -420,16 +424,15 @@ fn sigterm_saves_and_quits_within_its_deadline_with_live_sessions_busy_and_pages
     for sid in &sids {
         assert!(saved.contains(sid.as_str()), "session {sid} is in the saved state");
     }
-    // the Live sessions outlive the app; its own processes do not
-    let listed = zmx(&zmx_bin, &sessions.dir, &["list", "--short"])?;
-    if listed.split_whitespace().count() != live.len() || !live.iter().all(|daemon| running(*daemon)) {
-        let daemons: Vec<String> = live
+    // the Live sessions and their server outlive the app; its own processes do not
+    let listed = sessions.names()?;
+    if listed.len() != shells || !live.iter().all(|server| running(*server)) {
+        let servers: Vec<String> = live
             .iter()
-            .map(|daemon| format!("{daemon} {}", if running(*daemon) { "running" } else { "gone" }))
+            .map(|server| format!("{server} {}", if running(*server) { "running" } else { "gone" }))
             .collect();
         return Err(format!(
-            "every Live session survives: listed {listed:?}, sessions {sids:?}, daemons {daemons:?}\n{}\n{log}",
-            logs(Path::new(&sessions.dir))
+            "every Live session survives: listed {listed:?}, sessions {sids:?}, server {servers:?}\n{log}"
         )
         .into());
     }

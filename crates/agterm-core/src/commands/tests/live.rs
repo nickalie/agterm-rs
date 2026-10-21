@@ -46,8 +46,8 @@ fn install(core: &mut Core, host: &Arc<FakeSessionHost>, resources: &Path, mode:
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(host) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
-            executable: "/opt/agterm/bin/zmx".to_owned(),
-            socket_directory: "/tmp/agterm-zmx-test".to_owned(),
+            executable: "/opt/ngterm/bin/agterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },
         wrap: Inputs {
             executable: crate::live::test_executable(resources, "sh"),
@@ -172,7 +172,7 @@ fn the_list_joins_claims_against_the_observed_daemons() {
     assert_eq!(inventory["inventoryComplete"], json!(true));
     assert_eq!(
         inventory["endpoint"],
-        json!({"executable": "/opt/agterm/bin/zmx", "socketDirectory": "/tmp/agterm-zmx-test"})
+        json!({"executable": "/opt/ngterm/bin/agterm-session", "socketDirectory": "/tmp/ngterm-live-test"})
     );
     // outside live a pane still claims its daemon name; nothing runs, so it is observed absent
     let row = &rows(&response, live.session)[0];
@@ -458,8 +458,12 @@ fn a_live_launch_wraps_the_pane_in_its_daemon() {
     };
     assert_eq!(env("AGTERM_PANE_ID"), Some(token));
     assert_eq!(env("SHELL").as_deref(), Some("/bin/zsh"));
-    assert!(env("ZMX_MANAGED").is_some_and(|nonce| nonce.len() == 32));
-    assert_eq!(env("ZMX_MANAGED_CLAIM"), None, "a launch attach never claims the lead");
+    assert!(env("AGTERM_LIVE_MANAGED").is_some_and(|nonce| nonce.len() == 32));
+    assert_eq!(
+        env("AGTERM_LIVE_MANAGED_CLAIM"),
+        None,
+        "a launch attach never claims the lead"
+    );
 }
 
 /// Lazy restore: a dormant Live session's daemon runs on unattached, so the tree reads it as live-backed, and
@@ -621,7 +625,7 @@ fn a_fallback_or_ordinary_launch_runs_a_plain_shell() {
 
 /// Feeds the role report `role` of the live pane's current attachment.
 pub(super) fn report(live: &mut Live, token: &str, nonce: &str, role: &str, generation: u32) -> bool {
-    let title = format!("zmx-role;{nonce}:{role}:{generation}");
+    let title = format!("ngterm-live-role;{nonce}:{role}:{generation}");
     live.fixture
         .core
         .report_pane(live.session, token, &crate::PaneReport::Title(title))
@@ -633,7 +637,7 @@ pub(super) fn spawn_live(live: &mut Live) -> String {
     let seed = live.fixture.core.request_pane_spawn(live.session, &token).unwrap();
     seed.env
         .into_iter()
-        .find(|(key, _)| key == "ZMX_MANAGED")
+        .find(|(key, _)| key == "AGTERM_LIVE_MANAGED")
         .map(|(_, nonce)| nonce)
         .unwrap()
 }
@@ -721,7 +725,7 @@ fn a_follower_is_covered_and_taken_over_with_the_claim() {
         fresh
             .env
             .iter()
-            .any(|(key, value)| key == "ZMX_MANAGED_CLAIM" && value == "1")
+            .any(|(key, value)| key == "AGTERM_LIVE_MANAGED_CLAIM" && value == "1")
     );
     // covered until the fresh attach reports, and asked once
     assert_eq!(live.core().pane_lead_cover(&token).unwrap().title, "Taking over…");
@@ -736,7 +740,12 @@ fn an_unowned_report_reattaches_without_the_claim() {
     assert!(report(&mut live, &token, &nonce, "unowned", 1));
     let replacements = live.core().take_pane_replacements();
     assert_eq!(replacements.len(), 1);
-    assert!(!replacements[0].env.iter().any(|(key, _)| key == "ZMX_MANAGED_CLAIM"));
+    assert!(
+        !replacements[0]
+            .env
+            .iter()
+            .any(|(key, _)| key == "AGTERM_LIVE_MANAGED_CLAIM")
+    );
 }
 
 // MARK: - session.restart

@@ -288,7 +288,7 @@ mod tests {
         for title in [
             "agterm-remote;n1",
             "agterm-remote;n1:gone",
-            "zmx-role;n1:leader:1",
+            "ngterm-live-role;n1:leader:1",
             "build",
         ] {
             assert_eq!(RemoteLinkNotice::parse(title), None, "{title}");

@@ -380,7 +380,7 @@ fn the_local_tree_offers_live_sessions_whose_daemons_run() {
         offered["sessions"][0]["panes"],
         json!([{"pane": "left", "daemon": daemon}])
     );
-    assert_eq!(offered["endpoint"]["socketDirectory"], "/tmp/agterm-zmx-test");
+    assert_eq!(offered["endpoint"]["socketDirectory"], "/tmp/ngterm-live-test");
     assert!(offered.get("host").is_none());
     live.host.fail_list("boom");
     assert_eq!(
