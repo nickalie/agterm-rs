@@ -1,10 +1,9 @@
 # agterm-rs
 
-agterm in Rust for macOS, Linux and Windows as equal targets: upstream macOS agterm (`umputun/agterm` v0.36.0) is the
-parity target. The one frontend is GPUI's, which renders libghostty-vt itself and replaced the GTK4/libadwaita one;
-today it is built and tested on Linux only, so its macOS and Windows forms are open work under the platform rules
-below, not a later phase. Build, run and test commands are in [README.md](README.md); the suite and the ratchet in
-[conformance/README.md](conformance/README.md) and [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
+agterm in Rust for macOS, Linux and Windows as equal targets. The one frontend is GPUI's, which renders libghostty-vt
+itself; today it is built and tested on Linux only, so its macOS and Windows forms are open work under the platform
+rules below, not a later phase. Build, run and test commands are in [README.md](README.md); the suite and the ratchet
+in [conformance/README.md](conformance/README.md) and [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
 
 ## Platforms
 
@@ -85,6 +84,12 @@ toolkit-neutral, so another frontend can drive them.
   builds. A rename or a new path covers every place at once; keeping one on the old name "for compatibility" is not a
   choice to make alone.
 
+## Plans
+
+- `docs/plans/completed/` holds historical artifacts: what was decided and done at the time, not the product's
+  current state. The code, README and CLAUDE.md are the current state; a completed plan is never read as a
+  description of the product nor updated to match a later change.
+
 ## Porting a command group
 
 1. Read upstream's implementation (`agtermCore/Sources/agtermCore/ControlDispatcher*.swift`, the `AppStore+*` files it
@@ -93,8 +98,7 @@ toolkit-neutral, so another frontend can drive them.
 2. Implement in `agterm-core` against the `agterm-host` traits, with unit tests on the fakes; assert the full upstream
    error string on the dispatcher's output (the suite asserts only the part both Swift references share).
 3. Wire the frontend side in `agterm-gpui` (terminal behavior in `agterm-term`), following upstream's UI
-   (`agterm/Views`, `agterm/Ghostty`, the rules files) in GPUI/gpui-kit idioms; UI the suite cannot see is checked
-   against `docs/linux-ui-checklist.md`.
+   (`agterm/Views`, `agterm/Ghostty`, the rules files) in GPUI/gpui-kit idioms.
 4. Add the `ngtermctl` subcommands, ported from upstream's `agtermctlKit`.
 5. Claim a capability (`version` result, rust-build.md > Rust target profile) only once its commands implement it.
 6. Gate: every check README > Test lists (format, locked metadata, clippy with `-D warnings` on the workspace and on

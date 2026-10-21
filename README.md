@@ -6,9 +6,6 @@ the live-session server under it (libghostty-vt, `agterm-pty`, `agterm-term`, `a
 [CI](#ci) lists) build and test on all three ([macOS and Windows](#macos-and-windows)). Everything else below is the
 Linux build unless it names another OS.
 
-- The parity target is upstream macOS agterm ([umputun/agterm](https://github.com/umputun/agterm) v0.36.0): its wire
-  protocol, command semantics, error strings, `agtermctl` (here `ngtermctl`), on-disk formats, model and UI, the UI
-  in GPUI idioms where AppKit has no direct equivalent.
 - The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
   `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
   (keymap, hooks, agterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
@@ -40,7 +37,7 @@ Linux build unless it names another OS.
   running in the session server, so the tree still reports it `backedByLive`. Sessions made at runtime start at
   once, shown or not. With only the shown sessions spawning, upstream's launch spawn pacer has nothing to pace, and
   the build has none.
-- Parity is measured by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
+- Behavior is checked by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
 ## Prerequisites
 
@@ -412,5 +409,4 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `resources/`: the agent-status hooks and agent skill the app installs (the skill's source stays at
   `resources/skills/agterm`, upstream's name; it installs as `ngterm`), and ngterm's PowerShell integration
   (`shell-integration/pwsh`), which live sessions load.
-- `docs/linux-ui-checklist.md`: every upstream UI feature with its Linux form and manual check (no Linux UI driver
-  exists). `docs/plans/`: implementation plans.
+- `docs/plans/`: implementation plans.

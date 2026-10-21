@@ -32,8 +32,8 @@ Do this:
    `cd <ROOT> && .venv/bin/python <SKILL_DIR>/scripts/coverage-map.py <catalog keys of this cluster>` (or
    `--grep <regex>`), and `grep -rn` in <ROOT>/conformance/tests for the behavior. List the ids that cover it, which
    are in `conformance/rust-passing.txt`, and the tests still missing (propose file, function name, `covers` keys,
-   and what each asserts). A UI-only behavior has no suite test on Linux: propose its row for
-   <ROOT>/docs/linux-ui-checklist.md instead.
+   and what each asserts). A UI-only behavior has no suite test on Linux: propose its UI item
+   (the GPUI form) instead.
 4. Linux specifics: anything macOS-only (AppKit, Finder, NSEvent, keyboard-layout APIs) gets its GPUI/Linux
    equivalent, or "no Linux counterpart" with the reason. Consult the fork <ROOT>/../agterm-linux only for Linux
    glue upstream lacks, never as a port source.
@@ -55,7 +55,7 @@ RUST_FILES: <files to create or modify, each with create|modify>
 EVIDENCE: <for already-ported or partial: file:line and test ids that show it>
 CONFORMANCE_EXISTING: <ids, each with listed|not-listed in rust-passing.txt>
 CONFORMANCE_NEW: <proposed new tests, or none>
-CHECKLIST_ROWS: <proposed linux-ui-checklist rows, or none>
+UI_ITEMS: <proposed UI-only items with their GPUI form, or none>
 ITEMS:
 - [ ] <one behavior per line, with the exact upstream string where there is one>
 - [ ] write tests: <Rust unit tests: the cases from the Swift tests>

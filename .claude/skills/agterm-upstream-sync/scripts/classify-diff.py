@@ -66,7 +66,7 @@ AREA_TITLES = {
     "tests-cli": "Swift tests: agtermctlKit (CLI output and errors)",
     "tests-app": "Swift tests: app (ControlServer, views, Ghostty glue)",
     "tests-ui": "Swift UI tests (accessibility ids; the suite's ui layer)",
-    "ui": "UI (`agterm-gpui`, checked against docs/linux-ui-checklist.md)",
+    "ui": "UI (`agterm-gpui`)",
     "contract-docs": "Contract docs: commands.html, docs.html, .claude/rules",
     "vendored": "Vendored upstream copies (synced by sync-resources.sh)",
     "native-pins": "Upstream's pins and zmx patches (scripts/setup.sh and zmx-patches, reported by pins-delta.sh)",

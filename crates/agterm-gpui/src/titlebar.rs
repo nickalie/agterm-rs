@@ -5,8 +5,8 @@
 //! custom-commands button, each gated by its Settings ▸ Interface toggle, with a divider only between two groups of two
 //! or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button. The app menu's button
 //! ([`crate::app_menu`], the GTK header bar's primary menu) sits at the trailing end in every mode and under every
-//! cover: Linux has no global menu bar, and Settings…, Quit and the Help items have no keymap action or palette row, so
-//! the button is their only path.
+//! cover: Linux has no global menu bar, and Quit and the Help items have no keymap action or palette row, so the
+//! button is their only path (Settings… has the action palette's row too).
 //!
 //! The bar is painted in the terminal's colors ([`crate::chrome`]): the theme's background, its foreground for the
 //! text and the glyphs (dimmed to 0.6 for the subtitle and the remote host), a hairline under it in the foreground at

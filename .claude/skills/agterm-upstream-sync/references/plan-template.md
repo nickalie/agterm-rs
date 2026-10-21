@@ -60,8 +60,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 ## Testing Strategy
 
 - unit: `cargo test --workspace` on the `agterm-host` fakes; the app's tests under `xvfb-run`.
-- conformance: `run-rust-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux, so UI is checked against
-  `docs/linux-ui-checklist.md`.
+- conformance: `run-rust-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux.
 
 ## Progress Tracking
 
@@ -95,9 +94,9 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
       branch)
 - [ ] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add`
 
-### Task <N-1>: Linux UI checklist and UI-only changes
+### Task <N-1>: UI-only changes
 
-- [ ] <one item per UI change: the GPUI form, or "no Linux counterpart" with the reason, as a checklist row>
+- [ ] <one item per UI change: the GPUI form, or "no Linux counterpart" with the reason>
 - [ ] gate passes
 
 ### Task <N>: Claim <new tag> parity and update the docs
@@ -106,8 +105,8 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
       `claim`: the version.rs test, `agterm-core/src/dispatch.rs` and `agterm-server/tests/server.rs` expectations,
       `conformance/agterm_conformance/impls/rust.py`, `conformance/docs/rust-build.md`), only once every task above is
       done
-- [ ] `docs/linux-ui-checklist.md` header names <new tag>; `conformance/docs/fork-bugs.md` citations re-checked
-      against <new tag> (bump the tag only where the cited contract still says the same)
+- [ ] `conformance/docs/fork-bugs.md` citations re-checked against <new tag> (bump the tag only where the cited
+      contract still says the same)
 - [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new
       capabilities, commands, on-disk files); `tag-mentions.sh <old>` lists no `review` or stale `claim` line
 - [ ] gate passes
@@ -121,7 +120,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   variant, field, event and CLI subcommand skeleton (answering the same refusal the dispatcher gives any command it
   does not yet implement), so each later task starts from a green `cargo test`; when those tests are already green
   at the baseline, there is no such task. Then one task per command group or
-  feature, then vendored-copy conflicts and native pin work, then the UI checklist task, then the claim-and-docs
+  feature, then vendored-copy conflicts and native pin work, then the UI-only task, then the claim-and-docs
   task, always last.
 - One task is one reviewable change: a group with a large diff splits by behavior (validation, read-back, GUI).
 - Every task names its upstream files and Swift tests by path, so the task subagent reads the right sources without

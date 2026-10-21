@@ -71,6 +71,9 @@ pub enum PaletteAction {
     Builtin(crate::keymap::BuiltinAction),
     /// Opens a closed window.
     OpenWindow(Uuid),
+    /// Opens the Settings popup: a Linux addition, as the app menu's Settings… is its only other path (upstream's
+    /// macOS reaches Settings through the menu bar's ⌘,).
+    Settings,
     /// Moves the frontmost window's selected session to another workspace.
     MoveSession { session: Uuid, workspace: Uuid },
     /// Runs the keymap's custom command with this id.
