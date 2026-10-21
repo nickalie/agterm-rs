@@ -13,8 +13,8 @@
 //!   change, a Kitty barrier, a delegated request) go through the mailbox too, and the IO worker handles them
 //!   ([`handle`]). `pane-live-out` sends what the pane queues ([`Live::input`] within the pane's write limit, never
 //!   blocking the caller) in order. A connection that ends without the session's exit (a server stopping, or handing
-//!   its sessions to a new build) is attached again for [`REATTACH_WAIT`], under the lead the pane held, its
-//!   terminal reset first ([`snapshot::RESYNC_RESET`]), as the CLI does.
+//!   its sessions to a new build) is attached again as the CLI attaches ([`attach_again`]), under the lead the pane
+//!   held, its terminal reset first ([`snapshot::RESYNC_RESET`]).
 //! - **Replies**: the server answers the program's queries; the pane's terminal answers none but Kitty graphics
 //!   commands, whose answers complete the server's barriers ([`crate::pty::ReplyOutlet`]). The pane is the reply owner
 //!   when the server makes it one: it sends its facts (theme colours, cell size, colour scheme, Kitty graphics) with
@@ -36,30 +36,27 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use agterm_core::live::support::LiveAttach;
 use agterm_pty::ReadPause;
-use agterm_session::cli::{Contract, default_argv};
+use agterm_session::cli::{
+    Contract, Origin, Outcome, Prepared, attach_again, prepare, process_environment, same_variable, variable,
+};
 use agterm_session::client::{
     AttachEvent, AttachReader, AttachWriter, Attachment, Barrier, Client, ClientError, Delegated,
 };
 use agterm_session::protocol::{
-    self as wire, AttachRefusal, AttachRequest, DelegatedReply, DelegatedRequest, ExitStatus, LeadRole, Managed,
-    ReplyMetadata, SessionSpec,
+    self as wire, AttachRequest, DelegatedReply, DelegatedRequest, ExitStatus, LeadRole, Managed, ReplyMetadata,
+    SessionSpec,
 };
 use agterm_session::server::spawn::StartOptions;
-use agterm_session::server::{EXIT_FAILED, EXIT_USAGE, lead, snapshot};
+use agterm_session::server::{lead, snapshot};
 
 use crate::effects::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, PaneEvent};
 use crate::pane::{Shared, lock};
 use crate::{GridSize, PaneCommand, PaneError, ReadScope};
 
-/// How long a pane whose connection ended tries to attach again (the CLI's `REATTACH_WAIT`).
-pub(crate) const REATTACH_WAIT: Duration = agterm_session::cli::attach::REATTACH_WAIT;
-/// How often it tries.
-const REATTACH_POLL: Duration = Duration::from_millis(100);
 /// How long the reader waits on the mailbox's resume before it looks again (a resume wakes it at once).
 const PAUSE_POLL: Duration = Duration::from_millis(100);
 /// The Kitty graphics answers kept for the next barrier at most (the server ends a barrier past 1 MiB held anyway).
@@ -67,87 +64,31 @@ const KITTY_ANSWERS_LIMIT: usize = 1024 * 1024;
 /// What starts a Kitty graphics answer (`ESC _ G`), the one reply of the pane's terminal a live pane sends.
 const KITTY_ANSWER: &[u8] = b"\x1b_G";
 
-/// The session a live pane attaches to, as the attach CLI started by its launch would have read it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LiveSession {
-    /// The namespace directory, absolute.
-    pub directory: PathBuf,
-    /// The `agterm-session` executable, started as the server when none runs.
-    pub executable: PathBuf,
-    pub name: String,
-    /// What the session is created with when it does not exist.
-    pub spec: SessionSpec,
-    pub managed: Option<Managed>,
-}
-
-/// Why a live pane's attach cannot start: the CLI's exit status and complaint.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Refusal {
-    pub code: u8,
-    pub message: String,
-}
-
-impl Refusal {
-    fn failed(message: impl Into<String>) -> Self {
-        Self {
-            code: EXIT_FAILED,
-            message: message.into(),
-        }
-    }
-}
-
 /// The session `attach` names under the launch's `command` (its environment over the app's `base`, its working
-/// directory, else the app's `current_dir`), read as `agterm-session attach` reads its command line, environment and
-/// directory.
+/// directory, else the app's `current_dir`, a relative one taken from there), prepared as `agterm-session attach`
+/// prepares its command line, environment and directory.
 pub(crate) fn resolve(
     attach: &LiveAttach,
     command: &PaneCommand,
     base: impl IntoIterator<Item = (String, String)>,
     current_dir: Option<PathBuf>,
-) -> Result<LiveSession, Refusal> {
+) -> Result<Prepared, Outcome> {
     let env = child_environment(command, base);
-    let contract = Contract::from_env(|name| lookup(&env, name).map(Into::into));
-    if let Some(inside) = &contract.session {
-        return Err(Refusal::failed(format!(
-            "this runs inside the live session {inside} (AGTERM_LIVE_SESSION); set it empty to attach from here"
-        )));
-    }
-    let usage = |message: String| Refusal {
-        code: EXIT_USAGE,
-        message,
+    let contract = Contract::from_env(|name| variable(&env, name).map(Into::into));
+    let cwd = match (&command.cwd, current_dir) {
+        (Some(cwd), Some(current_dir)) => Some(current_dir.join(cwd)),
+        (cwd, current_dir) => cwd.clone().or(current_dir),
     };
-    let directory = contract.directory.clone().ok_or_else(|| {
-        usage("AGTERM_LIVE_DIR is not set: it names the live sessions' namespace directory".to_owned())
-    })?;
-    let directory = std::path::absolute(&directory).map_err(|error| Refusal::failed(error.to_string()))?;
-    let name = contract.session_name(&attach.session).map_err(usage)?;
-    let argv = if attach.argv.is_empty() {
-        default_argv(lookup(&env, "SHELL").map(std::ffi::OsStr::new))
-    } else {
-        attach.argv.clone()
-    };
-    let cwd = command
-        .cwd
-        .clone()
-        .or(current_dir)
-        .map(|cwd| cwd.to_string_lossy().into_owned());
-    Ok(LiveSession {
-        directory,
+    let origin = Origin {
+        env,
+        cwd,
         executable: PathBuf::from(&attach.executable),
-        name,
-        spec: SessionSpec {
-            argv,
-            env,
-            cwd,
-            tracked_env: Vec::new(),
-        },
-        managed: contract.managed,
-    })
+    };
+    prepare(&contract, &attach.session, attach.argv.clone(), origin)
 }
 
 /// The environment `command`'s child would run in over `base` (the app's, unless it clears it): its removals, then its
-/// variables; where
-/// names ignore case (Windows) a key stands for every spelling of it, as the child's environment block folds them.
+/// variables; where names ignore case (Windows) a key stands for every spelling of it ([`same_variable`]).
 fn child_environment(command: &PaneCommand, base: impl IntoIterator<Item = (String, String)>) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = if command.env_clear {
         Vec::new()
@@ -156,29 +97,14 @@ fn child_environment(command: &PaneCommand, base: impl IntoIterator<Item = (Stri
     };
     for removed in &command.env_remove {
         let removed = removed.to_string_lossy();
-        env.retain(|(key, _)| !same_name(key, &removed));
+        env.retain(|(key, _)| !same_variable(key, &removed));
     }
     for (key, value) in &command.env {
         let key = key.to_string_lossy();
-        env.retain(|(known, _)| !same_name(known, &key));
+        env.retain(|(known, _)| !same_variable(known, &key));
         env.push((key.into_owned(), value.to_string_lossy().into_owned()));
     }
     env
-}
-
-fn same_name(one: &str, other: &str) -> bool {
-    if cfg!(windows) {
-        one.eq_ignore_ascii_case(other)
-    } else {
-        one == other
-    }
-}
-
-fn lookup<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    env.iter()
-        .rev()
-        .find(|(key, _)| same_name(key, name))
-        .map(|(_, value)| value.as_str())
 }
 
 /// What the IO worker handles in order with the output ([`handle`]); `connection` names the connection a request
@@ -553,7 +479,7 @@ enum Ended {
 pub(crate) struct Reader {
     pub live: Arc<Live>,
     pub shared: Arc<Shared>,
-    pub session: Result<LiveSession, Refusal>,
+    pub session: Result<Prepared, Outcome>,
 }
 
 impl Reader {
@@ -566,7 +492,7 @@ impl Reader {
         let attached = client.attach(self.request(&session, Some(session.spec.clone()), Claim::AsAsked));
         let mut attachment = match attached {
             Ok(attachment) => attachment,
-            Err(error) => return self.fail(&Refusal::failed(error.to_string())),
+            Err(error) => return self.fail(&Outcome::failed(error.to_string())),
         };
         let mut role = None;
         let mut connection = 0;
@@ -578,7 +504,7 @@ impl Reader {
                 Ended::Exit(ExitStatus::Exited { code, signal }) => return self.end(Some(code), signal),
                 Ended::Exit(ExitStatus::Unknown) => return self.end(None, None),
                 Ended::Left => return,
-                Ended::Failed(message) => return self.fail(&Refusal::failed(message)),
+                Ended::Failed(message) => return self.fail(&Outcome::failed(message)),
                 Ended::Lost => {
                     self.live.lost();
                     match self.reattach(&session, role) {
@@ -592,7 +518,7 @@ impl Reader {
     }
 
     /// The attach request for `session` at the pane's grid and facts, a managed one claiming the lead as `claim` says.
-    fn request(&self, session: &LiveSession, create: Option<SessionSpec>, claim: Claim) -> AttachRequest {
+    fn request(&self, session: &Prepared, create: Option<SessionSpec>, claim: Claim) -> AttachRequest {
         let size = lock(&self.shared.vt).size;
         let managed = session.managed.as_ref().map(|managed| Managed {
             nonce: managed.nonce.clone(),
@@ -614,7 +540,7 @@ impl Reader {
     fn read(
         &self,
         mut reader: AttachReader,
-        session: &LiveSession,
+        session: &Prepared,
         connection: u64,
         role: &mut Option<LeadRole>,
     ) -> Ended {
@@ -661,40 +587,23 @@ impl Reader {
     }
 
     /// Attach again after a connection ended (module docs); `None` once the pane left.
-    fn reattach(&self, session: &LiveSession, role: Option<LeadRole>) -> Result<Option<Attachment>, Refusal> {
-        let client = Client::new(&session.directory);
-        let deadline = Instant::now() + REATTACH_WAIT;
-        loop {
-            if self.live.leaving() {
-                return Ok(None);
-            }
-            match client.attach(self.request(session, None, Claim::IfLed(role))) {
-                Ok(attachment) => return Ok(Some(attachment)),
-                Err(ClientError::Refused {
-                    reason: AttachRefusal::Gone,
-                    ..
-                }) => return Err(Refusal::failed(format!("the live session {} is gone", session.name))),
-                Err(error) if Instant::now() >= deadline => {
-                    return Err(Refusal::failed(format!(
-                        "lost the connection to the live session server: {error}"
-                    )));
-                }
-                Err(_) => thread::sleep(REATTACH_POLL),
-            }
-        }
+    fn reattach(&self, session: &Prepared, role: Option<LeadRole>) -> Result<Option<Attachment>, Outcome> {
+        attach_again(&session.directory, || {
+            (!self.live.leaving()).then(|| self.request(session, None, Claim::IfLed(role)))
+        })
     }
 
-    /// End the pane with `refusal`, its complaint written after the output.
-    fn fail(&self, refusal: &Refusal) {
+    /// End the pane with `outcome`, its complaint written after the output.
+    fn fail(&self, outcome: &Outcome) {
         tracing::warn!(
-            code = refusal.code,
-            message = refusal.message,
+            code = outcome.code,
+            message = outcome.message.as_deref(),
             "a live pane's attach failed"
         );
-        self.shared
-            .mailbox()
-            .deliver(format!("\r\n{}\r\n", refusal.message).as_bytes());
-        self.end(Some(u32::from(refusal.code)), None);
+        if let Some(message) = &outcome.message {
+            self.shared.mailbox().deliver(format!("\r\n{message}\r\n").as_bytes());
+        }
+        self.end(Some(u32::from(outcome.code)), None);
     }
 
     /// The session's program (or the attach) ended with `code` (`None`: unknown) and `signal`: the pane's end.
@@ -709,13 +618,10 @@ impl Reader {
     }
 }
 
-/// The app's environment as a child inherits it (variables that are not Unicode left out, as the attach CLI reads
-/// its own), and its working directory.
+/// The app's environment as a child inherits it (as the attach CLI reads its own, [`process_environment`]), and its
+/// working directory.
 pub(crate) fn app_environment() -> (Vec<(String, String)>, Option<PathBuf>) {
-    let env = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .collect();
-    (env, std::env::current_dir().ok())
+    (process_environment(), std::env::current_dir().ok())
 }
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 use std::ffi::OsString;
+use std::path::Path;
 
-use agterm_session::cli::{self, Command};
+use agterm_session::cli::{self, Command, default_argv, variable as lookup};
+use agterm_session::server::{EXIT_FAILED, EXIT_USAGE};
 
 use super::*;
 
@@ -87,7 +89,13 @@ fn an_attach_the_cli_would_refuse_is_refused_with_its_status() {
     let inside = PaneCommand::new("/bin/sh").env("AGTERM_LIVE_DIR", "/tmp/ns");
     let refusal = resolve(&attach(&[]), &inside, base(), None).unwrap_err();
     assert_eq!(refusal.code, EXIT_FAILED);
-    assert!(refusal.message.contains("inside the live session outer"), "{refusal:?}");
+    assert!(
+        refusal
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("inside the live session outer")),
+        "{refusal:?}"
+    );
     // no namespace
     let nowhere = PaneCommand::new("/bin/sh").env("AGTERM_LIVE_SESSION", "");
     let refusal = resolve(&attach(&[]), &nowhere, base(), None).unwrap_err();
@@ -105,6 +113,13 @@ fn an_attach_the_cli_would_refuse_is_refused_with_its_status() {
     let here = PaneCommand { cwd: None, ..command() };
     let session = resolve(&attach(&[]), &here, base(), Some(PathBuf::from("/app"))).unwrap();
     assert_eq!(session.spec.cwd.as_deref(), Some("/app"));
+    // a relative one is the app's, as a plain pane's child resolves it (the server runs from the filesystem root)
+    let relative = command().cwd("work/tree");
+    let session = resolve(&attach(&[]), &relative, base(), Some(PathBuf::from("/app"))).unwrap();
+    assert_eq!(
+        session.spec.cwd.map(PathBuf::from),
+        Some(Path::new("/app").join("work").join("tree"))
+    );
 }
 
 #[test]

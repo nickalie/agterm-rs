@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use agterm_ghostty_vt::{self as vt, ReadCandidate, Scanner};
 use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, ReadPause, Spawned};
+use agterm_session::cli::{Outcome, Prepared};
 
 use crate::effects::{
     ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, DivertSlot,
@@ -38,7 +39,7 @@ use crate::mailbox::{Answer, Mail, Mailbox};
 use crate::pty::{GridSize, PaneCommand, ReplyOutlet, Tty};
 use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::search::SearchSlot;
-use crate::session_io::{self, Live, LiveSession, Refusal};
+use crate::session_io::{self, Live};
 use crate::{PaneError, ScrollbackLimits};
 
 /// The most bytes fed to `vt_write` under one hold of the VT lock.
@@ -374,7 +375,7 @@ impl Pane {
     ///
     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
     /// the size or cannot allocate.
-    pub(crate) fn attach_live(session: Result<LiveSession, Refusal>, config: &PaneConfig) -> Result<Self, PaneError> {
+    pub(crate) fn attach_live(session: Result<Prepared, Outcome>, config: &PaneConfig) -> Result<Self, PaneError> {
         let (events_tx, events) = mpsc::channel();
         let read_pause = ReadPause::new();
         let mailbox = Arc::new(Mailbox::new(read_pause.clone()));

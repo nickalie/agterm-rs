@@ -13,13 +13,13 @@
 //! The first attach clears the outer terminal first, as zmx's did; leaving it, the client resets it (RIS and the
 //! default colours, zmx's `restore_seq`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Contract, EXIT_OK, default_argv};
+use super::{Contract, EXIT_OK, default_argv, process_environment, variable};
 use crate::attach_tty::input::{Held, InputParser, Token};
 use crate::attach_tty::owner::{Effects, Outgoing, Relay};
 use crate::attach_tty::{Tty, TtyEvent, write_out};
@@ -57,7 +57,8 @@ const RESTORE: &[u8] = b"\x1bc\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
 
 /// `agterm-session attach <name> [argv]` under `contract`: its exit status.
 pub(super) fn run(contract: &Contract, name: &str, argv: Vec<String>) -> u8 {
-    let outcome = prepare(contract, name, argv).map(|session| {
+    let outcome = Origin::current().and_then(|origin| prepare(contract, name, argv, origin));
+    let outcome = outcome.map(|session| {
         let tty = Tty::open();
         let outcome = Loop::new(&tty, session).run();
         if tty.is_terminal() {
@@ -73,11 +74,11 @@ pub(super) fn run(contract: &Contract, name: &str, argv: Vec<String>) -> u8 {
     outcome.code
 }
 
-/// How an attach ended.
+/// How an attach ended: its exit status and complaint.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Outcome {
-    code: u8,
-    message: Option<String>,
+pub struct Outcome {
+    pub code: u8,
+    pub message: Option<String>,
 }
 
 impl Outcome {
@@ -85,7 +86,8 @@ impl Outcome {
         Self { code, message: None }
     }
 
-    fn failed(message: impl Into<String>) -> Self {
+    /// A failed attach's, with status [`EXIT_FAILED`].
+    pub fn failed(message: impl Into<String>) -> Self {
         Self {
             code: EXIT_FAILED,
             message: Some(message.into()),
@@ -101,17 +103,52 @@ fn exit_code(status: &ExitStatus) -> u8 {
     }
 }
 
-/// What an attach needs before it touches the terminal.
-struct Prepared {
-    directory: PathBuf,
-    name: String,
-    spec: SessionSpec,
-    managed: Option<Managed>,
-    detach_key: bool,
-    executable: PathBuf,
+/// Where an attach runs, which a session it creates is given: its environment and working directory, and the
+/// executable started as the server when none runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    pub env: Vec<(String, String)>,
+    pub cwd: Option<PathBuf>,
+    pub executable: PathBuf,
 }
 
-fn prepare(contract: &Contract, name: &str, argv: Vec<String>) -> Result<Prepared, Outcome> {
+impl Origin {
+    /// This process's (its variables that are not Unicode left out).
+    ///
+    /// # Errors
+    ///
+    /// The process's executable cannot be found.
+    pub fn current() -> Result<Self, Outcome> {
+        Ok(Self {
+            env: process_environment(),
+            cwd: std::env::current_dir().ok(),
+            executable: std::env::current_exe().map_err(|error| Outcome::failed(error.to_string()))?,
+        })
+    }
+}
+
+/// What an attach needs before it touches the terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    /// The namespace directory, absolute.
+    pub directory: PathBuf,
+    pub name: String,
+    /// What the session is created with when it does not exist.
+    pub spec: SessionSpec,
+    pub managed: Option<Managed>,
+    pub detach_key: bool,
+    /// Started as the server when none runs.
+    pub executable: PathBuf,
+}
+
+/// The attach of `<name> [argv]` under `contract` from `origin`, the session created with `origin`'s environment and
+/// directory and, without an argv, its `SHELL` ([`default_argv`]).
+///
+/// # Errors
+///
+/// The outcome the attach ends with at once: it runs inside a live session, or the contract names no namespace or no
+/// valid session.
+pub fn prepare(contract: &Contract, name: &str, argv: Vec<String>, origin: Origin) -> Result<Prepared, Outcome> {
     if let Some(inside) = &contract.session {
         return Err(Outcome::failed(format!(
             "this runs inside the live session {inside} (AGTERM_LIVE_SESSION); set it empty to attach from here"
@@ -126,31 +163,59 @@ fn prepare(contract: &Contract, name: &str, argv: Vec<String>) -> Result<Prepare
     })?;
     let directory = std::path::absolute(&directory).map_err(|error| Outcome::failed(error.to_string()))?;
     let name = contract.session_name(name).map_err(usage)?;
+    let Origin { env, cwd, executable } = origin;
     let argv = if argv.is_empty() {
-        default_argv(std::env::var_os("SHELL").as_deref())
+        default_argv(variable(&env, "SHELL").map(std::ffi::OsStr::new))
     } else {
         argv
     };
-    let env = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .collect();
-    let cwd = std::env::current_dir()
-        .ok()
-        .map(|cwd| cwd.to_string_lossy().into_owned());
-    let executable = std::env::current_exe().map_err(|error| Outcome::failed(error.to_string()))?;
     Ok(Prepared {
         directory,
         name,
         spec: SessionSpec {
             argv,
             env,
-            cwd,
+            cwd: cwd.map(|cwd| cwd.to_string_lossy().into_owned()),
             tracked_env: Vec::new(),
         },
         managed: contract.managed.clone(),
         detach_key: contract.detach_key,
         executable,
     })
+}
+
+/// Attaches again to a session of `directory`'s server after its connection ended, without creating it (module
+/// docs): for up to [`REATTACH_WAIT`], each try with the request `request` makes; `None` once it makes none (the
+/// client left).
+///
+/// # Errors
+///
+/// The outcome the client ends with: the session is gone, or no try succeeded in time.
+pub fn attach_again(
+    directory: &Path,
+    mut request: impl FnMut() -> Option<AttachRequest>,
+) -> Result<Option<Attachment>, Outcome> {
+    let client = Client::new(directory);
+    let deadline = Instant::now() + REATTACH_WAIT;
+    loop {
+        let Some(request) = request() else {
+            return Ok(None);
+        };
+        let name = request.name.clone();
+        match client.attach(request) {
+            Ok(attachment) => return Ok(Some(attachment)),
+            Err(ClientError::Refused {
+                reason: AttachRefusal::Gone,
+                ..
+            }) => return Err(Outcome::failed(format!("the live session {name} is gone"))),
+            Err(error) if Instant::now() >= deadline => {
+                return Err(Outcome::failed(format!(
+                    "lost the connection to the live session server: {error}"
+                )));
+            }
+            Err(_) => thread::sleep(REATTACH_POLL),
+        }
+    }
 }
 
 /// What the loop is told.
@@ -455,10 +520,8 @@ impl<'a> Loop<'a> {
 
     /// Attaches again to the session after its connection ended (module docs).
     fn reattach(&mut self) -> Result<(), Outcome> {
-        let client = Client::new(&self.session.directory);
-        let deadline = Instant::now() + REATTACH_WAIT;
-        loop {
-            let request = AttachRequest {
+        let attachment = attach_again(&self.session.directory, || {
+            Some(AttachRequest {
                 name: self.session.name.clone(),
                 create: None,
                 size: self.tty.size().grid,
@@ -467,30 +530,13 @@ impl<'a> Loop<'a> {
                     claim: self.role == Some(LeadRole::Leader),
                 }),
                 metadata: self.relay.attach_metadata(),
-            };
-            match client.attach(request) {
-                Ok(attachment) => {
-                    self.relay.reattached();
-                    self.connect(attachment);
-                    return Ok(());
-                }
-                Err(ClientError::Refused {
-                    reason: AttachRefusal::Gone,
-                    ..
-                }) => {
-                    return Err(Outcome::failed(format!(
-                        "the live session {} is gone",
-                        self.session.name
-                    )));
-                }
-                Err(error) if Instant::now() >= deadline => {
-                    return Err(Outcome::failed(format!(
-                        "lost the connection to the live session server: {error}"
-                    )));
-                }
-                Err(_) => thread::sleep(REATTACH_POLL),
-            }
+            })
+        })?;
+        if let Some(attachment) = attachment {
+            self.relay.reattached();
+            self.connect(attachment);
         }
+        Ok(())
     }
 
     /// Writes what handling an event produced: bytes to the outer terminal, then messages to the server.

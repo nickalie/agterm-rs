@@ -149,18 +149,6 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    /// `agterm-session attach <daemon>`.
-    #[must_use]
-    pub fn attach_arguments(&self) -> Vec<String> {
-        vec![self.executable.clone(), "attach".to_owned(), self.daemon_name.clone()]
-    }
-
-    /// The bare attach as one shell line.
-    #[must_use]
-    pub fn command(&self) -> String {
-        shell_quoted_line(&self.attach_arguments())
-    }
-
     /// `attach` for a pane to run in process; `None` behind a session host's client, which only the shell line runs.
     #[must_use]
     pub fn in_process(&self, attach: LiveAttach) -> Option<LiveAttach> {
@@ -308,20 +296,6 @@ pub fn live_attach<S: AsRef<str>>(
     }
 }
 
-/// The command a wrapped pane's surface runs: [`live_attach`]'s attach as one shell line.
-#[must_use]
-pub fn attach_command<S: AsRef<str>>(
-    configuration: &Configuration,
-    replaying: Option<&[String]>,
-    creation_command: Option<&str>,
-    denylist: &[S],
-) -> String {
-    attach_line(
-        configuration,
-        &live_attach(configuration, replaying, creation_command, denylist),
-    )
-}
-
 /// `attach` as one shell line, behind the session host's client when the configuration names one.
 #[must_use]
 pub fn attach_line(configuration: &Configuration, attach: &LiveAttach) -> String {
@@ -381,6 +355,29 @@ mod tests {
     use super::*;
 
     const NO_DENYLIST: [&str; 0] = [];
+
+    /// The shell line a wrapped pane's launch runs: [`live_attach`]'s attach as [`attach_line`] spells it.
+    fn attach_command<S: AsRef<str>>(
+        configuration: &Configuration,
+        replaying: Option<&[String]>,
+        creation_command: Option<&str>,
+        denylist: &[S],
+    ) -> String {
+        attach_line(
+            configuration,
+            &live_attach(configuration, replaying, creation_command, denylist),
+        )
+    }
+
+    /// The bare attach (`agterm-session attach <daemon>`) as one shell line.
+    fn bare_line(configuration: &Configuration) -> String {
+        let attach = LiveAttach {
+            executable: configuration.executable.clone(),
+            session: configuration.daemon_name.clone(),
+            argv: Vec::new(),
+        };
+        shell_quoted_line(&attach.arguments())
+    }
 
     fn resources(with_loader: bool) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -448,7 +445,7 @@ mod tests {
         assert_eq!(configuration.daemon_name, "agterm-abcdef0123456789abcdef0123456789");
         assert_eq!(configuration.pane_id, "ABCDEF01-2345-6789-ABCD-EF0123456789");
         assert_eq!(
-            configuration.command(),
+            bare_line(&configuration),
             shell_quoted_line(&[
                 inputs.executable.to_str().unwrap(),
                 "attach",
@@ -636,7 +633,7 @@ mod tests {
             assert_eq!(configuration.session_host_executable, None);
             assert_eq!(
                 attach_command(&configuration, None, None, &NO_DENYLIST),
-                configuration.command()
+                bare_line(&configuration)
             );
         }
         let mut inputs = inputs(resources.path());
@@ -705,7 +702,7 @@ mod tests {
             attach_command(&configuration, Some(&argv), Some("echo durable"), &NO_DENYLIST),
             format!(
                 "{} {}",
-                configuration.command(),
+                bare_line(&configuration),
                 shell_quoted_line(&["/bin/zsh", "-lic", &script])
             )
         );
@@ -775,7 +772,7 @@ mod tests {
             let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
             assert_eq!(
                 attach_command(&configuration, Some(&argv), Some("echo durable"), &denylist),
-                configuration.command()
+                bare_line(&configuration)
             );
         }
     }
@@ -799,13 +796,13 @@ mod tests {
             attach_command(&configuration, None, Some(line), &NO_DENYLIST),
             format!(
                 "{} {}",
-                configuration.command(),
+                bare_line(&configuration),
                 shell_quoted_line(&["/bin/zsh", "-lic", &script])
             )
         );
         assert_eq!(
             attach_command(&configuration, None, None, &NO_DENYLIST),
-            configuration.command()
+            bare_line(&configuration)
         );
     }
 
@@ -849,7 +846,7 @@ mod tests {
         // nothing to run: the attach still names bash in POSIX mode, the one way it reads ENV
         let posix_login = format!(
             "{} {}",
-            configuration.command(),
+            bare_line(&configuration),
             shell_quoted_line(&["/bin/bash", "--posix", "-l"])
         );
         assert_eq!(attach_command(&configuration, None, None, &NO_DENYLIST), posix_login);
@@ -869,7 +866,7 @@ mod tests {
             attach_command(&configuration, Some(&argv), None, &NO_DENYLIST),
             format!(
                 "{} {}",
-                configuration.command(),
+                bare_line(&configuration),
                 shell_quoted_line(&["/bin/bash", "--posix", "-lic", &replay::render_argv(&argv, &shell)])
             )
         );
@@ -892,7 +889,7 @@ mod tests {
         // the attach starts fish as a login shell itself
         assert_eq!(
             attach_command(&configuration, None, None, &NO_DENYLIST),
-            configuration.command()
+            bare_line(&configuration)
         );
         let line = "cd /tmp; and ls";
         let rearm = shell_integration::rearm(LoginShell::Fish, &configuration.environment).unwrap();
@@ -905,7 +902,7 @@ mod tests {
             attach_command(&configuration, None, Some(line), &NO_DENYLIST),
             format!(
                 "{} {}",
-                configuration.command(),
+                bare_line(&configuration),
                 shell_quoted_line(&["/usr/bin/fish", "-lic", &replay::render_command_line(line, &shell)])
             )
         );

@@ -433,21 +433,25 @@ fn a_managed_live_pane_reports_its_role_as_its_title() -> TestResult {
     };
     let configuration = live.configuration_with(Some(lead))?;
     let pane = live.pane(&configuration)?;
-    let events = wait_events(&pane, |events| {
+    let mut events = wait_events(&pane, |events| {
         events
             .iter()
             .any(|event| matches!(event, PaneEvent::Title(title) if title.contains(":leader:")))
     });
-    let report = events
+    wait_frame(&pane, prompt_painted);
+    events.extend(pane.take_events());
+    let reports: Vec<_> = events
         .iter()
-        .find_map(|event| match event {
+        .filter_map(|event| match event {
             PaneEvent::Title(title) => agterm_core::live::lead::LeadNotice::parse(title),
             _ => None,
         })
-        .ok_or("no role report")?;
+        .collect();
+    // one report, the pane's own event: none comes from its terminal as well
+    let [report] = reports.as_slice() else {
+        return Err(format!("not one role report: {events:#?}").into());
+    };
     assert_eq!(report.nonce, "n1");
-    // the report never reached the pane's terminal: its own title stays the session's
-    wait_frame(&pane, prompt_painted);
     Ok(())
 }
 

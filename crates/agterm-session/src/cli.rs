@@ -53,7 +53,9 @@ use crate::server::lead::is_nonce;
 use crate::server::pane::{DIRECTORY_VARIABLE, MANAGED_VARIABLES, SESSION_VARIABLE};
 use crate::server::{EXIT_FAILED, EXIT_USAGE};
 
-pub mod attach;
+mod attach;
+
+pub use attach::{Origin, Outcome, Prepared, REATTACH_WAIT, attach_again, prepare};
 
 /// The prefix put before every session name a command is given.
 pub const PREFIX_VARIABLE: &str = "AGTERM_LIVE_SESSION_PREFIX";
@@ -520,6 +522,34 @@ pub fn default_argv(shell_variable: Option<&OsStr>) -> Vec<String> {
         argv.push("-l".to_owned());
     }
     argv
+}
+
+/// This process's environment as a child inherits it, the variables that are not Unicode left out.
+#[must_use]
+pub fn process_environment() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+/// Whether two variable names name one variable: where names ignore case (Windows) every spelling does, as a child's
+/// environment block folds them.
+#[must_use]
+pub fn same_variable(one: &str, other: &str) -> bool {
+    if cfg!(windows) {
+        one.eq_ignore_ascii_case(other)
+    } else {
+        one == other
+    }
+}
+
+/// Variable `name`'s value in `env`, its last setting.
+#[must_use]
+pub fn variable<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    env.iter()
+        .rev()
+        .find(|(key, _)| same_variable(key, name))
+        .map(|(_, value)| value.as_str())
 }
 
 #[cfg(test)]

@@ -24,7 +24,6 @@ use std::time::{Duration, Instant};
 
 use super::pane::{Pane, PaneConfig, lock};
 use super::pty::{GridSize, PaneCommand};
-use super::session_io::LiveSession;
 
 const SIZE: GridSize = GridSize {
     cols: 141,
@@ -279,7 +278,7 @@ fn environment() -> Vec<(String, String)> {
 
 /// A live pane of a new session `name` running `/bin/sh -c script` on the server `server` of namespace `namespace`.
 fn live_pane(script: &str, server: &Path, namespace: &Path, name: &str, config: &PaneConfig) -> Pane {
-    let session = LiveSession {
+    let session = agterm_session::cli::Prepared {
         directory: namespace.to_path_buf(),
         executable: server.to_path_buf(),
         name: name.to_owned(),
@@ -290,6 +289,7 @@ fn live_pane(script: &str, server: &Path, namespace: &Path, name: &str, config: 
             tracked_env: Vec::new(),
         },
         managed: None,
+        detach_key: true,
     };
     Pane::attach_live(Ok(session), config).unwrap()
 }
