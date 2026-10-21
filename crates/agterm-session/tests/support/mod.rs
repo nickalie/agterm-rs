@@ -1,10 +1,12 @@
 //! Helpers for the pane tests on real PTYs, on every OS: the programs per OS, a session's spec with the test's
-//! environment without the live agterm's `AGTERM_*` and `ZMX_*` variables, and an attached client reading its events.
+//! environment without the live agterm's `AGTERM_*` and `ZMX_*` variables, and an attached client reading its events;
+//! for the tests of the binary, the binary staged as a build and the wait for a process's end.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use agterm_ghostty_vt::Terminal;
+use agterm_session::build_id::Staged;
 use agterm_session::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
 use agterm_session::server::clients::{ClientEvent, RecvError, Subscription};
 use agterm_session::server::pane::{Attached, Pane, PaneConfig};
@@ -15,6 +17,9 @@ pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 pub const PATIENCE: Duration = Duration::from_secs(60);
 
 pub const SIZE: GridSize = GridSize { cols: 120, rows: 30 };
+
+/// The `agterm-session` binary.
+pub const EXE: &str = env!("CARGO_BIN_EXE_agterm-session");
 
 /// Poll `read` until `done` holds for what it reads; the last read otherwise, in the panic.
 pub fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, done: impl Fn(&T) -> bool) -> T {
@@ -27,6 +32,29 @@ pub fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, don
         assert!(Instant::now() < deadline, "{what}: still {got:?}");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// A staged root under `root` holding a copy of the binary with `id` staged beside it, replaced through a new file as
+/// a stager does (a server never runs it on Windows: it runs a private copy); the executable's path.
+pub fn stage(root: &Path, id: &str) -> TestResult<PathBuf> {
+    let executable = root.join("bin").join(Path::new(EXE).file_name().ok_or("no file name")?);
+    std::fs::create_dir_all(executable.parent().ok_or("no parent")?)?;
+    let temporary = executable.with_extension("new");
+    std::fs::copy(EXE, &temporary)?;
+    std::fs::rename(&temporary, &executable)?;
+    Staged::write_beside(&executable, id)?;
+    Ok(executable)
+}
+
+/// Whether a process `pid` runs on this host; `None` when the process table cannot be read.
+pub fn process_runs(pid: u32) -> Option<bool> {
+    let table = agterm_session::job::read_table()?;
+    Some(table.iter().any(|entry| u32::try_from(entry.record.pid) == Ok(pid)))
+}
+
+/// Waits for the process `pid` to end (an unreadable process table counts as running).
+pub fn wait_for_exit(pid: u32, what: &str) {
+    wait_for(what, || process_runs(pid).unwrap_or(true), |running| !running);
 }
 
 /// The test's environment without the live agterm's variables.

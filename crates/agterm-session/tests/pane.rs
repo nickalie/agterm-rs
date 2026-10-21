@@ -103,6 +103,49 @@ fn a_resize_reaches_the_child_and_every_client_in_order() -> TestResult {
     Ok(())
 }
 
+/// Text `print` wrote on the screen across a resize: kept on Unix; on Windows the resize makes conhost repaint its
+/// viewport from its own buffer, which never held the text, so it is gone
+/// (`docs/backlog/a-windows-resize-repaints-over-printed-text.md`: once a fix keeps it, this flips).
+#[test]
+fn a_resize_on_windows_repaints_over_printed_text() -> TestResult {
+    const PRINTED: &str = "printed-mark";
+    let dir = tempfile::tempdir()?;
+    let (pane, creator) = Pane::spawn(config("printed", dir.path(), shell()))?;
+    let mut client = Client::new(creator);
+    type_line(&pane, &tagged("ready"))?;
+    client.expect("got:ready");
+    pane.print(PRINTED.as_bytes())?;
+    // the shell's output after it leaves it on the screen
+    type_line(&pane, &tagged("printed"))?;
+    client.expect("got:printed");
+    support::wait_for(
+        "the printed text",
+        || screen(&pane),
+        |text| text.contains("got:printed"),
+    );
+    assert!(screen(&pane).contains(PRINTED), "{}", screen(&pane));
+
+    pane.resize(GridSize {
+        cols: SIZE.cols + 20,
+        rows: SIZE.rows + 10,
+    });
+    type_line(&pane, &tagged("resized"))?;
+    client.expect("got:resized");
+    if cfg!(windows) {
+        support::wait_for("the repaint", || screen(&pane), |text| !text.contains(PRINTED));
+    } else {
+        support::wait_for(
+            "the output after the resize",
+            || screen(&pane),
+            |text| text.contains("got:resized"),
+        );
+        assert!(screen(&pane).contains(PRINTED), "{}", screen(&pane));
+    }
+    quit(&pane)?;
+    client.finish();
+    Ok(())
+}
+
 #[test]
 fn the_environment_and_the_working_directory_are_the_specs() -> TestResult {
     let dir = tempfile::tempdir()?;

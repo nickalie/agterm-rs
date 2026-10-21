@@ -19,8 +19,11 @@
 //!
 //! Anything else refuses the handoff before any HPCON is read; the implementation's version is named in the refusal
 //! and in the handoff's log, so a host the gate does not know says exactly what it runs. After the read, the handles
-//! are checked (open, the signal a pipe, the console host a live `conhost.exe`), and the replacement drives the
-//! rebuilt pseudoconsole (a resize, which its console host must answer) before it reports `restored`.
+//! are checked (open, the signal a pipe, the console host a live `conhost.exe`), by the old server before it passes
+//! them and by the replacement before it rebuilds the pseudoconsole from them. The replacement does not drive the
+//! rebuilt pseudoconsole before it reports `restored`: every `ResizePseudoConsole`, to the size it has too, makes
+//! conhost repaint its viewport from its own buffer, over what `print` wrote into the session's terminal alone
+//! (`server::pane::handoff`), so the first real resize is the first to reach conhost through it.
 //!
 //! # The handles
 //!
@@ -407,7 +410,9 @@ fn rebuild(handles: &PaneHandles, state: &PaneState) -> io::Result<(Master, Chil
         output: take(handles.output)?,
         console: [take(handles.signal)?, take(handles.reference)?, take(handles.conhost)?],
     };
-    let child = Child::from_handoff(take(handles.process)?, take(handles.job)?)?;
+    let (process, job) = (take(handles.process)?, take(handles.job)?);
+    check_console(&handoff)?;
+    let child = Child::from_handoff(process, job)?;
     let master = Master::from_handoff(handoff, Size::cells(state.size.rows, state.size.cols))?;
     Ok((master, child))
 }

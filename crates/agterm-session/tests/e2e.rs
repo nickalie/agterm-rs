@@ -3,9 +3,9 @@
 //! it over its endpoint as agterm's own clients do. A session is created, attached to, typed into, read with `screen`
 //! and detached from; a client killed with its whole process tree leaves the session and the server running, and a
 //! reattach through the library starts from a snapshot that shows the very screen `screen` read; `type` reaches the
-//! attached client, the client's input reaches `screen`; a binary of another build hands the server over on its
-//! attach, keeping the screen; `print` reaches an attached client; `list`, `kill` (a program that ignores the hangup
-//! outlives it, on Unix) and `kill --force` end it all, and the server stops by itself.
+//! attached client, the client's input reaches `screen`; `print` reaches an attached client; a binary of another
+//! build hands the server over on its attach, keeping the screen, the printed text on it; `list`, `kill` (a program
+//! that ignores the hangup outlives it, on Unix) and `kill --force` end it all, and the server stops by itself.
 //!
 //! Each test has a private namespace that only `AGTERM_LIVE_DIR` names, every child the test's environment without
 //! the live agterm's `AGTERM_*` and `ZMX_*` variables (`binary::Namespace`); its sessions are killed at its end.
@@ -25,8 +25,8 @@ use agterm_ghostty_vt::Terminal;
 use agterm_session::client::{AttachEvent, AttachReader, Attachment, Client};
 use agterm_session::protocol::{AttachRequest, GridSize, ReplyMetadata, Screen, Welcome};
 use agterm_session::server::api::read_screen;
-use binary::{Answers, COLS, Namespace, ROWS, spec, stage, stderr, stdout, with_shell};
-use support::{TestResult, shown, tagged};
+use binary::{Answers, COLS, Namespace, ROWS, spec, stderr, stdout, with_shell};
+use support::{TestResult, shown, stage, tagged, wait_for_exit};
 
 /// The session the round trip keeps alive.
 const NAME: &str = "e2e";
@@ -103,17 +103,6 @@ fn running_server(namespace: &Namespace) -> TestResult<Welcome> {
     Ok(server)
 }
 
-/// Whether a process `pid` runs on this host.
-fn runs(pid: u32) -> TestResult<bool> {
-    let table = agterm_session::job::read_table().ok_or("no process table")?;
-    Ok(table.iter().any(|entry| u32::try_from(entry.record.pid) == Ok(pid)))
-}
-
-/// Waits for the process `pid` to end.
-fn wait_for_exit(pid: u32, what: &str) {
-    support::wait_for(what, || runs(pid).unwrap_or(true), |running| !running);
-}
-
 /// The text a terminal shows of what `reader` sends until `done` holds for it.
 fn read_until(reader: &mut AttachReader, done: impl Fn(&str) -> bool) -> TestResult<String> {
     let mut bytes = Vec::new();
@@ -143,10 +132,8 @@ fn a_session_outlives_its_clients_and_an_update_through_the_binary_and_the_libra
     let screen = attach_and_kill_the_client(&namespace, &server)?;
     let attachment = reattach_to_the_same_screen(&namespace, &screen)?;
     type_both_ways(&namespace, attachment)?;
-    // the update before `print`: on Windows the new server resizes the pseudoconsole it took over, which repaints
-    // its own screen over what `print` wrote into the session's terminal and never into the pseudoconsole's
-    hand_over_on_an_attach_of_another_build(&namespace, staged.path(), &server)?;
     print_into_an_attached_client(&namespace)?;
+    hand_over_on_an_attach_of_another_build(&namespace, staged.path(), &server)?;
 
     let killed = namespace.run(&["kill", NAME], b"", &[])?;
     assert_eq!(killed.status.code(), Some(0), "{}", stderr(&killed));
@@ -248,9 +235,10 @@ fn type_both_ways(namespace: &Namespace, mut attachment: Attachment) -> TestResu
 }
 
 /// The binary staged again as another build: its attach hands the server over to it, and the session, its screen
-/// and its scrollback carry over to the new server; the old one ends. Detached at the end.
+/// and its scrollback, what `print` wrote into it included, carry over to the new server; the old one ends.
+/// Detached at the end.
 fn hand_over_on_an_attach_of_another_build(namespace: &Namespace, root: &Path, old: &Welcome) -> TestResult {
-    let before = screen_showing(namespace, NAME, true, "got:four");
+    let before = screen_showing(namespace, NAME, true, "printed by-cli");
     assert_eq!(stage(root, "e2e-b")?, namespace.executable);
 
     let mut third = namespace.attach(&[NAME], &[], &Answers::basic())?;
@@ -262,7 +250,7 @@ fn hand_over_on_an_attach_of_another_build(namespace: &Namespace, root: &Path, o
     assert_eq!(
         screen_showing(namespace, NAME, true, "got:four"),
         before,
-        "the screen after the update"
+        "the screen after the update, the printed text on it"
     );
 
     third.type_line(&tagged("five"))?;
@@ -286,14 +274,22 @@ fn print_into_an_attached_client(namespace: &Namespace) -> TestResult {
     Ok(())
 }
 
-/// The program of a session that ignores the hangup (Unix) and runs each line typed into it.
+/// The program of a session that ignores the hangup (Unix) and runs each line typed into it; it prints `ready` once
+/// it ignores the hangup.
 fn stubborn_argv() -> Vec<String> {
     if cfg!(windows) {
         binary::shell_argv()
+            .into_iter()
+            .chain(["echo".to_owned(), "ready".to_owned()])
+            .collect()
     } else {
-        ["/bin/sh", "-c", "trap '' HUP; while read line; do eval \"$line\"; done"]
-            .map(str::to_owned)
-            .to_vec()
+        [
+            "/bin/sh",
+            "-c",
+            "trap '' HUP; echo ready; while read line; do eval \"$line\"; done",
+        ]
+        .map(str::to_owned)
+        .to_vec()
     }
 }
 
@@ -302,6 +298,8 @@ fn kill_and_kill_force_end_the_listed_sessions_and_the_server_stops() -> TestRes
     let namespace = Namespace::new()?;
     let server = start_from_an_attach_killed_at_once(&namespace)?;
     namespace.create("stubborn", spec(stubborn_argv()))?;
+    // its program ignores the hangup from here on, read back from its screen
+    screen_showing(&namespace, "stubborn", false, "ready");
     list_both_unattached(&namespace)?;
 
     let plain = namespace.run(&["kill", "plain"], b"", &[])?;

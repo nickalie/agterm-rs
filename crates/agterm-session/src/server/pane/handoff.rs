@@ -34,6 +34,11 @@
 //! the PTY actor started quiesced over the handed-over PTY, and the helper and the waiter started frozen: nothing it
 //! does can fail later. [`Pane::activate`], on the commit, makes the actor the PTY's owner and thaws the rest.
 //!
+//! On Unix the import drives the PTY first, a resize to the size it has (which signals nothing to the program). On
+//! Windows it leaves the pseudoconsole alone: every `ResizePseudoConsole`, to the size it has too, makes conhost
+//! repaint its viewport from its own buffer, over what [`Pane::print`] wrote into the session's terminal alone (in
+//! the old server's too, should the handoff roll back); the handles' checks stand in for it (`handoff::windows`).
+//!
 //! On Unix the program is not a child of the server that took it (herdr's `ChildExitReason::Handoff`): its end is
 //! the PTY's end or its pid no longer naming it (its start time, from the process table), and it ends as
 //! [`ExitStatus::Unknown`]. On Windows the program's process handle passed too, so its exit code is read as before.
@@ -44,11 +49,13 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agterm_ghostty_vt as vt;
-use agterm_pty::{ActorHandle, Child, Master};
+#[cfg(unix)]
+use agterm_pty::ActorHandle;
+use agterm_pty::{Child, Master};
 
 use super::{
     Condvar, DELEGATION_WAIT, ExitStatus, HELPER_IDLE, KITTY_WAIT, Lead, NEXT_PANE, Outlet, Pane, Parts, Replies,
-    SNAPSHOT_WAIT, Size, assemble, configure, server_terminal, snapshot, start_actor, start_helper, vt_error,
+    SNAPSHOT_WAIT, assemble, configure, server_terminal, snapshot, start_actor, start_helper, vt_error,
 };
 use crate::protocol::GridSize;
 use crate::server::clients::{Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget};
@@ -181,15 +188,15 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// The actor did not quiesce ([`ActorHandle::begin_handoff`]); it runs again then.
+    /// The actor did not quiesce ([`agterm_pty::ActorHandle::begin_handoff`]); it runs again then.
     pub(crate) fn quiesce(&self, timeout: Duration) -> io::Result<()> {
         self.actor.begin_handoff(timeout)?;
         self.actor.deliver_held();
         Ok(())
     }
 
-    /// A rollback: the PTY actor runs again ([`ActorHandle::rollback_handoff`], when it was quiesced), then the pane
-    /// thaws.
+    /// A rollback: the PTY actor runs again ([`agterm_pty::ActorHandle::rollback_handoff`], when it was quiesced),
+    /// then the pane thaws.
     pub(crate) fn resume(&self, quiesced: bool) {
         if quiesced && let Err(err) = self.actor.rollback_handoff() {
             tracing::warn!(session = %self.name, %err, "a live session's PTY did not resume after a failed handoff");
@@ -244,7 +251,7 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// As [`ActorHandle::duplicate_for_handoff`].
+    /// As [`agterm_pty::ActorHandle::duplicate_for_handoff`].
     #[cfg(unix)]
     pub(crate) fn master(&self) -> io::Result<std::os::fd::OwnedFd> {
         self.actor.duplicate_for_handoff()
@@ -254,11 +261,11 @@ impl Pane {
     ///
     /// # Safety
     ///
-    /// As [`ActorHandle::duplicate_for_handoff`]: the caller's layout gate passed for this `ConPTY`.
+    /// As [`agterm_pty::ActorHandle::duplicate_for_handoff`]: the caller's layout gate passed for this `ConPTY`.
     ///
     /// # Errors
     ///
-    /// As [`ActorHandle::duplicate_for_handoff`].
+    /// As [`agterm_pty::ActorHandle::duplicate_for_handoff`].
     #[cfg(windows)]
     pub(crate) unsafe fn console(&self) -> io::Result<agterm_pty::ConPtyHandoff> {
         // SAFETY: the caller's contract.
@@ -291,8 +298,8 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// The terminal could not be rebuilt, the handed-over PTY could not be driven (on Windows the rebuilt
-    /// pseudoconsole refused a resize), or a thread could not start.
+    /// The terminal could not be rebuilt, the handed-over PTY could not be driven (Unix), or a thread could not
+    /// start.
     pub(crate) fn import(
         state: &PaneState,
         vt: &[u8],
@@ -334,18 +341,21 @@ impl Pane {
         #[cfg(unix)]
         let adopted = Adopted::of(pid).unwrap_or(Adopted { started: None });
         let actor = start_actor(id, master, &core, true)?;
-        let started = check_driven(&actor, size)
-            .and_then(|()| start_helper(id, &core, &actor))
-            .and_then(|()| {
-                #[cfg(unix)]
-                {
-                    start_watcher(id, (&killer, pid, adopted), &core, &actor)
-                }
-                #[cfg(windows)]
-                {
-                    super::start_waiter(id, child, &core, &actor)
-                }
-            });
+        // the pseudoconsole is left alone on Windows (module docs)
+        #[cfg(unix)]
+        let started = check_driven(&actor, size).and_then(|()| start_helper(id, &core, &actor));
+        #[cfg(windows)]
+        let started = start_helper(id, &core, &actor);
+        let started = started.and_then(|()| {
+            #[cfg(unix)]
+            {
+                start_watcher(id, (&killer, pid, adopted), &core, &actor)
+            }
+            #[cfg(windows)]
+            {
+                super::start_waiter(id, child, &core, &actor)
+            }
+        });
         if let Err(err) = started {
             // the actor never owned the PTY: its shutdown leaves it to the server that does
             actor.shutdown();
@@ -425,15 +435,18 @@ fn imported_terminal(
     }
 }
 
-/// Whether this server can drive the handed-over PTY: a resize to the size it has (on Windows through the
-/// pseudoconsole rebuilt from the handed-over handles, which the console host must answer).
+/// Whether this server can drive the handed-over PTY: a resize to the size it has. Not on Windows (module docs: a
+/// resize there repaints over printed text).
+#[cfg(unix)]
 fn check_driven(actor: &ActorHandle, size: GridSize) -> io::Result<()> {
-    actor.try_resize(Size::cells(size.rows, size.cols)).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("the handed-over terminal could not be driven: {err}"),
-        )
-    })
+    actor
+        .try_resize(agterm_pty::Size::cells(size.rows, size.cols))
+        .map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("the handed-over terminal could not be driven: {err}"),
+            )
+        })
 }
 
 /// The watcher of a program an update handoff brought over on Unix, which this server cannot wait for: once the PTY
@@ -536,14 +549,33 @@ mod tests {
             let (process, job) = pane.origin();
             let child = Child::from_handoff(process.try_clone_to_owned().unwrap(), job.try_clone_to_owned().unwrap());
             (
-                Master::from_handoff(console, Size::cells(24, 80)).unwrap(),
+                Master::from_handoff(console, agterm_pty::Size::cells(24, 80)).unwrap(),
                 child.unwrap(),
             )
         }
     }
 
+    /// The line that makes [`shell`] print `got:<word>` (its echo, `got^:` or `got"":`, does not match).
+    fn tagged(word: &str) -> String {
+        if cfg!(windows) {
+            format!("echo got^:{word}")
+        } else {
+            format!("echo got\"\":{word}")
+        }
+    }
+
+    /// Text `print` wrote on `pane`'s screen, the shell's output after it: on Windows the pseudoconsole's buffer
+    /// never holds it, so a resize of the pseudoconsole, which repaints the screen from that buffer, would show.
+    const PRINTED: &str = "printed-mark";
+
+    fn print_on_screen(pane: &Pane) {
+        pane.print(PRINTED.as_bytes()).unwrap();
+        type_line(pane, &tagged("printed"));
+        wait_screen(pane, "got:printed");
+    }
+
     /// A pane held at its cut in `encoding`, rebuilt from it over its own PTY and made the PTY's owner, as a
-    /// replacement server does: the scrollback, the screen and the shell carry over.
+    /// replacement server does: the scrollback, the screen, what `print` wrote on it, and the shell carry over.
     fn crosses(encoding: VtEncoding) {
         let namespace = tempfile::tempdir().unwrap();
         let config = PaneConfig::new("crossing", namespace.path(), shell(), GridSize { cols: 80, rows: 24 });
@@ -555,6 +587,7 @@ mod tests {
         };
         type_line(&pane, numbered);
         wait_screen(&pane, "line50");
+        print_on_screen(&pane);
 
         assert!(pane.freeze());
         pane.quiesce(Duration::from_secs(5)).unwrap();
@@ -570,14 +603,11 @@ mod tests {
 
         let screen = wait_screen(&imported, "line50");
         assert!(screen.contains("line1\n"), "the scrollback did not cross: {screen}");
+        assert!(screen.contains(PRINTED), "the printed text did not cross: {screen}");
         assert_eq!(imported.offset(), cut.state.offset);
-        let tagged = if cfg!(windows) {
-            "echo got^:after"
-        } else {
-            "echo got\"\":after"
-        };
-        type_line(&imported, tagged);
-        wait_screen(&imported, "got:after");
+        type_line(&imported, &tagged("after"));
+        let screen = wait_screen(&imported, "got:after");
+        assert!(screen.contains(PRINTED), "the printed text did not last: {screen}");
         assert!(imported.kill(true).unwrap());
         drop(pane);
     }
@@ -590,6 +620,35 @@ mod tests {
     #[test]
     fn a_pane_crosses_by_the_formatter() {
         crosses(VtEncoding::Formatter);
+    }
+
+    /// A pane rebuilt in a replacement that never commits, dropped there, and its cut rolled back: the import touched
+    /// nothing of the PTY (on Windows no resize repainted over what `print` wrote), and the shell runs on.
+    #[test]
+    fn an_import_rolled_back_leaves_the_screen_and_the_shell() {
+        let namespace = tempfile::tempdir().unwrap();
+        let config = PaneConfig::new(
+            "uncommitted",
+            namespace.path(),
+            shell(),
+            GridSize { cols: 80, rows: 24 },
+        );
+        let (pane, _creator) = Pane::spawn(config).unwrap();
+        type_line(&pane, &tagged("ready"));
+        wait_screen(&pane, "got:ready");
+        print_on_screen(&pane);
+
+        assert!(pane.freeze());
+        pane.quiesce(Duration::from_secs(5)).unwrap();
+        let cut = pane.cut(VtEncoding::Binary).unwrap();
+        let imported = Pane::import(&cut.state, &cut.vt, &cut.replies, taken_over(&pane), Limits::default()).unwrap();
+        drop(imported);
+        pane.resume(true);
+
+        type_line(&pane, &tagged("resumed"));
+        let screen = wait_screen(&pane, "got:resumed");
+        assert!(screen.contains(PRINTED), "the printed text did not last: {screen}");
+        assert!(pane.kill(true).unwrap());
     }
 
     #[test]

@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use agterm_pty::{Actor, ActorConfig, ActorHandle, Child, Size, Spawned};
-use agterm_session::build_id::Staged;
 use agterm_session::client::Client;
 use agterm_session::endpoint::Endpoint;
 use agterm_session::protocol::{AttachRequest, GridSize, Hello, ReplyMetadata, Role, SessionSpec, Welcome};
@@ -19,10 +18,7 @@ use agterm_session::server::lifecycle::IDLE_GRACE;
 use agterm_session::server::spawn::{StartOptions, connect_existing};
 use tempfile::TempDir;
 
-use crate::support::{self, PATIENCE, TestResult, shown};
-
-/// The binary under test.
-pub const EXE: &str = env!("CARGO_BIN_EXE_agterm-session");
+use crate::support::{self, EXE, PATIENCE, TestResult, shown};
 
 /// The outer terminal's grid.
 pub const ROWS: u16 = 24;
@@ -174,18 +170,6 @@ impl Drop for Namespace {
             std::thread::sleep(IDLE_GRACE + Duration::from_secs(1));
         }
     }
-}
-
-/// A staged root under `root` holding a copy of the binary with `id` staged beside it, replaced through a new file as
-/// a stager does (a server never runs it on Windows: it runs a private copy); the executable's path.
-pub fn stage(root: &Path, id: &str) -> TestResult<PathBuf> {
-    let executable = root.join("bin").join(Path::new(EXE).file_name().ok_or("no file name")?);
-    std::fs::create_dir_all(executable.parent().ok_or("no parent")?)?;
-    let temporary = executable.with_extension("new");
-    std::fs::copy(EXE, &temporary)?;
-    std::fs::rename(&temporary, &executable)?;
-    Staged::write_beside(&executable, id)?;
-    Ok(executable)
 }
 
 /// What the test answers as the outer terminal.

@@ -938,6 +938,10 @@ impl Pane {
     /// meanwhile), so the bytes neither split one of the program's sequences nor are split by it. The terminal's
     /// replies to them are dropped: the program asked for none. Nothing for empty `data`.
     ///
+    /// On Windows the pseudoconsole's buffer never holds them, so a later resize of the session, which makes conhost
+    /// repaint its viewport from that buffer, paints over what of them the viewport shows
+    /// (`docs/backlog/a-windows-resize-repaints-over-printed-text.md`).
+    ///
     /// # Errors
     ///
     /// [`PrintError::Ended`] once the program ended; [`PrintError::InsideSequence`] when its output still stood

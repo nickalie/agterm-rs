@@ -173,8 +173,8 @@ impl ActorHandle {
         }
     }
 
-    /// [`ActorHandle::resize`], reporting a failure: how a process that took a pseudoconsole over (rebuilt from
-    /// handed-over handles) checks that it can drive it, `ResizePseudoConsole` reaching its console host.
+    /// [`ActorHandle::resize`], reporting a failure: whether `ResizePseudoConsole` reached the console host. Every
+    /// call, to the size it has too, makes the console host repaint its viewport from its own buffer.
     ///
     /// # Errors
     ///

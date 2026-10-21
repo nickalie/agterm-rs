@@ -16,26 +16,24 @@
 )]
 mod support;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use agterm_session::build_id::{self, Staged};
+use agterm_session::build_id;
 use agterm_session::endpoint::{self, Endpoint, Stream};
 use agterm_session::protocol::{
     ApiCall, ApiReply, ApiRequest, ApiResponse, AttachClientMessage, AttachRequest, AttachServerMessage,
-    CAPABILITY_HANDOFF_REQUEST, Control, ErrorCode, HandoffRequest, HandoffResult, Hello, PROTOCOL_VERSION,
+    CAPABILITY_HANDOFF_REQUEST, Control, ErrorCode, GridSize, HandoffRequest, HandoffResult, Hello, PROTOCOL_VERSION,
     ReplyMetadata, Role, SessionSpec, read_frame, write_control, write_message,
 };
 use agterm_session::server::handoff::Support;
 use agterm_session::server::lifecycle::Graces;
 use agterm_session::server::spawn::{Connected, HandoffAttempt, StartOptions, connect_existing, connect_or_start};
 use agterm_session::server::{self, BUILD_ID, ServerConfig};
-use support::{PATIENCE, SIZE, TestResult, shell, spec};
-
-const EXE: &str = env!("CARGO_BIN_EXE_agterm-session");
+use support::{EXE, PATIENCE, SIZE, TestResult, shell, spec, stage};
 
 /// A server's sessions: each one's name and its program's pid.
 type Sessions = Vec<(String, Option<i32>)>;
@@ -116,6 +114,15 @@ impl Namespace {
         }
     }
 
+    fn print(&self, name: &str, text: &str) -> TestResult {
+        let request = ApiRequest::Print {
+            name: name.to_owned(),
+            data: text.as_bytes().to_vec(),
+        };
+        self.api(&StartOptions::new(EXE), request)?;
+        Ok(())
+    }
+
     fn type_line(&self, name: &str, line: &str) -> TestResult {
         let enter = if cfg!(windows) { "\r" } else { "\n" };
         let request = ApiRequest::Type {
@@ -158,12 +165,8 @@ impl Drop for Namespace {
         if pid == std::process::id() {
             return;
         }
-        let gone = || {
-            agterm_session::job::read_table()
-                .is_some_and(|table| !table.iter().any(|entry| u32::try_from(entry.record.pid) == Ok(pid)))
-        };
         let deadline = Instant::now() + PATIENCE;
-        while Instant::now() < deadline && !gone() {
+        while Instant::now() < deadline && support::process_runs(pid) != Some(false) {
             thread::sleep(Duration::from_millis(100));
         }
     }
@@ -265,6 +268,21 @@ impl Client {
         Ok(())
     }
 
+    /// Resize the session to `size`, as its leader; until the server reports the session at that size.
+    fn resize(&mut self, size: GridSize) -> TestResult {
+        write_message(&mut &*self.stream, &AttachClientMessage::Resize { size })?;
+        loop {
+            let message = self
+                .messages
+                .recv_timeout(PATIENCE)
+                .map_err(|_| format!("the resize to {size:?} was never reported"))?;
+            if matches!(message, AttachServerMessage::Resized { size: got, .. } if got == size) {
+                return Ok(());
+            }
+            self.take(message)?;
+        }
+    }
+
     /// Until the server closed the connection (reading what came before it).
     fn closed(&mut self) -> TestResult {
         let deadline = Instant::now() + PATIENCE;
@@ -305,6 +323,9 @@ fn numbered(count: u32) -> String {
     }
 }
 
+/// Text `print` wrote on the screen, the shell's output after it.
+const PRINTED: &str = "printed-mark";
+
 #[test]
 fn a_handoff_keeps_the_shell_its_screen_and_its_scrollback() -> TestResult {
     let namespace = Namespace::new()?;
@@ -314,6 +335,9 @@ fn a_handoff_keeps_the_shell_its_screen_and_its_scrollback() -> TestResult {
     namespace.type_line("kept", &numbered(80))?;
     namespace.wait_screen("kept", "line80")?;
     before.expect("line80")?;
+    namespace.print("kept", PRINTED)?;
+    namespace.type_line("kept", &support::tagged("printed"))?;
+    namespace.wait_screen("kept", "got:printed")?;
     let (sessions, old) = namespace.sessions()?;
     assert_eq!(sessions.len(), 1, "{sessions:?}");
 
@@ -325,14 +349,24 @@ fn a_handoff_keeps_the_shell_its_screen_and_its_scrollback() -> TestResult {
     assert_ne!(new, old, "another server serves");
     assert_eq!(after, sessions, "the same session, its shell the same process");
     let screen = namespace.screen("kept")?;
-    for line in ["line1\n", "line40\n", "line80"] {
+    for line in ["line1\n", "line40\n", "line80", PRINTED] {
         assert!(screen.contains(line), "{line:?} lost from the scrollback: {screen}");
     }
     let mut again = Client::attach(&namespace, &options, "kept", None)?;
     again.expect("line80")?;
     namespace.type_line("kept", &print_variable("MARK"))?;
     again.expect("got:kept-state")?;
-    namespace.wait_screen("kept", "got:kept-state")?;
+    let screen = namespace.wait_screen("kept", "got:kept-state")?;
+    assert!(screen.contains(PRINTED), "the printed text did not last: {screen}");
+
+    // the new server drives the PTY it took over: a real resize reaches the shell
+    let size = GridSize {
+        cols: SIZE.cols + 20,
+        rows: SIZE.rows + 10,
+    };
+    again.resize(size)?;
+    namespace.type_line("kept", &support::size_line())?;
+    namespace.wait_screen("kept", &format!("SIZE={}x{}", size.rows, size.cols))?;
     Ok(())
 }
 
@@ -395,18 +429,6 @@ fn a_failed_handoff_is_not_asked_again_and_the_clients_stay_attached() -> TestRe
     namespace.type_line("once", &support::tagged("still-attached"))?;
     after.expect("got:still-attached")?;
     Ok(())
-}
-
-/// A staged root holding a copy of the binary with `id` staged beside it; the executable's path.
-fn stage(root: &Path, id: &str) -> TestResult<PathBuf> {
-    let executable = root.join("bin").join(Path::new(EXE).file_name().ok_or("no file name")?);
-    std::fs::create_dir_all(executable.parent().ok_or("no parent")?)?;
-    // replaced through a new file, as a stager does (on Windows a server never runs it: it runs a private copy)
-    let temporary = executable.with_extension("new");
-    std::fs::copy(EXE, &temporary)?;
-    std::fs::rename(&temporary, &executable)?;
-    Staged::write_beside(&executable, id)?;
-    Ok(executable)
 }
 
 #[test]
