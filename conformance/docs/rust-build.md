@@ -136,9 +136,13 @@ script for PowerShell, which Ghostty does not integrate).
 Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
-The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over the three login shells, each leg with
+The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over three login shells, each leg with
 `--must-pass live-any-shell`: bash, fish and zsh. The zsh leg, the one host where the build claims `live-sessions`,
 also runs with `--must-pass live-sessions`, as reference-macos.
+No leg runs a PowerShell login shell, so the suite does not hold PowerShell's part of the claim: below it,
+`.github/workflows/cross-platform.yml` runs `agterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the
+integration's marks and working directory, the foreground read, a replay) on Linux, macOS and Windows, and
+`agterm-core`'s replay round trip through a real `pwsh` where one is installed.
 
 ## The `live` group
 

@@ -1537,16 +1537,27 @@ Order after Task 7, as two lanes that meet:
 
 ### Task 30: [Final] Update documentation
 
-- [ ] README: building libghostty-vt per OS (Zig pin, the script, then cargo; Git Bash on Windows; the VM
+- [x] README: building libghostty-vt per OS (Zig pin, the script, then cargo; Git Bash on Windows; the VM
       prerequisites), the recorded patches, staging with `agterm-session`, the server's lifecycle, Windows and macOS
       notes, CI (`cross-platform.yml`)
-- [ ] CLAUDE.md, as rules, not details: crate map (`agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty`,
+      - Native dependencies > macOS and Windows (what builds there, the order, Xcode's command-line tools, VS Build
+        Tools, Git for Windows, `pwsh`, the Git Bash and MSVC links, the cross builds); the patch record pointer; a
+        Live sessions section (namespace and endpoint per OS, start on demand and detach per OS, the idle stop, the
+        in-process attach and the CLI, the update handoff); the intro and the PowerShell extension. Staging and CI
+        were already current
+- [x] CLAUDE.md, as rules, not details: crate map (`agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty`,
       `agterm-term` and `agterm-session` as `any`; `agterm-zmx` gone; the paragraph on the libghostty-vt crates'
       platform); the patch rule with its recorded-exception form; the reference rule names herdr as the source of the
       session server; the isolation rules for the session server per namespace and the Windows pipe
-- [ ] `conformance/docs/rust-build.md` and `conformance/README.md`: zmx mentions, the harness's Rust adapter, any
+      - the crate map was current; the libghostty-vt paragraph states today's build, a Gates rule for Ghostty patches,
+        a herdr reference rule (with the herdr bump beside the upstream-release rule), the isolation rule's Windows
+        namespace and pipe
+- [x] `conformance/docs/rust-build.md` and `conformance/README.md`: zmx mentions, the harness's Rust adapter, any
       capability claimed for pwsh live sessions
-- [ ] move this plan to `docs/plans/completed/`
+      - zmx mentions and the adapter were current (only upstream's and the fork's zmx left); PowerShell in
+        `live-any-shell`'s summary, and rust-build.md says no suite leg runs a PowerShell login shell and where its
+        live sessions are tested instead
+- [x] move this plan to `docs/plans/completed/` (skipped: the harness moves the plan once every phase is done)
 
 ## Post-Completion
 

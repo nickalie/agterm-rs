@@ -1,7 +1,10 @@
 # agterm-rs
 
 agterm in Rust: a GPUI terminal over Ghostty's libghostty-vt, driven by `ngtermctl` over a control socket. macOS,
-Linux and Windows are equal targets; today it is built and tested on Linux, and everything below is the Linux build.
+Linux and Windows are equal targets. Today the app is built and tested on Linux; the terminal core, the pane core and
+the live-session server under it (libghostty-vt, `agterm-pty`, `agterm-term`, `agterm-session` and the crates
+[CI](#ci) lists) build and test on all three ([macOS and Windows](#macos-and-windows)). Everything else below is the
+Linux build unless it names another OS.
 
 - The parity target is upstream macOS agterm ([umputun/agterm](https://github.com/umputun/agterm) v0.36.0): its wire
   protocol, command semantics, error strings, `agtermctl` (here `ngtermctl`), on-disk formats, model and UI, the UI
@@ -24,17 +27,19 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
   `~/.local/bin/agtermctl` is left alone, and it resolves the fork's socket), and Install Agent Skill… installs the
   `ngterm` skill, which drives the app through `ngtermctl`, into `~/.claude/skills/ngterm` and `~/.codex/skills/ngterm`
   beside the fork's `agterm` skill.
-- One extension beyond upstream: Live sessions in bash and fish login shells too (upstream: zsh only), under the
-  Rust-only capability `live-any-shell`.
+- One extension beyond upstream: Live sessions in bash, fish and PowerShell login shells too (upstream: zsh only),
+  under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
+  (`resources/shell-integration/pwsh`), since Ghostty has none.
 - One behavior taken from the GTK fork instead of upstream: restore is lazy. A launch (or a window reopened from its
   file) spawns only each window's selected session; every other restored session starts its shell, re-runs its
-  command or attaches to its Live daemon once it is first shown (selected, zoomed, in the dashboard) or a command
+  command or attaches to its live session once it is first shown (selected, zoomed, in the dashboard) or a command
   needs its terminal (`session.type`, `paste`, `selectall`, `font.*`, `session.search`, `session.restart`,
   `live.present`). Until then the tree reports it `realized: false` and reads (`session.text`, `copy`) answer
   `session not realized`; its pin stays saved, its captured command carries over to the next launch through a clean
-  quit (not a crash: the launch takes a capture off disk so it replays only once), and its Live daemon keeps running,
-  so the tree still reports it `backedByLive`. Sessions made at runtime start at once, shown or not. With only the
-  shown sessions spawning, upstream's launch spawn pacer has nothing to pace, and the build has none.
+  quit (not a crash: the launch takes a capture off disk so it replays only once), and its live session keeps
+  running in the session server, so the tree still reports it `backedByLive`. Sessions made at runtime start at
+  once, shown or not. With only the shown sessions spawning, upstream's launch spawn pacer has nothing to pace, and
+  the build has none.
 - Parity is measured by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
 ## Prerequisites
@@ -42,7 +47,8 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).
 - Zig 0.16.0 for libghostty-vt (`LIBGHOSTTY_VT_ZIG_VERSION` in `build/pins.env`). `scripts/build-ghostty-vt.sh`
   takes `AGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH` or from mise, else it downloads the pinned ziglang.org archive
-  of the host's OS and arch and checks its sha256.
+  of the host's OS and arch and checks its sha256. A Mac or a Windows machine needs a little more
+  ([macOS and Windows](#macos-and-windows)).
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.
 - WPE WebKit 2.54+ with its WPEPlatform API for the HTML overlays (feature `html`, the default; see
   [WPE WebKit](#wpe-webkit)).
@@ -157,13 +163,13 @@ with the pinned zig the prefix's stamp names, installing and caching under its `
 cache in the vendor root (`zig-cache-<version>`), and fails with "run scripts/build-ghostty-vt.sh" when the prefix is
 missing; `agterm-gpui` fails with "run scripts/fetch-fonts.sh". A fresh `OUT_DIR` (a new target dir or profile) builds
 the library again, a few minutes.
-libghostty-vt builds the same way on macOS and Windows (`.github/workflows/cross-platform.yml` checks both):
-`scripts/build-ghostty-vt.sh` runs under stock macOS's bash 3.2 and under Git Bash on Windows, with the pinned Zig of
-the host's OS and arch (`LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>`); on Windows the build script runs it with Git for
-Windows's `bin\bash.exe`, found beside `git.exe` or under the install locations (never `bash` from `PATH`, which can
-be WSL's), and links `ghostty-vt-static` through MSVC. `AGTERM_GHOSTTY_VT_PREFIX` names a prepared prefix and skips
-the script on any OS. `tic` on macOS and Windows writes the terminfo in its hashed layout (`share/terminfo/78/`),
-which every reader takes beside `x/`; the terminfo source (`share/terminfo/ghostty.terminfo`) is staged everywhere.
+libghostty-vt builds the same way on macOS and Windows ([macOS and Windows](#macos-and-windows)).
+`AGTERM_GHOSTTY_VT_PREFIX` names a prepared prefix and skips the script on any OS.
+The patches `scripts/build-ghostty-vt.sh` applies to the pinned source (`build/patches/ghostty-vt/`, in name order,
+with no fuzz) are recorded in [that directory's README](build/patches/ghostty-vt/README.md): one exposes data the
+library stores as C API the app needs, the others change its logic for a fix or a parity behavior Rust cannot reach
+from outside, each with its reason, upstream status, remove-when condition and verification. A pin bump rebases them
+all and re-runs every verification, and drops a patch only once the pinned source has its behavior.
 `LIBGHOSTTY_VT_*` is the one Ghostty pin (the source archive's sha256 and the theme package's included): it follows
 ghostty main, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
 statically; staging takes the prefix's `share/` (the resources) only. `.cargo/config.toml` makes `scripts/pkg-config.sh`
@@ -190,6 +196,45 @@ turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (t
 ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child
 created in its job, a ConPTY session's handles exported and imported for the session server's update handoff) is
 the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
+
+### macOS and Windows
+
+What builds there today is the crates the `cross-platform.yml` workflow runs ([CI](#ci)): libghostty-vt and its
+wrapper, `agterm-pty`, `agterm-term`, `agterm-session`, `agterm-proto`, `agterm-host` and `agterm-core`. The app,
+`agterm-ctl` and `agterm-app` build on Linux only, and `agterm-server` compiles for macOS but is not run there
+([CI](#ci) says what each waits for). The order is Linux's: the pinned Zig (fetched by the script when none is
+found), the script, then cargo:
+
+```sh
+scripts/build-ghostty-vt.sh    # stock bash 3.2 on macOS, Git Bash on Windows
+cargo test -p agterm-session -p agterm-proto -p agterm-host -p agterm-core -p agterm-ghostty-vt-sys \
+  -p agterm-ghostty-vt -p agterm-pty -p agterm-term
+```
+
+A Mac, a Windows machine or a VM of either needs, besides Rust from rustup (`rust-toolchain.toml`):
+
+- macOS: Xcode's command-line tools (`xcode-select --install`), the C toolchain and SDK that rustc links with and
+  Zig's macOS build of libghostty-vt reads (highway's `apple_sdk`). curl, tar, patch, `shasum` and `tic`/`infocmp`
+  are stock.
+- Windows: Visual Studio Build Tools with the C++ workload (MSVC and the Windows SDK): rustc's `*-pc-windows-msvc`
+  targets link through it, and Zig builds libghostty-vt for `windows-msvc` only against it. Git for Windows: its Git
+  Bash runs the script and brings curl, tar, patch, `sha256sum`, `unzip` (Zig's archive), `tic`/`infocmp` and
+  `cygpath`. PowerShell 7 (`pwsh`): `agterm-session`'s PowerShell session tests require it on Windows and run
+  elsewhere wherever one is installed.
+
+The script picks the pinned Zig of the host's OS and arch (`LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>`). On Windows the sys
+crate's build script runs it with Git for Windows's `bin\bash.exe`, found beside `git.exe` or under the install
+locations (never `bash` from `PATH`, which can be WSL's), takes the MSYS path it prints through `cygpath -m`, and
+links `ghostty-vt-static` through MSVC; on macOS it links the static archive from a directory of its own, built for
+the deployment target rustc links for. `tic` on macOS and Windows writes the terminfo in its hashed layout
+(`share/terminfo/78/`), which every reader takes beside `x/`; the terminfo source (`share/terminfo/ghostty.terminfo`)
+is staged everywhere. Targets no machine runs natively are cross-built with `cargo build -p agterm-ghostty-vt-sys
+--target …`, as CI does: aarch64 Linux and x86_64 macOS from Linux, aarch64 Windows from Windows (Zig finds no MSVC
+headers from Linux).
+
+The live-session server works the same on all three ([Live sessions](#live-sessions)), each OS with its own detach and
+endpoint. A live session on Windows runs PowerShell, `pwsh.exe` (PowerShell 7) from `PATH`, else Windows
+PowerShell's `powershell.exe`, with ngterm's integration script.
 
 ### WPE WebKit
 
@@ -259,6 +304,38 @@ D-Bus name above), or, with no bus between them, shares its `windows.json`.
 
 `AGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `agterm.log` in the state dir.
 
+## Live sessions
+
+Under the restore mode `live` (Settings, or `ngtermctl restore mode`) each main and split pane runs its program in a
+live session that outlives the app, held by the session server `agterm-session` (`crates/agterm-session`, taken from
+[herdr](https://github.com/herdrdev/herdr)'s background session server at `HERDR_REV` in `build/pins.env`). Plain
+panes keep a PTY of their own, and an instance with live sessions off starts no server.
+
+- One server per instance. Its namespace is a directory named by the FNV-1a 64 hash of the state dir's resolved path:
+  `/tmp/ngterm-live-<hash>` on Linux and macOS, created owner-only, holding the server's socket (`server.sock`) and
+  the lock (`server.lock`) the server holds while it listens; `%LOCALAPPDATA%\ngterm\live\<hash>` on Windows, whose
+  server listens on a named pipe named after that directory, owner-only and closed to remote clients, and a client
+  refuses a pipe whose server runs as another user. A private state dir gives a private namespace, and with it a
+  private server.
+- Started on demand: the first attach that finds no server (a live pane's, or `agterm-session attach`'s) runs
+  `agterm-session server <namespace>` detached from itself and waits for it to answer; clients that race to start one
+  end up on the same server. Detached per OS: a session of its own on Linux; on macOS also made responsible for
+  itself, so it and its sessions keep their own privacy permissions rather than the app's; on Windows a detached
+  process outside every job of the launcher's, run from a private copy of the binary in the namespace directory, so
+  a new build can be staged over the running one.
+- Stopped by itself: never while a session lives, and a few seconds after it holds no session and no client.
+  Sessions end with their programs, or through `ngtermctl live kill` and `live reset`.
+- The app's live panes attach in process through the server's client library: the session's snapshot, then its raw
+  output, into the pane's own libghostty-vt terminal. `agterm-session attach` is the attach contract's terminal
+  client (the `AGTERM_LIVE_*` variables), which the remote path and a terminal outside the app run;
+  `ngtermctl clipboard set` writes through `agterm-session print`. `agterm-session --help` lists the rest (`list`,
+  `kill`, `screen`, `type`, `version`).
+- The update handoff: a launch that finds a server of another build than the staged one (its id in
+  `share/ngterm/session-BUILD`) asks it to hand every session over to the staged binary. The programs keep running
+  with their terminals: the PTYs pass to the new server (descriptors on Linux and macOS; on Windows the ConPTY handles,
+  only on the Windows builds the handoff was proven on). A failed handoff rolls back, the sessions stay with the old
+  server, and the app offers the Live sessions reset.
+
 ## Test
 
 The gates every change passes (CI runs the same checks):
@@ -326,12 +403,14 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
-- `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, agterm's own themes.
+- `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over
+  upstream's, agterm's own themes.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.
 - `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `resources/`: the agent-status hooks and agent skill the app installs (the skill's source stays at
-  `resources/skills/agterm`, upstream's name; it installs as `ngterm`).
+  `resources/skills/agterm`, upstream's name; it installs as `ngterm`), and ngterm's PowerShell integration
+  (`shell-integration/pwsh`), which live sessions load.
 - `docs/linux-ui-checklist.md`: every upstream UI feature with its Linux form and manual check (no Linux UI driver
   exists). `docs/plans/`: implementation plans.

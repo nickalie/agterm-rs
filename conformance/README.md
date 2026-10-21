@@ -104,9 +104,9 @@ upstream.
 The per-platform rule above applies to the two Swift references.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-rust-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
-A Rust-only extension (today `live-any-shell`, Live sessions in bash and fish login shells) is a capability neither
-reference claims: its tests skip as unsupported on both references and are validated by the Rust CI with
-`--must-pass` on the capability (see rust-build.md > Rust-only extensions).
+A Rust-only extension (today `live-any-shell`, Live sessions in bash, fish and PowerShell login shells) is a
+capability neither reference claims: its tests skip as unsupported on both references and are validated by the Rust
+CI with `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 
 ## Rust runner and ratchet
 

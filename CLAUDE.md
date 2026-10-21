@@ -41,10 +41,11 @@ The platform column is where a crate builds and works today. `any` is a crate CI
 Windows: the cross-platform workflow's package list is the record (README > CI), and a crate joins it in the change
 that makes it build on all three. A crate that names its OSes has its other forms open under the platform rules; the
 control server and its CLI are meant to be `any`: the server waits for its Windows form, the CLI for its macOS and
-Windows forms. The libghostty-vt crates were `Linux` while the native library build behind them
-(`scripts/build-ghostty-vt.sh`, which the sys crate's build script calls) targeted Linux only; it builds with each
-OS's pinned Zig now, so they are `any`. An `any` crate may depend on another `any` crate, the libghostty-vt ones
-included; a crate built on fewer OSes enters it only behind the `cfg` of those OSes.
+Windows forms. The libghostty-vt crates hold no OS-specific Rust, and the native library behind them is built for
+cargo's target by the sys crate's build script, with the Zig `build/pins.env` pins for the host's OS and arch, over
+the source prefix `scripts/build-ghostty-vt.sh` prepares (README > Native dependencies), so they are `any`. An `any`
+crate may depend on another `any` crate, the libghostty-vt ones included; a crate built on fewer OSes enters it only
+behind the `cfg` of those OSes.
 
 GPUI owns the main thread and the whole state; control connections, the single-instance bus and the signal thread hop
 onto it through `MainLoop`. Work that needs no live terminal or widget belongs in `agterm-core`, unit-tested against
@@ -64,6 +65,14 @@ toolkit-neutral, so another frontend can drive them.
   the module docs, never dependencies: qwertty-term (a Rust port of Ghostty's subsystems, the first place to look),
   gpui-ghostty (a GPUI terminal element) and rustty (Kitty placement chains). Zed's terminal is GPL: ideas only, copy
   nothing.
+- The session server's reference is herdr at the commit `build/pins.env` pins (`HERDR_*`): `agterm-session` and
+  `agterm-pty` take its background session server, PTY actor and `portable-pty` fixes as code (Apache-2.0), and its
+  libghostty-vt fixes are carried as recorded patches (Gates). Each derived file names the herdr file it comes from,
+  its license and that it was modified; `NOTICE` carries herdr's license. Read it in `.upstream/herdr`, a read-only
+  clone at that commit, git-ignored like upstream's (when it is missing, clone `HERDR_REPO` and check out
+  `HERDR_REV`). herdr is the source of the server's design and code, not of what the app shows: the `live.*` group,
+  its error strings and the attach contract follow upstream, and none of herdr's names, paths or sockets reach the
+  build.
 - The Linux fork (`../agterm-linux`) is consulted only for Linux glue upstream has no counterpart for: XDG paths, and
   what its GTK build expects of another instance (single-instance forwarding). Never port from it.
 - Where upstream and the fork differ, upstream wins (`conformance/docs/fork-bugs.md` lists the cases the suite pins).
@@ -95,8 +104,10 @@ toolkit-neutral, so another frontend can drive them.
 
 A new upstream release moves the catalog's tag (`conformance/tools/gen_catalog.py`) and `.upstream/agterm` together. The
 build runs no zmx: what an upstream release changes in its zmx (the pin, its patches) is ported into `agterm-session` as
-behavior, under `live.*` and the attach contract. The Ghostty pin follows ghostty main, not upstream's libghostty: its
-bump is a change of its own, with what it regenerates (`build/pins.env` names it).
+behavior, under `live.*` and the attach contract. A herdr bump is a change of its own, never part of an upstream
+sync: its session-server changes are ported into `agterm-session`, its libghostty-vt patches through the Ghostty patch
+record. The Ghostty pin follows ghostty main, not upstream's libghostty: its bump is a change of its own, with what it
+regenerates (`build/pins.env` names it).
 
 ## Gates
 
@@ -105,6 +116,11 @@ bump is a change of its own, with what it regenerates (`build/pins.env` names it
 - A function over a complexity limit (`clippy.toml`) is split, not excused. The only exception is an outer
   `#[expect(clippy::..., reason = "...")]` on that one item; `#[allow]` and inner `#![allow]`/`#![expect]` are refused.
 - Thresholds in `clippy.toml` are lowered, never raised. A `rust-toolchain.toml` bump is a change of its own.
+- A Ghostty patch (`build/patches/ghostty-vt/`) exposes data the library already stores, as C API. A patch that
+  changes the library's logic is taken only for a fix or a parity behavior Rust cannot reach from outside, and only
+  recorded in that directory's README, with its reason, upstream status, a remove-when condition and its
+  verification. A gap Rust can fill is filled in Rust. A pin bump rebases every patch and drops each one whose
+  remove-when condition the new pin meets.
 - Generated bindings change only through their generator scripts. The patched third-party crates under `vendor/` are
   their sources plus `build/patches/`: an edit there goes back into its patch (`scripts/vendor-gpui.sh`,
   `scripts/vendor-calloop.sh`, `scripts/vendor-portable-pty.sh`), and each script's check holds.
@@ -121,9 +137,11 @@ agterm runs its sessions on zmx) point at it. Every dev instance, probe or `ngte
 - Give every `ngtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
   the CLI resolves the live instance's socket.
 - Use a private state dir, so the instance's live-session namespace, and with it the one session server serving it,
-  is private too. Live sessions outlive the app by design: reap only through that namespace's own server, or the
-  processes the namespace names (its server's command line, its sessions' attach-contract environment), never by name
-  (`pkill agterm-session`), and never run `agterm-session` against any other namespace than that instance's.
+  is private too: its socket directory on Unix, its namespace directory and the named pipe named after it on Windows.
+  Live sessions outlive the app by design: reap only through that namespace's own server, or the processes the
+  namespace names (its server's command line, its sessions' attach-contract environment), never by name
+  (`pkill agterm-session`, `taskkill /im`), and never run `agterm-session` against, or connect to the pipe of, any
+  other namespace than that instance's.
 - Run the GUI headless (the suite's private compositor and dbus, or `xvfb-run` with a private bus for `cargo test`),
   never on the user's desktop: nothing a run starts draws on the user's display or joins its compositor or bus. GPUI
   renders through Vulkan, so a headless app instance (the suite's, the window tests') renders on Mesa's lavapipe alone
