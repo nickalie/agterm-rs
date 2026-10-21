@@ -1497,6 +1497,7 @@ Order after Task 7, as two lanes that meet:
 
 - [x] libghostty-vt builds from the sys crate's build script on Linux, macOS and Windows with networking off once the
       prefix exists; `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty`, `agterm-term`, `agterm-session` (and
+      `agterm-app` if Task 15 joined it) test green on all three in `cross-platform.yml`
       - 2026-10-21: the sys crate built from a fresh target dir inside `unshare --net` (`cargo build --offline`,
         zig build under `OUT_DIR`, 1 m 17 s); `cross-platform.yml` 39653260400 green on ubuntu-26.04, macos-26 and
         windows-2025 (the crates of README > CI, `agterm-app` not among them)

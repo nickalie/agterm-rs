@@ -10,6 +10,7 @@
 //! `#[ignore]`d (CI has no niri): run it with `--ignored`.
 
 #[macro_use]
+#[expect(dead_code, reason = "the sandbox serves the process tests too")]
 mod support;
 
 use std::collections::BTreeMap;

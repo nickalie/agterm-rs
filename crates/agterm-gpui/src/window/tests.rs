@@ -5,6 +5,7 @@ use agterm_core::app_actions::FrontendAction;
 use agterm_core::model::WindowLibrary;
 use agterm_core::{CoreConfig, CoreState};
 use agterm_proto::AppIdentity;
+use agterm_proto::command::WindowCmd;
 use gpui_kit::{TestAppContext, px, size};
 
 use super::*;
@@ -89,6 +90,45 @@ fn a_pending_minimize_is_reported_until_the_read_back_confirms_it() {
         (None, false),
         "no read-back (Wayland)"
     );
+}
+
+#[test]
+fn a_raise_the_window_manager_does_not_answer_leaves_no_mark_on_the_users_later_activation() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let second = library.new_window(None);
+    let mut state = AppState::new(core(library));
+    let (first_mark, second_mark) = (RaiseMark::default(), RaiseMark::default());
+    // `window.select` raises the first window while it holds the keyboard: no activation answers it
+    state.window_activated(first, None);
+    let select = crate::keymap_actions::window_request(WindowCmd::Select, first, None);
+    assert!(state.core.dispatch(&select).ok);
+    first_mark.raised(true, state.core.frontmost_takes(), Instant::now());
+    // `window.go` raises the second, which the window manager activates, and the first loses the keyboard
+    let go = crate::keymap_actions::window_request(WindowCmd::Select, second, None);
+    assert!(state.core.dispatch(&go).ok);
+    second_mark.raised(false, state.core.frontmost_takes(), Instant::now());
+    let answer = second_mark.activated();
+    assert!(matches!(answer, Some(FirstFocus::Raised { .. })), "{answer:?}");
+    state.window_activated(second, answer);
+    first_mark.deactivated();
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+    // the user clicks the first window within the grace: their activation counts
+    let user = first_mark.activated();
+    assert_eq!(user, None);
+    state.window_activated(first, user);
+    assert_eq!(state.key_window(), Some(first));
+    assert_eq!(state.core.library().frontmost_window_id, Some(first));
+    // a raise the window manager declined (the window lost the keyboard instead) leaves no mark either
+    second_mark.raised(false, state.core.frontmost_takes(), Instant::now());
+    second_mark.deactivated();
+    assert_eq!(second_mark.activated(), None);
+    // an answer counts only within the grace
+    second_mark.raised(false, 7, Instant::now().checked_sub(RAISE_ANSWER_GRACE).unwrap());
+    assert_eq!(second_mark.activated(), None);
+    second_mark.raised(false, 7, Instant::now());
+    assert_eq!(second_mark.activated(), Some(FirstFocus::Raised { frontmost_takes: 7 }));
+    assert_eq!(second_mark.activated(), None, "the mark goes with the activation");
 }
 
 fn core(library: WindowLibrary) -> Core {

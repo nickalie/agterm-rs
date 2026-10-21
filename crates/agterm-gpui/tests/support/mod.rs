@@ -19,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod lavapipe;
+pub mod live;
 
 pub use lavapipe::lavapipe_icd;
 

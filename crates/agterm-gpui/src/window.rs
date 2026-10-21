@@ -230,8 +230,7 @@ pub struct WindowView {
     /// What the window's first activation knows of its build, until that activation or [`FIRST_FOCUS_GRACE`] after
     /// its first frame.
     first_focus: FirstFocusCell,
-    /// When a command last raised the window and the core's frontmost takes then, until the window's next activation
-    /// (the window manager's answer to the raise, within [`RAISE_ANSWER_GRACE`]).
+    /// When a command last raised the window and the core's frontmost takes then ([`RaiseMark`]).
     raised: RaiseCell,
     poster: Poster,
     _subscriptions: Vec<Subscription>,
@@ -240,8 +239,34 @@ pub struct WindowView {
 /// A window's first activation's knowledge of its build, shared with its activation observer ([`FirstFocus`]).
 type FirstFocusCell = Rc<Cell<Option<FirstFocus>>>;
 
-/// When a command last raised a window and the core's frontmost takes then, shared with its activation observer.
-type RaiseCell = Rc<Cell<Option<(Instant, u64)>>>;
+/// A window's last raise by a command, shared with its activation observer.
+type RaiseCell = Rc<RaiseMark>;
+
+/// When a command last raised a window and the core's frontmost takes then, until the window's next activation, which
+/// within [`RAISE_ANSWER_GRACE`] counts as the window manager's answer to that raise ([`FirstFocus::Raised`]).
+#[derive(Debug, Default)]
+struct RaiseMark(Cell<Option<(Instant, u64)>>);
+
+impl RaiseMark {
+    /// A command raised the window at `at`, the core's frontmost takes standing at `frontmost_takes`. A window that
+    /// already holds the keyboard (`active`) gets no activation in answer, so its raise leaves no mark that a later
+    /// activation, the user's own, would be taken for.
+    fn raised(&self, active: bool, frontmost_takes: u64, at: Instant) {
+        self.0.set((!active).then_some((at, frontmost_takes)));
+    }
+
+    /// The window took the keyboard: the answer to its last raise when that came within [`RAISE_ANSWER_GRACE`]. The
+    /// mark goes either way.
+    fn activated(&self) -> Option<FirstFocus> {
+        let (at, frontmost_takes) = self.0.take()?;
+        (at.elapsed() < RAISE_ANSWER_GRACE).then_some(FirstFocus::Raised { frontmost_takes })
+    }
+
+    /// The window lost the keyboard: a raise the window manager declined is not answered by a later activation.
+    fn deactivated(&self) {
+        self.0.set(None);
+    }
+}
 
 impl WindowView {
     /// The root of model window `id`, over `deck`, built when the core's frontmost takes stood at `frontmost_takes`;
@@ -328,7 +353,7 @@ impl WindowView {
         let posting = poster.clone();
         let first_focus = Rc::new(Cell::new(Some(FirstFocus::Built { frontmost_takes })));
         let (fresh, expiring) = (Rc::clone(&first_focus), Rc::clone(&first_focus));
-        let raised = Rc::new(Cell::new(None));
+        let raised = Rc::new(RaiseMark::default());
         let answering = Rc::clone(&raised);
         window.on_next_frame(move |_, cx| {
             cx.spawn(async move |cx| {
@@ -344,12 +369,11 @@ impl WindowView {
                 check_keyboard_left(cx);
             }
             if window.is_window_active() {
-                let raise = answering.take().and_then(|(at, frontmost_takes): (Instant, u64)| {
-                    (at.elapsed() < RAISE_ANSWER_GRACE).then_some(FirstFocus::Raised { frontmost_takes })
-                });
+                let raise = answering.activated();
                 let first = fresh.take().or(raise);
                 post(&posting, move |state: &mut AppState| state.window_activated(id, first));
             } else {
+                answering.deactivated();
                 post(&posting, move |state: &mut AppState| state.key_window_lost(id));
             }
         });
@@ -907,7 +931,8 @@ impl WindowView {
     pub fn apply(&self, request: WindowRequest, frontmost_takes: u64, window: &mut Window, cx: &mut App) {
         match request {
             WindowRequest::Raise(_) => {
-                self.raised.set(Some((Instant::now(), frontmost_takes)));
+                self.raised
+                    .raised(window.is_window_active(), frontmost_takes, Instant::now());
                 self.present(window, cx);
             }
             WindowRequest::Resize { size: requested, .. } => {
