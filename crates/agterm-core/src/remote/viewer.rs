@@ -889,6 +889,7 @@ impl Core {
             session,
             token,
             command,
+            attach: None,
             env: Vec::new(),
             cwd: None,
             remote: true,

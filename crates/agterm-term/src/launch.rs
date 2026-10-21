@@ -4,9 +4,11 @@
 //!
 //! - **Program**: a [`Launch`]'s command line, or else the host's login shell, runs through `/bin/sh -c` (libghostty
 //!   ran a surface's command that way on Linux, and core's foreground reader looks past exactly that wrapper). A live
-//!   pane's command is its `agterm-session attach` line ([`agterm_core::restore::spawn_plan::resolve_live_seed`]),
-//!   whose environment carries the wrap configuration from [`Runtime`]; a plain pane runs its seed's command, or the
-//!   login shell with its `initial_input` typed in.
+//!   pane runs no program: it attaches to its session in process ([`crate::session_io`]) with what its
+//!   `agterm-session attach` line would read ([`Launch::live`], from
+//!   [`agterm_core::restore::spawn_plan::resolve_live_seed`]): the line's session and creation argv, the environment
+//!   below (carrying the wrap configuration from [`Runtime`]) and the working directory; a plain pane runs its seed's
+//!   command, or the login shell with its `initial_input` typed in.
 //! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as
 //!   `sh -c` reads no rc file; `/S` with the outer quotes keeps the line's own quotes as written, which a quoted
 //!   program path needs), its tail passed as written ([`PaneCommand::raw_args`]). The login shell runs directly, as
@@ -43,6 +45,7 @@ use agterm_core::ghostty_config::{
     GhosttyConfig, InputSource, ShellIntegration, ShellIntegrationFeatures, WorkingDirectory,
 };
 use agterm_core::live::shell_integration::{self, Inherited, LoginShell};
+use agterm_core::live::support::LiveAttach;
 use agterm_core::paths::{self, Env, ProcessEnv};
 use agterm_core::restore::spawn_plan::LaunchSeed;
 use agterm_session::launch::Runtime;
@@ -479,6 +482,9 @@ pub struct Launch {
     pub env: Vec<(String, String)>,
     /// Variables of the app's own environment the program does not inherit.
     pub env_remove: Vec<String>,
+    /// A live pane's attach to its session, run in process in place of `command`, its shell line (which the exit
+    /// report then names).
+    pub live: Option<LiveAttach>,
 }
 
 impl Launch {
@@ -500,6 +506,7 @@ impl Launch {
             wait_after_command: seed.wait_after_command,
             env: merged,
             env_remove: Vec::new(),
+            live: seed.attach.clone(),
         }
     }
 }
@@ -543,7 +550,9 @@ pub fn resource_candidates(exe: Option<&Path>) -> Vec<PathBuf> {
 
 impl Pane {
     /// Start `launch` under `host` on a new PTY of `config`'s size, with the exit handling of a launched pane; the
-    /// launch's input is queued for the program at once.
+    /// launch's input is queued for the program at once. A live launch attaches to its session in process instead
+    /// (module docs); an attach that fails ends the pane with the CLI's status, reported through
+    /// [`crate::PaneEvent::Exited`].
     ///
     /// # Errors
     ///
@@ -558,7 +567,14 @@ impl Pane {
             write_limit: config.write_limit.max(input.len()),
             ..config.clone()
         };
-        let pane = Self::spawn(&prepared.command, &config)?;
+        let pane = match &launch.live {
+            Some(attach) => {
+                let (env, current_dir) = crate::session_io::app_environment();
+                let session = crate::session_io::resolve(attach, &prepared.command, env, current_dir);
+                Self::attach_live(session, &config)?
+            }
+            None => Self::spawn(&prepared.command, &config)?,
+        };
         if !input.is_empty() {
             pane.write(&input)?;
         }
@@ -982,6 +998,7 @@ mod tests {
             ],
             env_remove: vec!["AGTERM_LIVE_DIR".to_owned(), "GHOSTTY_SHELL_FEATURES".to_owned()],
             working_directory: Some(PathBuf::from("/nonexistent/dir")),
+            live: None,
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
         // `/bin/sh -c <line>`; on Windows (no `ComSpec` here) `cmd.exe /D /S /C "<line>"`
@@ -1249,6 +1266,11 @@ mod tests {
                 ("AGTERM_LIVE_DIR".to_owned(), "/d".to_owned()),
             ],
             live: true,
+            attach: Some(LiveAttach {
+                executable: "agterm-session".to_owned(),
+                session: "x".to_owned(),
+                argv: Vec::new(),
+            }),
         };
         let pane_env = vec![
             ("AGTERM_PANE_ID".to_owned(), "P".to_owned()),
@@ -1258,6 +1280,7 @@ mod tests {
         assert_eq!(launch.command.as_deref(), Some("agterm-session attach x"));
         assert_eq!(launch.initial_input.as_deref(), Some("ls\n"));
         assert_eq!(launch.working_directory, Some(PathBuf::from("/w")));
+        assert_eq!(launch.live, seed.attach, "the attach as data, run in process");
         assert_eq!(
             launch.env,
             [

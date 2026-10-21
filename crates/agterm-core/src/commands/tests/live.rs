@@ -445,6 +445,13 @@ fn a_live_launch_wraps_the_pane_in_its_daemon() {
     let token = uuid_string(live.left);
     let seed = live.fixture.core.request_pane_spawn(live.session, &token).unwrap();
     assert!(seed.live && !seed.wait_after_command && seed.initial_input.is_none());
+    // the attach as data is what the shell line runs: the in-process attach and the CLI's agree
+    let attach = seed.attach.clone().unwrap();
+    assert_eq!(attach.session, daemon_name(live.left));
+    assert_eq!(
+        seed.command.as_deref(),
+        Some(crate::live::support::settled(&crate::command_restore::shell_quoted_line(&attach.arguments())).as_str())
+    );
     let command = seed.command.unwrap();
     let executable = crate::live::test_executable(live.resources.path(), "sh");
     let attach = crate::command_restore::shell_quoted_line(&[executable.to_str().unwrap(), "attach"]);

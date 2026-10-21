@@ -169,6 +169,7 @@ fn a_seed_runs_over_the_panes_own_environment() {
             ("AGTERM_PANE".to_owned(), "over".to_owned()),
         ],
         live: true,
+        attach: None,
     };
     let launch = spec.seeded(&seed, &context());
     assert_eq!(launch.command.as_deref(), Some("agterm-session attach x"));

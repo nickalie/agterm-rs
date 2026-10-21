@@ -996,6 +996,7 @@ impl Deck {
         let old_points = old.shared.font_points();
         let mut launch = spec.launch(&self.env.context);
         launch.command = Some(replacement.command.clone());
+        launch.live.clone_from(&replacement.attach);
         // a remote replica's attach holds after its ssh, as the pane's first attach did
         launch.wait_after_command = replacement.remote;
         launch.env = merged_env(&launch.env, &replacement.env);

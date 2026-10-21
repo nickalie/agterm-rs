@@ -26,3 +26,7 @@ on paste, tmux) from terminals that never answer, against the cost of the asynch
 client waits and the stall stays; nothing to undo. Transcript:
 `/home/nick/.local/state/plan-exec-revmux/20261018-cross-platform-sessions/discussions/fixer-t22r1-clipboard-fence/transcript.md`
 (plan `docs/plans/20261018-cross-platform-sessions.md`, Task 22, review round 1).
+
+Since Task 26 ngterm's own live panes attach in process and answer a delegated read through the app's clipboard
+policy at once, so they never stall; the stall stays for the attach CLI in another terminal (the remote path, a
+user's own `agterm-session attach`).

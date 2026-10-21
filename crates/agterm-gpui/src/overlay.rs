@@ -549,6 +549,7 @@ fn launch(session: &Session, program: &Program, hud: &HudContext<'_>) -> agterm_
         wait_after_command: program.wait,
         env: context.local_environment(&code_file, None).into_iter().collect(),
         env_remove: Vec::new(),
+        live: None,
     }
 }
 

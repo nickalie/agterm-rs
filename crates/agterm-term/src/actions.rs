@@ -179,7 +179,7 @@ pub(crate) fn apply_clear(shared: &Shared, vt: &mut Vt) {
     if vt.terminal.cursor_at_prompt() {
         // erase the scrollback, then the whole screen through Ghostty's own complete erase, and let the shell repaint
         vt.terminal.vt_write(b"\x1b[3J\x1b[2J");
-        shared.push_reply(&[FORM_FEED]);
+        shared.push_input(&[FORM_FEED]);
     } else {
         let (_, row) = vt.terminal.cursor();
         let sequence = if row > 0 {

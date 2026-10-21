@@ -9,7 +9,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::command_restore::{RestoreInputs, restore_plan, shell_quoted_line, should_restore};
-use crate::live::support::{Configuration, attach_command, settled};
+use crate::live::support::{Configuration, LiveAttach, attach_line, live_attach, settled};
 use crate::model::{Session, StatusPane};
 
 /// What a pane spawns with: the exec `command`, the `initial_input` typed into a login shell, and whether a command's
@@ -25,6 +25,9 @@ pub struct LaunchSeed {
     /// The pane attaches to its live-session daemon (upstream's `backedByZmx`, `backedByLive` on the wire here), fixed
     /// at spawn as its disposition is.
     pub live: bool,
+    /// A live pane's attach as data, which the pane runs in process in place of `command` (its shell line); `None`
+    /// for any other pane, and behind a session host's client.
+    pub attach: Option<LiveAttach>,
 }
 
 /// The launch-wide inputs a seed is decided against (upstream's `LaunchSeedPolicy`).
@@ -107,17 +110,14 @@ pub fn resolve_live_seed(
         None
     };
     let denylist: Vec<&str> = policy.denylist.iter().map(String::as_str).collect();
+    let attach = live_attach(configuration, replay.as_deref(), creation.as_deref(), &denylist);
     LaunchSeed {
-        command: Some(settled(&attach_command(
-            configuration,
-            replay.as_deref(),
-            creation.as_deref(),
-            &denylist,
-        ))),
+        command: Some(settled(&attach_line(configuration, &attach))),
         initial_input: None,
         wait_after_command: false,
         env: configuration.environment.clone().into_iter().collect(),
         live: true,
+        attach: configuration.in_process(attach),
     }
 }
 

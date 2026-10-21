@@ -12,7 +12,6 @@ use uuid::Uuid;
 
 use super::PaneReplacement;
 use crate::Core;
-use crate::command_restore::shell_quoted_line;
 use crate::live::daemon_name;
 use crate::live::lead::{LeadAttachment, LeadNotice, LeadRole, LeadState};
 
@@ -225,18 +224,22 @@ impl Core {
         let Some(configuration) = self.wrap_configuration(identity, Some(attachment.clone())) else {
             return false;
         };
-        let mut arguments = configuration.attach_arguments();
-        arguments.extend(
-            ["/bin/sh", "-c", "printf '%s\\n' 'agterm: session is gone'; exit 1"]
+        // a session gone meanwhile is created only to say so and end
+        let attach = crate::live::support::LiveAttach {
+            executable: configuration.executable.clone(),
+            session: configuration.daemon_name.clone(),
+            argv: ["/bin/sh", "-c", "printf '%s\\n' 'agterm: session is gone'; exit 1"]
                 .into_iter()
-                .map(str::to_owned),
-        );
+                .map(str::to_owned)
+                .collect(),
+        };
         self.begin_replacement_lead(token, identity, attachment, true);
         self.live.leaders.borrow_mut().note_lifecycle_change();
         self.request_pane_replacement(PaneReplacement {
             session,
             token: token.to_owned(),
-            command: crate::live::support::settled(&shell_quoted_line(&arguments)),
+            command: crate::live::support::settled(&crate::live::support::attach_line(&configuration, &attach)),
+            attach: configuration.in_process(attach),
             env: configuration.environment.into_iter().collect(),
             cwd: None,
             remote: false,

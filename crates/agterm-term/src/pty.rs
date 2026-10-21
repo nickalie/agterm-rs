@@ -2,11 +2,12 @@
 //! bytes): what a pane runs, its grid as the PTY's size, the outlet the terminal's replies leave through, and what the
 //! pane reads of the PTY itself (its foreground process group and its input modes).
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use agterm_pty::{ActorHandle, WriteError};
 
 use crate::PaneError;
+use crate::session_io::{self, Live};
 
 /// What a pane runs, and how: `agterm-pty`'s command (its program, arguments, working directory and environment).
 pub use agterm_pty::Command as PaneCommand;
@@ -46,7 +47,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// Where the terminal's replies to the program go: the PTY actor's outbox, in the order they are made (never
 /// refused; the actor drops them past its hard cap, `agterm_pty::REPLY_CAP`). Replies made before the actor runs
-/// (a terminal driven without a PTY) wait here, and none are taken once the pane closed it.
+/// (a terminal driven without a PTY) wait here, and none are taken once the pane closed it. A live pane's terminal
+/// answers the program nothing but Kitty graphics commands, the server answering the rest
+/// ([`crate::session_io`]): those answers are kept for the server's next barrier.
 ///
 /// A reply is queued with [`ActorHandle::write_reply`], which waits for a read callback in progress. That is safe
 /// under the VT lock because the pane's read callback only copies into the pane's mailbox ([`crate::mailbox`]) and
@@ -61,6 +64,8 @@ enum Outlet {
     /// No actor yet: the replies so far, and their bytes.
     Buffered(Vec<Vec<u8>>, usize),
     Actor(ActorHandle),
+    /// A live pane's: its Kitty graphics answers since the last barrier, and the attach the pane's own input goes to.
+    Live(Vec<u8>, Arc<Live>),
     Closed,
 }
 
@@ -84,7 +89,34 @@ impl ReplyOutlet {
                 drop(state);
                 actor.write_reply(data);
             }
+            Outlet::Live(answers, _) => session_io::keep_kitty_answer(answers, data),
             Outlet::Closed => {}
+        }
+    }
+
+    /// Queue bytes the pane itself sends the program (a clear's form feed): a reply on a PTY, a live pane's input.
+    pub(crate) fn push_input(&self, data: &[u8]) {
+        let state = lock(&self.state);
+        if let Outlet::Live(_, live) = &*state {
+            let live = Arc::clone(live);
+            drop(state);
+            live.program_input(data);
+        } else {
+            drop(state);
+            self.push_reply(data);
+        }
+    }
+
+    /// Answer as a live pane's terminal from now on (before it parses anything).
+    pub(crate) fn go_live(&self, live: Arc<Live>) {
+        *lock(&self.state) = Outlet::Live(Vec::new(), live);
+    }
+
+    /// A live pane's Kitty graphics answers since the last call.
+    pub(crate) fn take_kitty_answers(&self) -> Vec<u8> {
+        match &mut *lock(&self.state) {
+            Outlet::Live(answers, _) => std::mem::take(answers),
+            _ => Vec::new(),
         }
     }
 
@@ -113,6 +145,7 @@ impl ReplyOutlet {
         match &*state {
             Outlet::Buffered(_, bytes) => *bytes,
             Outlet::Actor(actor) => actor.queued(),
+            Outlet::Live(answers, _) => answers.len(),
             Outlet::Closed => 0,
         }
     }

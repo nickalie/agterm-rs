@@ -1317,18 +1317,67 @@ Order after Task 7, as two lanes that meet:
   `crates/agterm-term/src/bench.rs`, `crates/agterm-term/Cargo.toml`, `crates/agterm-term/tests/launch.rs`
 - Create: `crates/agterm-term/src/session_io.rs`
 
-- [ ] core produces the live launch as structured data (session name, argv, environment, cwd); the shell line stays
+- [x] core produces the live launch as structured data (session name, argv, environment, cwd); the shell line stays
       for the CLI and remote paths, and tests prove both agree
-- [ ] the pane asks the server to create its session and attaches in process: no PTY, no subprocess, the same
+      - `live::support::LiveAttach` (executable, session, creation argv; `live_attach`), whose shell line is
+        `attach_line` (`attach_command` is both); `LaunchSeed.attach` and `PaneReplacement.attach` carry it
+        (`Configuration::in_process`: none behind a session host's client), `agterm_term::Launch.live` takes it from
+        the seed and the GPUI deck from a replacement. Its environment and cwd are the launch's own, as the CLI is
+        started with: the in-process attach reads the attach contract from the environment the CLI would see
+        (`agterm_session::cli::Contract`, `default_argv`) and the prepared command's directory. Agreement: core's
+        tests (the seed's command is the quoted `arguments()`, `the_attach_as_data_is_what_its_shell_line_runs`) and
+        `session_io::tests` (`cli::parse` of the arguments and the contract read from the child's environment give
+        the in-process session, refusals with the CLI's statuses)
+- [x] the pane asks the server to create its session and attaches in process: no PTY, no subprocess, the same
       IO-thread batching and VT slicing as the PTY path; a gone or refused session follows today's `ExitPolicy`;
       the snapshot encoding evaluated (binary codec at the same pin, else the formatter) and recorded
-- [ ] the pane sends the reply metadata on attach and on change, answers delegated requests (OSC 52 read) as the
+      - `agterm-term/src/session_io.rs`: `Pane::attach_live` (from `Pane::launch` when `Launch.live` is set); thread
+        `pane-live` attaches with `StartOptions` (starting the server), feeds snapshot and output to the pane's
+        mailbox (pausing past its high mark, the server resyncing a slow pane), ordered events (`LiveMail`: snapshot
+        end, reply owner, Kitty barrier, delegated read) through the mailbox to the same IO worker, reattaches for
+        `REATTACH_WAIT` after a shutdown or a lost connection (`RESYNC_RESET` first, claiming the lead it held), and
+        ends the pane through `pane::report_exit` with the session's status, or writes the failure and the CLI's
+        status (1, 2 for usage); `pane-live-out` sends queued input (the write limit, `Backpressure`), resizes,
+        metadata and answers in order. Dropping the pane detaches. The formatter snapshot stays (recorded in the
+        module docs): the binary codec decodes into a new terminal of the server's settings, not the pane's
+        configured one, both ends would need one pin and a wire choice, and at the pin it carries no Kitty images
+- [x] the pane sends the reply metadata on attach and on change, answers delegated requests (OSC 52 read) as the
       reply owner, and its VT answers Kitty graphics; its other VT replies stay suppressed
-- [ ] port `tests/launch.rs`'s live tests to the in-process attach (`every_fresh_live_launch_paints_its_prompt`, the
+      - `Live::metadata_of` (default colours and palette, cell pixels, Kitty graphics on, colour scheme) in the
+        attach request and on `set_colors`, `set_color_scheme` (no local 2031 report: the server sends it), a resize
+        and `set_kitty_image_limit`; a delegated read is a `PaneEvent::ClipboardRead` whose answer goes back to the
+        server (`answer_clipboard_read`), and the IO worker no longer stops at clipboard reads in a live pane's
+        output; `ReplyOutlet::Live` keeps only whole `ESC _ G` answers for the next barrier (reset at a snapshot's
+        end and an ownership change, 1 MiB bound) and drops every other reply; a clear's form feed goes as input
+        (`push_input`). The role arrives as `PaneEvent::Title(role_report)` (new `server::lead::role_report`), never
+        written into the pane's VT. Task 25's deviation is undone: the pane's VT answers nothing but Kitty commands
+- [x] port `tests/launch.rs`'s live tests to the in-process attach (`every_fresh_live_launch_paints_its_prompt`, the
       session-gone and cannot-reach-socket cases); add: a live pane round trip and resize, pane drop leaving the
       session running, reattach showing the snapshot, the session's environment and cwd as given; on all three OSes
-- [ ] `bench.rs` gains the in-process live path; measure against Task 2's baselines and record the numbers here
-- [ ] run gates and the full GPUI conformance run in the background
+      - moved into `tests/live.rs` (not in the file list: `tests/launch.rs` is Unix-only as a whole), every OS: the
+        prompt test (50 launches, 10 on Windows, then in parallel), round trip and resize, environment and
+        directory, drop and reattach, a managed pane's role report, the session's end, the blocked socket
+        directory, a missing server (now through the in-process attach); Unix: the theme answered once by the
+        server from the pane's facts (and after `set_colors`), a clipboard read asked of the frontend once and
+        answered, a Kitty query answered by the pane's terminal once. The shell is bash on Linux, zsh on macOS
+        (its `/etc/zshrc` runs before the stand-in `.zshrc` sets the prompt; macOS's bash 3.2 never reads `ENV`),
+        PowerShell on Windows; reaped through the namespace's server and the process table
+- [x] `bench.rs` gains the in-process live path; measure against Task 2's baselines and record the numbers here
+      - `TERM_BENCH_SESSION`: `cat-live-*` (a session attached in process) and `idle_sessions_memory`. Dev box,
+        2026-10-21, load ≈5 from other sessions, so read against today's plain and zmx runs too: 50 MiB `cat`
+        plain 0.473/0.522/0.548 s, zmx 1.550/1.450/1.527 s, live in process 0.942/0.977/0.824 s (an earlier run
+        0.573–0.627, 1.429–2.056, 1.037–1.069); Task 2: plain 0.462/0.486/0.430, zmx 0.801/0.899/0.906. GPUI build
+        (headless weston, lavapipe, the staged release through the suite's runner): plain pane 1.280/1.255/1.439 s,
+        live pane in process 2.302/2.166/2.103 s; Task 2: 1.503/1.670/1.627 and live zmx 2.466/2.630/2.253. Idle
+        memory of the server with N sessions that printed 20 000 lines: 1: 6.3 MiB RSS (4.1 PSS), 4: 9.1 MiB, 16:
+        20.4 MiB; Task 2's N zmx daemons: 14.6, 54.3, 222.9 MiB
+- [x] run gates and the full GPUI conformance run in the background
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features), the lint report; workspace tests headless 4620 passed, 0 failed; selftests
+        842 passed; full conformance 653 passed, 14 skipped, ratchet holds (667 ids, the 14 `live-sessions` ones not
+        run on this fish host); on `ci/cps-task-26` (a commit-tree of this tree with a `ci/**` push trigger for
+        `rust-linux.yml`, deleted after) `cross-platform.yml` 39551352621 green on all three OSes, `tests/live.rs`
+        run on each, and `rust-linux.yml` 39551352622 green, its zsh leg 667 passed with every `live-sessions` id
 
 ### Task 27: PowerShell live sessions
 

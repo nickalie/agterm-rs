@@ -74,10 +74,14 @@ pub fn role_name(role: LeadRole) -> &'static str {
 /// wrong about a role the server enforces.
 #[must_use]
 pub fn role_title(nonce: &str, role: LeadRole, generation: u32) -> String {
-    format!(
-        "\x1b]2;{ROLE_TITLE_PREFIX}{nonce}:{}:{generation}\x1b\\",
-        role_name(role)
-    )
+    format!("\x1b]2;{}\x1b\\", role_report(nonce, role, generation))
+}
+
+/// The role title's text, `ngterm-live-role;<nonce>:<role>:<generation>`: what a client that is its own terminal (a
+/// pane attached in process) reports as the title.
+#[must_use]
+pub fn role_report(nonce: &str, role: LeadRole, generation: u32) -> String {
+    format!("{ROLE_TITLE_PREFIX}{nonce}:{}:{generation}", role_name(role))
 }
 
 /// A managed client's role changed: it is to be told.
@@ -772,6 +776,7 @@ mod tests {
                 .strip_prefix("\x1b]2;")
                 .and_then(|title| title.strip_suffix("\x1b\\"))
                 .expect("the title's frame");
+            assert_eq!(title, role_report("n1", role, 3));
             let notice = agterm_core::live::lead::LeadNotice::parse(title).expect("a notice the core parses");
             assert_eq!((notice.nonce.as_str(), notice.generation), ("n1", 3));
             assert_eq!(<&str>::from(notice.role), role_name(role));

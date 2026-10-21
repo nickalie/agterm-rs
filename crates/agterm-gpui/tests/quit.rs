@@ -2,8 +2,8 @@
 //! GPUI build in Live mode on a private Xvfb (lavapipe) with three live sessions, one of them flooding its pane, and an
 //! HTML page over two of them, one of whose engines spins in a script, quits on SIGTERM with status 0 within the
 //! deadline, its quit save written (every session in the saved state), the Live sessions and their one server
-//! surviving it and nothing else of the app's left running (the panes' `agterm-session attach` clients, the `WebKit`
-//! worker and web processes). The time the quit took is printed (seen with `--nocapture`).
+//! surviving it and nothing else of the app's left running (the `WebKit` worker and web processes; the panes attach
+//! in process). The time the quit took is printed (seen with `--nocapture`).
 //!
 //! Everything runs in a [`support::Sandbox`] (private bus, state, live-session namespace and Xvfb); its live sessions
 //! are killed through their own namespace's server at the end. The app runs the cargo-built `agterm-session` beside
@@ -316,8 +316,8 @@ fn load_up(sandbox: &Sandbox) -> TestResult<[String; 3]> {
     Ok([busy, quiet, flooding])
 }
 
-/// The app's processes outside its Live sessions (the session server the first pane's attach started, while that
-/// attach runs, and what runs in its sessions, stay); the server; and how many sessions' shells it runs.
+/// The app's processes outside its Live sessions (the session server the first pane's attach started and what runs in
+/// its sessions stay); the server; and how many sessions' shells it runs.
 fn app_processes(sandbox: &Sandbox, app: u32) -> TestResult<(Vec<u32>, Vec<u32>, usize)> {
     let (live, shells) = live_processes(sandbox)?;
     let kept: Vec<u32> = live

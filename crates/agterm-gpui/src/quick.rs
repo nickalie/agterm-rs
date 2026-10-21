@@ -419,6 +419,7 @@ pub fn launch(cwd: String, context: &PaneContext) -> agterm_term::Launch {
             .into_iter()
             .collect(),
         env_remove: Vec::new(),
+        live: None,
     }
 }
 

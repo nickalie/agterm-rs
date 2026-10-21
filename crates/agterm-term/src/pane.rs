@@ -1,7 +1,9 @@
 //! [`Pane`]: one terminal — a libghostty-vt terminal behind a mutex, a PTY child, and its threads: the PTY actor's
 //! (`agterm-pty`: reads the PTY into the pane's [`Mailbox`] and writes the input and the terminal's replies to it; one
 //! polling thread on Unix, a reader and a writer on Windows), the IO worker (feeds the mailbox's output to the VT,
-//! stopping at clipboard reads for their answers), and the waiter (reports the child's exit).
+//! stopping at clipboard reads for their answers), and the waiter (reports the child's exit). A live pane has no PTY
+//! and no child: its session's attach stream, read and written by threads of [`crate::session_io`], takes the
+//! actor's and the waiter's places, and the same IO worker feeds its output to the VT.
 //!
 //! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`, `divert`), and `vt` →
 //! `search`, never the reverse. The IO thread holds `vt` for one bounded slice of `vt_write` at a time; input
@@ -36,6 +38,7 @@ use crate::mailbox::{Answer, Mail, Mailbox};
 use crate::pty::{GridSize, PaneCommand, ReplyOutlet, Tty};
 use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::search::SearchSlot;
+use crate::session_io::{self, Live, LiveSession, Refusal};
 use crate::{PaneError, ScrollbackLimits};
 
 /// The most bytes fed to `vt_write` under one hold of the VT lock.
@@ -258,6 +261,20 @@ impl Shared {
         self.replies.push_reply(bytes);
     }
 
+    /// Queue bytes the pane itself sends the program (never refused): a reply on a PTY, a live pane's input.
+    pub(crate) fn push_input(&self, bytes: &[u8]) {
+        self.replies.push_input(bytes);
+    }
+
+    /// A live pane's Kitty graphics answers since the last call.
+    pub(crate) fn take_kitty_answers(&self) -> Vec<u8> {
+        self.replies.take_kitty_answers()
+    }
+
+    pub(crate) fn mailbox(&self) -> &Mailbox {
+        &self.mailbox
+    }
+
     /// Make the next paint convert (and re-check every row's selection); the caller holds the VT lock.
     pub(crate) fn touch_capture(&self) {
         lock(&self.capture).touch();
@@ -287,13 +304,22 @@ impl Shared {
 /// One terminal pane.
 pub struct Pane {
     shared: Arc<Shared>,
-    /// The PTY's actor: the input queue, the resizes, the end of the PTY.
-    actor: ActorHandle,
-    tty: Tty,
+    io: Io,
     events: Mutex<Receiver<PaneEvent>>,
     pid: Option<u32>,
-    killer: Killer,
     worker: Option<JoinHandle<()>>,
+}
+
+/// What a pane's input, grid and end go through.
+enum Io {
+    Pty {
+        /// The PTY's actor: the input queue, the resizes, the end of the PTY.
+        actor: ActorHandle,
+        tty: Tty,
+        killer: Killer,
+    },
+    /// A live pane's attach to its session.
+    Live(Arc<Live>),
 }
 
 impl std::fmt::Debug for Pane {
@@ -329,12 +355,71 @@ impl Pane {
         let started = parts.start(master, child, &killer)?;
         Ok(Self {
             shared: started.shared,
-            actor: started.actor,
-            tty: started.tty,
+            io: Io::Pty {
+                actor: started.actor,
+                tty: started.tty,
+                killer,
+            },
             events: Mutex::new(started.events),
             pid: Some(pid),
-            killer,
             worker: Some(started.worker),
+        })
+    }
+
+    /// Attach a pane of `config.size` to its live `session` in process ([`crate::session_io`]): no PTY and no child;
+    /// the attach runs on the pane's threads, so this returns at once, and a session that cannot be attached ends the
+    /// pane as the attach CLI's failure did.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+    /// the size or cannot allocate.
+    pub(crate) fn attach_live(session: Result<LiveSession, Refusal>, config: &PaneConfig) -> Result<Self, PaneError> {
+        let (events_tx, events) = mpsc::channel();
+        let read_pause = ReadPause::new();
+        let mailbox = Arc::new(Mailbox::new(read_pause.clone()));
+        let shared = Arc::new(shared(config, events_tx, mailbox)?);
+        let live = Arc::new(Live::new(read_pause, config.write_limit, config.kitty_image_limit > 0));
+        shared.replies.go_live(Arc::clone(&live));
+        live.update_metadata(live.metadata_of(&shared, config.color_scheme));
+        let stop = |err: PaneError, worker: Option<JoinHandle<()>>| {
+            shared.mailbox.shutdown();
+            live.leave();
+            shared.replies.close();
+            if let Some(worker) = worker {
+                let _ = worker.join();
+            }
+            err
+        };
+        let worker = Worker {
+            shared: Arc::clone(&shared),
+            reads: Reads::Live(Arc::clone(&live)),
+            scanner: Scanner::default(),
+            next_read: 0,
+            child_exited: false,
+        };
+        let worker = match spawn_thread("pane-io", move || worker.run()) {
+            Ok(worker) => worker,
+            Err(err) => return Err(stop(err, None)),
+        };
+        let sender = Arc::clone(&live);
+        if let Err(err) = spawn_thread("pane-live-out", move || sender.send_loop()) {
+            return Err(stop(err, Some(worker)));
+        }
+        let reader = session_io::Reader {
+            live: Arc::clone(&live),
+            shared: Arc::clone(&shared),
+            session,
+        };
+        if let Err(err) = spawn_thread("pane-live", move || reader.run()) {
+            return Err(stop(err, Some(worker)));
+        }
+        Ok(Self {
+            shared,
+            io: Io::Live(live),
+            events: Mutex::new(events),
+            pid: None,
+            worker: Some(worker),
         })
     }
 
@@ -342,7 +427,7 @@ impl Pane {
         &self.shared
     }
 
-    /// The child's process id.
+    /// The child's process id; `None` for a live pane, whose program runs under the session server.
     #[must_use]
     pub fn pid(&self) -> Option<u32> {
         self.pid
@@ -353,7 +438,10 @@ impl Pane {
     /// whose pseudoconsole has no foreground process group.
     #[must_use]
     pub fn foreground_pid(&self) -> Option<u32> {
-        self.tty.foreground_pid()
+        match &self.io {
+            Io::Pty { tty, .. } => tty.foreground_pid(),
+            Io::Live(_) => None,
+        }
     }
 
     /// Whether the program on the PTY is reading a password: canonical input with echo off, the heuristic Ghostty's
@@ -363,7 +451,10 @@ impl Pane {
     /// by attaching to that console, and a process has one console at a time).
     #[must_use]
     pub fn password_input(&self) -> bool {
-        self.tty.password_input()
+        match &self.io {
+            Io::Pty { tty, .. } => tty.password_input(),
+            Io::Live(_) => false,
+        }
     }
 
     /// Queue input for the child (keys, pastes). Never blocks.
@@ -373,11 +464,15 @@ impl Pane {
     /// [`PaneError::Backpressure`] when the queue is full (the child is not reading), [`PaneError::Closed`] once the
     /// PTY ended or refused a write (the child side is gone).
     pub fn write(&self, bytes: &[u8]) -> Result<(), PaneError> {
-        self.actor.write_input(bytes).map_err(PaneError::from)
+        match &self.io {
+            Io::Pty { actor, .. } => actor.write_input(bytes).map_err(PaneError::from),
+            Io::Live(live) => live.input(bytes),
+        }
     }
 
     /// Resize the VT (reflowing the primary screen) and then the PTY (the child gets `SIGWINCH`; on Windows the
-    /// pseudoconsole resizes its buffer).
+    /// pseudoconsole resizes its buffer); a live pane sends its grid (the session takes it while the pane leads) and a
+    /// cell size that changed.
     ///
     /// # Errors
     ///
@@ -389,9 +484,22 @@ impl Pane {
             .map_err(PaneError::terminal)?;
         vt.size = size;
         drop(vt);
-        self.actor.resize(size.pty());
+        match &self.io {
+            Io::Pty { actor, .. } => actor.resize(size.pty()),
+            Io::Live(live) => {
+                live.resize(size);
+                self.update_metadata();
+            }
+        }
         self.shared.wake();
         Ok(())
+    }
+
+    /// A live pane's facts for the server's replies, sent when they changed.
+    fn update_metadata(&self) {
+        if let Io::Live(live) = &self.io {
+            live.update_metadata(live.metadata_of(&self.shared, self.color_scheme()));
+        }
     }
 
     /// Change the scrollback limits (lowering one prunes history now).
@@ -416,7 +524,12 @@ impl Pane {
         lock(&self.shared.vt)
             .terminal
             .set_kitty_image_storage_limit(limit)
-            .map_err(PaneError::terminal)
+            .map_err(PaneError::terminal)?;
+        if let Io::Live(live) = &self.io {
+            live.set_kitty_graphics(limit > 0);
+            self.update_metadata();
+        }
+        Ok(())
     }
 
     /// Switch the theme (a light/dark change, a config reload); colors programs set stay overridden.
@@ -428,16 +541,22 @@ impl Pane {
         colors
             .apply(&mut lock(&self.shared.vt).terminal)
             .map_err(PaneError::terminal)?;
+        self.update_metadata();
         self.shared.wake();
         Ok(())
     }
 
     /// Follow the desktop's appearance: color scheme queries are answered with `scheme` from now on, and a program
     /// that asked for color scheme reports (mode 2031) gets one when the scheme changed, as Ghostty's surface sends
-    /// it. Never blocks: the report joins the replies queued for the program.
+    /// it. Never blocks: the report joins the replies queued for the program. A live pane tells the server, which
+    /// answers and reports for the session.
     pub fn set_color_scheme(&self, scheme: ColorScheme) {
         let dark = scheme == ColorScheme::Dark;
         if self.shared.scheme.swap(dark, Ordering::AcqRel) == dark {
+            return;
+        }
+        if matches!(self.io, Io::Live(_)) {
+            self.update_metadata();
             return;
         }
         let reports = lock(&self.shared.vt).terminal.mode(vt::Mode::COLOR_SCHEME_REPORT);
@@ -480,13 +599,19 @@ impl Pane {
 
     /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
-        self.shared.mailbox.answer(id, answer);
+        match &self.io {
+            Io::Pty { .. } => self.shared.mailbox.answer(id, answer),
+            Io::Live(live) => live.answer(id, answer),
+        }
     }
 
     /// Bytes queued for the child and not written yet.
     #[must_use]
     pub fn queued_input(&self) -> usize {
-        self.actor.queued()
+        match &self.io {
+            Io::Pty { actor, .. } => actor.queued(),
+            Io::Live(live) => live.queued(),
+        }
     }
 
     #[must_use]
@@ -504,13 +629,19 @@ impl Pane {
 
 impl Drop for Pane {
     /// Stop the worker (a clipboard wait included), hang up the child's tree (Unix: `SIGHUP` to its process group;
-    /// Windows: its job ends), close the PTY (on Unix the kernel hangs up the child's session), join the worker.
+    /// Windows: its job ends), close the PTY (on Unix the kernel hangs up the child's session), join the worker. A
+    /// live pane detaches instead, leaving its session running.
     fn drop(&mut self) {
         self.shared.mailbox.shutdown();
-        if let Err(err) = self.killer.hang_up() {
-            tracing::debug!(%err, "hanging up the pane's child failed");
+        match &self.io {
+            Io::Pty { actor, killer, .. } => {
+                if let Err(err) = killer.hang_up() {
+                    tracing::debug!(%err, "hanging up the pane's child failed");
+                }
+                actor.shutdown();
+            }
+            Io::Live(live) => live.leave(),
         }
-        self.actor.shutdown();
         self.shared.replies.close();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -734,7 +865,7 @@ impl Parts {
         shared.replies.attach(&actor);
         let worker = Worker {
             shared: Arc::clone(&shared),
-            actor: actor.clone(),
+            reads: Reads::Actor(actor.clone()),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -815,19 +946,25 @@ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
             (1, None)
         }
     };
-    let runtime = shared.started.elapsed();
     shared.mailbox.child_exited();
     actor.child_exited();
+    report_exit(shared, Some(code), signal);
+}
+
+/// The program ended with `code` (`None`: unknown, reported as 0) and `signal`: give the IO worker a moment to feed
+/// the last output, put the exit message on screen ([`ExitPolicy`]), report the exit.
+pub(crate) fn report_exit(shared: &Shared, code: Option<u32>, signal: Option<String>) {
+    let runtime = shared.started.elapsed();
     shared.wait_eof(EXIT_GRACE);
-    let outcome = shared.exit.outcome(Some(code), runtime);
+    let outcome = shared.exit.outcome(code, runtime);
     if outcome.held() {
         let mut vt = lock(&shared.vt);
         let layout = Layout::of(&mut vt.terminal);
-        let message = shared.exit.message(outcome, Some(code), runtime, layout);
+        let message = shared.exit.message(outcome, code, runtime, layout);
         vt.terminal.vt_write(&message);
     }
     shared.send(PaneEvent::Exited(crate::ExitStatus {
-        code,
+        code: code.unwrap_or(0),
         signal,
         held: outcome.held(),
     }));
@@ -854,11 +991,26 @@ fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAns
     shared.counters.bytes.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader.
+enum Reads {
+    Actor(ActorHandle),
+    Live(Arc<Live>),
+}
+
+impl Reads {
+    fn wake(&self) {
+        match self {
+            Self::Actor(actor) => actor.wake_reader(),
+            Self::Live(live) => live.wake_reader(),
+        }
+    }
+}
+
 /// The IO worker: the program's output from the mailbox into the VT.
 struct Worker {
     shared: Arc<Shared>,
-    /// Woken when the mailbox resumes the actor's reads.
-    actor: ActorHandle,
+    /// Woken when the mailbox resumes the reads.
+    reads: Reads,
     scanner: Scanner,
     next_read: u64,
     /// A read was denied for the child's exit: every later one is denied without asking.
@@ -872,12 +1024,17 @@ impl Worker {
                 Mail::Output(output) => {
                     let fed = self.feed(&output);
                     if self.shared.mailbox.consumed(output.len()) {
-                        self.actor.wake_reader();
+                        self.reads.wake();
                     }
                     if !fed {
                         break;
                     }
                     self.after_batch(output.len());
+                }
+                Mail::Live(mail) => {
+                    if let Reads::Live(live) = &self.reads {
+                        session_io::handle(live, &self.shared, mail);
+                    }
                 }
                 Mail::Idle => self.expire_hold(),
                 Mail::End => break,
@@ -903,8 +1060,13 @@ impl Worker {
         }
     }
 
-    /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down.
+    /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down. A live
+    /// pane's reads are the server's to delegate: it does not stop at them.
     fn feed(&mut self, bytes: &[u8]) -> bool {
+        if matches!(self.reads, Reads::Live(_)) {
+            self.write_vt(bytes);
+            return true;
+        }
         let mut start = 0;
         while let Some((offset, read)) = self.scanner.find(&bytes[start..]) {
             let dispatch = start + offset;

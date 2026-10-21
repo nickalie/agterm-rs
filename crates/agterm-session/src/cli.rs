@@ -53,7 +53,7 @@ use crate::server::lead::is_nonce;
 use crate::server::pane::{DIRECTORY_VARIABLE, MANAGED_VARIABLES, SESSION_VARIABLE};
 use crate::server::{EXIT_FAILED, EXIT_USAGE};
 
-mod attach;
+pub mod attach;
 
 /// The prefix put before every session name a command is given.
 pub const PREFIX_VARIABLE: &str = "AGTERM_LIVE_SESSION_PREFIX";

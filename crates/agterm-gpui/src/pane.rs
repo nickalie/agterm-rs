@@ -152,6 +152,7 @@ impl PaneSpec {
             wait_after_command: self.wait,
             env: self.env(context).into_iter().collect(),
             env_remove: Vec::new(),
+            live: None,
         }
     }
 

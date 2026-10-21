@@ -362,6 +362,7 @@ fn spawn(session: &Session, generation: u64, hud: &HudContext<'_>, cx: &mut Cont
         wait_after_command: false,
         env,
         env_remove: Vec::new(),
+        live: None,
     };
     let overlay = config_overlay(
         slot.background_color.as_deref(),

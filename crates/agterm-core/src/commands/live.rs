@@ -73,6 +73,8 @@ pub struct PaneReplacement {
     pub session: Uuid,
     pub token: String,
     pub command: String,
+    /// A live pane's attach as data, which the replacement runs in process in place of `command` (its shell line).
+    pub attach: Option<crate::live::support::LiveAttach>,
     pub env: Vec<(String, String)>,
     pub cwd: Option<String>,
     /// A remote replica's ssh attach rather than a live-session client: its terminal holds after the command exits,

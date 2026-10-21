@@ -21,7 +21,7 @@ use crate::command_restore::shell_quoted_line;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::live::lead::LeadAttachment;
-use crate::live::support::attach_command;
+use crate::live::support::{attach_line, live_attach};
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
 use crate::restart_replay::{self, Launch, Observation};
@@ -201,17 +201,19 @@ fn rebuild(core: &mut Core, job: Job, ending: &Ending) -> Dispatched {
         .filter(|cwd| Path::new(cwd).is_dir());
     // the denylist was applied before the kill: a rejection here would start a plain shell instead
     let none: [&str; 0] = [];
-    let command = attach_command(
+    let attach = live_attach(
         &configuration,
         ending.replay.as_ref().map(|launch| launch.argv.as_slice()),
         job.command.as_deref(),
         &none,
     );
+    let command = attach_line(&configuration, &attach);
     core.begin_replacement_lead(&job.token, job.identity, attachment, false);
     core.request_pane_replacement(super::live::PaneReplacement {
         session: job.session,
         token: job.token.clone(),
         command: crate::live::support::settled(&command),
+        attach: configuration.in_process(attach),
         env: configuration.environment.into_iter().collect(),
         cwd: ending
             .replay

@@ -1,14 +1,16 @@
 //! Measurements of the read path and the VT lock (Task 9's profiling and lock-latency check), run by hand:
 //!
 //! ```text
-//! TERM_BENCH_DIR=<scratch dir> [TERM_BENCH_ZMX=<zmx binary>] \
+//! TERM_BENCH_DIR=<scratch dir> [TERM_BENCH_ZMX=<zmx binary>] [TERM_BENCH_SESSION=<agterm-session binary>] \
 //!   cargo test --release -p agterm-term --lib bench -- --ignored --nocapture --test-threads 1
 //! ```
 //!
 //! Each scenario runs a pane with a UI stand-in: a paint thread calling [`Pane::frame`] every 16 ms and a key thread
 //! taking the VT lock every 4 ms the way key encoding will (Task 10), and prints one JSON line. Scenarios: a `cat` of a
-//! 50 MiB text file on a plain shell and through `zmx attach` (private `ZMX_DIR` under the scratch dir, reaped by it),
-//! a burst of Kitty PNG transmissions (1920x1080), and resizes that reflow a full scrollback.
+//! 50 MiB text file on a plain shell, through `zmx attach` (private `ZMX_DIR` under the scratch dir, reaped by it) and
+//! in a live pane attached in process to the session server (a private namespace, reaped through its server), a
+//! burst of Kitty PNG transmissions (1920x1080), resizes that reflow a full scrollback, and the session server's idle
+//! memory for N sessions that each printed 20 000 lines (`idle_sessions_memory`).
 //!
 //! Linux only: it reads `/proc` and runs zmx.
 #![cfg(target_os = "linux")]
@@ -22,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use super::pane::{Pane, PaneConfig, lock};
 use super::pty::{GridSize, PaneCommand};
+use super::session_io::LiveSession;
 
 const SIZE: GridSize = GridSize {
     cols: 141,
@@ -257,14 +260,75 @@ fn run_to_mark(pane: &Pane) -> (Duration, Ui, String) {
     (started.elapsed(), ui, screen)
 }
 
-fn cat_scenario(name: &str, file: &Path, zmx: Option<(&Path, &Path)>) {
+/// What a `cat` scenario's pane runs its script through.
+#[derive(Clone, Copy)]
+enum Via<'a> {
+    Plain,
+    /// `zmx attach`: the binary, its `ZMX_DIR`.
+    Zmx(&'a Path, &'a Path),
+    /// A live pane attached in process: the `agterm-session` binary, the namespace directory.
+    Live(&'a Path, &'a Path),
+}
+
+/// The bench's environment: the test's, without the live agterm's variables.
+fn environment() -> Vec<(String, String)> {
+    std::env::vars()
+        .filter(|(key, _)| !key.starts_with("AGTERM_") && !key.starts_with("ZMX_"))
+        .collect()
+}
+
+/// A live pane of a new session `name` running `/bin/sh -c script` on the server `server` of namespace `namespace`.
+fn live_pane(script: &str, server: &Path, namespace: &Path, name: &str, config: &PaneConfig) -> Pane {
+    let session = LiveSession {
+        directory: namespace.to_path_buf(),
+        executable: server.to_path_buf(),
+        name: name.to_owned(),
+        spec: agterm_session::protocol::SessionSpec {
+            argv: ["/bin/sh", "-c", script].map(str::to_owned).to_vec(),
+            env: environment(),
+            cwd: None,
+            tracked_env: Vec::new(),
+        },
+        managed: None,
+    };
+    Pane::attach_live(Ok(session), config).unwrap()
+}
+
+/// Kill every session of `namespace` through its server, wait for the server's idle exit, remove the directory.
+fn reap_live(namespace: &Path) {
+    let client = agterm_session::client::Client::new(namespace);
+    if let Ok(Some(mut api)) = client.api() {
+        let server = api.welcome.pid;
+        let names: Vec<String> = api
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| record.name)
+            .collect();
+        if !names.is_empty() {
+            let _ = api.kill(&names, true);
+        }
+        drop(api);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Path::new(&format!("/proc/{server}")).exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let _ = std::fs::remove_dir_all(namespace);
+}
+
+fn cat_scenario(name: &str, file: &Path, via: Via<'_>) {
     let script = format!(
         "sleep 1; s=$(date +%s%N); cat {}; e=$(date +%s%N); printf '\\nMARK cat_ns=%s\\n' $((e - s)); exec sleep 30",
         shell_quote(file)
     );
-    let session = format!("bench-{}", std::process::id());
-    let command = command(&script, zmx.map(|(zmx, dir)| (zmx, dir, session.as_str())));
-    let pane = Pane::spawn(&command, &PaneConfig::new(bench_size())).unwrap();
+    let session = format!("bench-{}-{name}", std::process::id());
+    let config = PaneConfig::new(bench_size());
+    let pane = match via {
+        Via::Plain => Pane::spawn(&command(&script, None), &config).unwrap(),
+        Via::Zmx(zmx, dir) => Pane::spawn(&command(&script, Some((zmx, dir, session.as_str()))), &config).unwrap(),
+        Via::Live(server, namespace) => live_pane(&script, server, namespace, &session, &config),
+    };
     let (wall, mut ui, mark) = run_to_mark(&pane);
     let cat_ns: f64 = mark
         .rsplit('=')
@@ -282,9 +346,18 @@ fn cat_scenario(name: &str, file: &Path, zmx: Option<(&Path, &Path)>) {
         ),
     );
     drop(pane);
-    if let Some((_, dir)) = zmx {
-        reap_zmx(dir);
+    match via {
+        Via::Plain => {}
+        Via::Zmx(_, dir) => reap_zmx(dir),
+        Via::Live(_, namespace) => reap_live(namespace),
     }
+}
+
+/// A private namespace directory for the bench's server, short enough for a socket path.
+fn live_namespace(label: &str) -> PathBuf {
+    let namespace = PathBuf::from(format!("/tmp/ngterm-bench-{label}-{}", std::process::id()));
+    std::fs::create_dir_all(&namespace).unwrap();
+    namespace
 }
 
 #[test]
@@ -294,15 +367,78 @@ fn read_path_plain_and_zmx() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = text_file(&dir);
     for run in 1..=3 {
-        cat_scenario(&format!("cat-plain-{run}"), &file, None);
+        cat_scenario(&format!("cat-plain-{run}"), &file, Via::Plain);
     }
     if let Some(zmx) = std::env::var_os("TERM_BENCH_ZMX").map(PathBuf::from) {
         let zmx_dir = dir.join("zmx");
         std::fs::create_dir_all(&zmx_dir).unwrap();
         for run in 1..=3 {
-            cat_scenario(&format!("cat-zmx-{run}"), &file, Some((&zmx, &zmx_dir)));
+            cat_scenario(&format!("cat-zmx-{run}"), &file, Via::Zmx(&zmx, &zmx_dir));
         }
         reap_zmx(&zmx_dir);
+    }
+    if let Some(server) = std::env::var_os("TERM_BENCH_SESSION").map(PathBuf::from) {
+        let namespace = live_namespace("cat");
+        for run in 1..=3 {
+            cat_scenario(&format!("cat-live-{run}"), &file, Via::Live(&server, &namespace));
+        }
+        reap_live(&namespace);
+    }
+}
+
+/// The resident and proportional memory of the process `pid`, in KiB.
+fn memory_kib(pid: u32) -> (u64, u64) {
+    let field = |path: String, key: &str| {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .find_map(|line| line.strip_prefix(key)?.split_whitespace().next()?.parse().ok())
+            .unwrap_or(0)
+    };
+    (
+        field(format!("/proc/{pid}/status"), "VmRSS:"),
+        field(format!("/proc/{pid}/smaps_rollup"), "Pss:"),
+    )
+}
+
+/// Task 2's idle memory baseline against the session server: N sessions, each an idle `/bin/sh` that printed 20 000
+/// lines, every client detached; the server's memory, against N idle zmx daemons'.
+#[test]
+#[ignore = "a measurement, run by hand (see the module docs)"]
+fn idle_sessions_memory() {
+    let Some(server) = std::env::var_os("TERM_BENCH_SESSION").map(PathBuf::from) else {
+        return;
+    };
+    for count in [1_usize, 4, 16] {
+        let namespace = live_namespace(&format!("rss{count}"));
+        for index in 0..count {
+            let pane = live_pane(
+                "seq 1 20000; echo READY; exec sh",
+                &server,
+                &namespace,
+                &format!("s{index}"),
+                &PaneConfig::new(SIZE),
+            );
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !pane.frame().frame.lines().iter().any(|line| line.contains("READY")) {
+                assert!(Instant::now() < deadline, "session {index} printed no READY");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        std::thread::sleep(Duration::from_secs(3));
+        let pid = agterm_session::client::Client::new(&namespace)
+            .api()
+            .unwrap()
+            .unwrap()
+            .welcome
+            .pid;
+        let (rss, pss) = memory_kib(pid);
+        println!(
+            "{{\"scenario\":\"idle-sessions\",\"sessions\":{count},\"server_rss_kib\":{rss},\"server_pss_kib\":{pss},\
+             \"rss_per_session_kib\":{}}}",
+            rss / count as u64
+        );
+        reap_live(&namespace);
     }
 }
 

@@ -160,6 +160,12 @@ impl Configuration {
     pub fn command(&self) -> String {
         shell_quoted_line(&self.attach_arguments())
     }
+
+    /// `attach` for a pane to run in process; `None` behind a session host's client, which only the shell line runs.
+    #[must_use]
+    pub fn in_process(&self, attach: LiveAttach) -> Option<LiveAttach> {
+        self.session_host_executable.is_none().then_some(attach)
+    }
 }
 
 /// The wrap configuration of `inputs`' pane.
@@ -259,10 +265,50 @@ pub fn settled(line: &str) -> String {
     format!("{SETTLE_PREFIX}exec {line}")
 }
 
-/// The command a wrapped pane's surface runs: the attach, with the creation payload a new daemon runs (a replayable
-/// captured `argv` first, else the durable `creation_command`), behind the session host's client when there is one.
-/// A refused replay (denylisted, unreplayable) keeps the bare attach rather than falling back to the creation command.
-/// Without a payload a bash daemon still starts its login shell in POSIX mode, the one way it reads its integration.
+/// A wrapped pane's attach as data: what `agterm-session attach` reads from its command line, which a pane attaching
+/// in process runs without a shell or a client process. The rest of what the attach reads comes from the environment
+/// and the directory the attach is started in, which a pane's launch gives either way: the configuration's
+/// environment over the pane's own, and the pane's working directory. [`attach_line`] is its shell line, which the
+/// remote path and a session host's client run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveAttach {
+    /// The `agterm-session` executable: the server a pane's attach starts when none runs.
+    pub executable: String,
+    /// The session's name (the daemon's).
+    pub session: String,
+    /// What a session the attach creates runs; empty runs the attach's own default, the login shell `SHELL` names.
+    pub argv: Vec<String>,
+}
+
+impl LiveAttach {
+    /// `agterm-session attach <session> [argv…]`.
+    #[must_use]
+    pub fn arguments(&self) -> Vec<String> {
+        let mut arguments = vec![self.executable.clone(), "attach".to_owned(), self.session.clone()];
+        arguments.extend(self.argv.iter().cloned());
+        arguments
+    }
+}
+
+/// The attach a wrapped pane runs: with the creation payload a new daemon runs (a replayable captured `argv` first,
+/// else the durable `creation_command`). A refused replay (denylisted, unreplayable) keeps the bare attach rather than
+/// falling back to the creation command. Without a payload a bash daemon still starts its login shell in POSIX mode,
+/// the one way it reads its integration.
+#[must_use]
+pub fn live_attach<S: AsRef<str>>(
+    configuration: &Configuration,
+    replaying: Option<&[String]>,
+    creation_command: Option<&str>,
+    denylist: &[S],
+) -> LiveAttach {
+    LiveAttach {
+        executable: configuration.executable.clone(),
+        session: configuration.daemon_name.clone(),
+        argv: creation_arguments(configuration, replaying, creation_command, denylist),
+    }
+}
+
+/// The command a wrapped pane's surface runs: [`live_attach`]'s attach as one shell line.
 #[must_use]
 pub fn attach_command<S: AsRef<str>>(
     configuration: &Configuration,
@@ -270,8 +316,16 @@ pub fn attach_command<S: AsRef<str>>(
     creation_command: Option<&str>,
     denylist: &[S],
 ) -> String {
-    let mut arguments = configuration.attach_arguments();
-    arguments.extend(creation_arguments(configuration, replaying, creation_command, denylist));
+    attach_line(
+        configuration,
+        &live_attach(configuration, replaying, creation_command, denylist),
+    )
+}
+
+/// `attach` as one shell line, behind the session host's client when the configuration names one.
+#[must_use]
+pub fn attach_line(configuration: &Configuration, attach: &LiveAttach) -> String {
+    let mut arguments = attach.arguments();
     if let Some(host) = &configuration.session_host_executable {
         let mut wrapped = vec![
             host.clone(),
@@ -679,6 +733,34 @@ mod tests {
                 &script
             ])
         );
+    }
+
+    #[test]
+    fn the_attach_as_data_is_what_its_shell_line_runs() {
+        let configuration = replay_configuration(None);
+        let argv: Vec<String> = ["printf", "%s", "two words"].map(str::to_owned).to_vec();
+        for (replaying, creation) in [
+            (None, None),
+            (Some(argv.as_slice()), Some("echo durable")),
+            (None, Some("echo durable")),
+        ] {
+            let attach = live_attach(&configuration, replaying, creation, &NO_DENYLIST);
+            assert_eq!(
+                (attach.executable.as_str(), attach.session.as_str()),
+                ("/bin/agterm-session", "agterm-pane")
+            );
+            assert_eq!(
+                attach_command(&configuration, replaying, creation, &NO_DENYLIST),
+                shell_quoted_line(&attach.arguments())
+            );
+            assert_eq!(configuration.in_process(attach.clone()), Some(attach));
+        }
+        // the bare attach runs the attach's default program
+        assert!(live_attach(&configuration, None, None, &NO_DENYLIST).argv.is_empty());
+        // behind a session host's client only the shell line runs
+        let hosted = replay_configuration(Some("/bundle/agterm-session-host"));
+        let attach = live_attach(&hosted, None, None, &NO_DENYLIST);
+        assert_eq!(hosted.in_process(attach), None);
     }
 
     #[test]

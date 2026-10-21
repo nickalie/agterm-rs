@@ -12,6 +12,8 @@
 //!   writes the program's input — a worker waiting on a clipboard answer holds the program's output back, not its
 //!   input.
 //! - The child's exit and the shutdown are flags that pass queued output, so a clipboard wait never hides them.
+//! - A live pane's reader queues the attach stream's events that must follow the output before them
+//!   ([`crate::session_io::LiveMail`]) in order with it ([`Mailbox::deliver_live`]); they count no bytes.
 //!
 //! Lock rule: the mailbox's lock is a leaf. Nothing calls into the VT, the actor or the frontend's wake while holding
 //! it.
@@ -23,6 +25,7 @@ use std::time::Instant;
 use agterm_pty::ReadPause;
 
 use crate::effects::ClipboardAnswer;
+use crate::session_io::LiveMail;
 
 /// The output bytes waiting for the VT at which the actor's reads pause.
 pub(crate) const HIGH_WATER: usize = 1024 * 1024;
@@ -34,6 +37,8 @@ pub(crate) const LOW_WATER: usize = 256 * 1024;
 pub(crate) enum Mail {
     /// A read of the program's output.
     Output(Vec<u8>),
+    /// A live pane's event, after the output before it.
+    Live(LiveMail),
     /// The deadline passed with nothing to take.
     Idle,
     /// The output ended (every read was taken) or the pane shut down.
@@ -51,9 +56,16 @@ pub(crate) enum Answer {
     Idle,
 }
 
+/// What waits for the worker, in order.
+#[derive(Debug)]
+enum Item {
+    Output(Vec<u8>),
+    Live(LiveMail),
+}
+
 #[derive(Debug, Default)]
 struct State {
-    output: VecDeque<Vec<u8>>,
+    output: VecDeque<Item>,
     /// Output bytes not fed to the VT yet: the queued reads, and the one the worker holds.
     pending: usize,
     answers: Vec<(u64, ClipboardAnswer)>,
@@ -95,12 +107,17 @@ impl Mailbox {
             return;
         }
         self.post(|state| {
-            state.output.push_back(bytes.to_vec());
+            state.output.push_back(Item::Output(bytes.to_vec()));
             state.pending += bytes.len();
             if state.pending >= HIGH_WATER {
                 self.pause.pause();
             }
         });
+    }
+
+    /// A live pane's reader: queue `mail` after the output delivered so far.
+    pub(crate) fn deliver_live(&self, mail: LiveMail) {
+        self.post(|state| state.output.push_back(Item::Live(mail)));
     }
 
     /// The actor stopped: no more output comes.
@@ -148,8 +165,10 @@ impl Mailbox {
             if state.shutdown {
                 return Mail::End;
             }
-            if let Some(output) = state.output.pop_front() {
-                return Mail::Output(output);
+            match state.output.pop_front() {
+                Some(Item::Output(output)) => return Mail::Output(output),
+                Some(Item::Live(mail)) => return Mail::Live(mail),
+                None => {}
             }
             if state.eof {
                 return Mail::End;

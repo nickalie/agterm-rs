@@ -183,7 +183,9 @@ error string carries: `bin/agterm-session` and `share/ngterm/session-BUILD` in t
 its build stamp), `AGTERM_SESSION_PATH` (upstream's `AGTERM_ZMX_PATH`), the `session-build.json` record in the state
 dir (`zmx-build.json`), the namespace `/tmp/ngterm-live-<hash>` (`/tmp/agterm-zmx-<hash>`), its attach contract's
 `agterm-session attach` line and `AGTERM_LIVE_*` variables (zmx's `ZMX_*`), and the role title `ngterm-live-role;`
-(the patched zmx's `zmx-role;`). `clipboard set` prints through `agterm-session print`, so its texts are the table's
+(the patched zmx's `zmx-role;`). ngterm's own panes attach to their sessions in process through the server's client
+library, so no attach client runs under the app (upstream's live panes run `zmx attach` in their PTYs); the remote
+path and a terminal outside the app run the attach line. `clipboard set` prints through `agterm-session print`, so its texts are the table's
 above with the print's own complaint after `the live-session print exited N: ` (the session gone, or no server:
 `agterm-session print: no live session named NAME`) where upstream shows zmx's.
 

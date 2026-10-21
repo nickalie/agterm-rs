@@ -1,6 +1,7 @@
 //! The terminal pane core, toolkit-neutral, the same on Linux, macOS and Windows: a libghostty-vt terminal fed from a
-//! PTY (`agterm-pty`: openpty, or Windows' pseudoconsole) by an IO thread per pane, its effects as [`PaneEvent`]s for
-//! the frontend's main thread, and its screen as [`Frame`]s in this crate's own types.
+//! PTY (`agterm-pty`: openpty, or Windows' pseudoconsole), or a live pane's session on the session server attached in
+//! process, by an IO thread per pane, its effects as [`PaneEvent`]s for the frontend's main thread, and its screen as
+//! [`Frame`]s in this crate's own types.
 //!
 //! - [`Pane::spawn`] starts a [`PaneCommand`] on a PTY; [`Pane::write`] queues input, [`Pane::resize`] resizes the VT
 //!   and the PTY, [`Pane::frame`] captures the screen for painting, [`Pane::take_events`] drains the effects.
@@ -15,8 +16,8 @@
 //! - Search: [`Pane::search`], [`Pane::navigate_search`], [`Pane::search_state`], with
 //!   [`PaneEvent::SearchTotal`] and [`PaneEvent::SearchSelected`] as libghostty reported them.
 //! - Kitty graphics: every [`Frame`] carries a [`KittyView`] of its images and placements.
-//! - Launch: [`Pane::launch`] runs a [`Launch`] (a session pane's seed: a live pane's `agterm-session attach`, a plain
-//!   pane's command or login shell) under a [`Host`] (the terminal identity and shell integration libghostty gave a
+//! - Launch: [`Pane::launch`] runs a [`Launch`] (a session pane's seed: a live pane's attach to its session, made in
+//!   process with no PTY, a plain pane's command or login shell) under a [`Host`] (the terminal identity and shell integration libghostty gave a
 //!   surface), with the [`ExitPolicy`] of a launched pane; [`Pane::foreground_pid`] is the terminal's foreground
 //!   process group.
 //! - Threads and locks: Technical Details > Threads of the GPUI plan; the details are in [`pane`]'s and
@@ -46,6 +47,7 @@ pub mod pwd;
 mod render;
 mod search;
 mod selection;
+mod session_io;
 mod text;
 mod wheel;
 

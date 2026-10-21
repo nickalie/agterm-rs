@@ -8,7 +8,8 @@
 //!   core the server's `SessionHost` and this host's wrap inputs before any window mounts, then runs the launch reap
 //!   and a pending Live sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh login shell, as upstream)
 //!   and `live-any-shell` (zsh, bash, fish or PowerShell) where `agterm-session` and the shell's integration are
-//!   staged. A live pane runs `agterm-session attach` in its PTY, which is the session's reply owner there.
+//!   staged. A live pane attaches to its session in process (`agterm-term`'s live panes), as the session's reply
+//!   owner.
 //! - **Config**: [`AppConfig::load`] loads the ghostty config as libghostty did for the GTK build (defaults, the
 //!   user's files, their includes; the theme under them), on the side of a dual theme the desktop's appearance picks
 //!   (`appearance.rs`); its diagnostic count is what `config.reload` answers.
