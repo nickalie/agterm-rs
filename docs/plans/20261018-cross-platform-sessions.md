@@ -1215,11 +1215,33 @@ Order after Task 7, as two lanes that meet:
 **Files:**
 - Create: `crates/agterm-session/tests/e2e.rs`
 
-- [ ] through the binary and the client library: start the server detached from the test, create a session, attach,
+- [x] through the binary and the client library: start the server detached from the test, create a session, attach,
       type, read `screen`, detach; kill the test's side, reattach and see the same screen; `kill` and `kill --force`,
       `list`, `print`
-- [ ] run on `ubuntu-26.04`, `macos-26` and `windows-2025` (debugged in the VMs), each under a private namespace
-- [ ] run gates
+      - `tests/e2e.rs`, two tests. The round trip runs a staged copy of the binary (build `e2e-a`): its `attach`
+        starts the server (another process than the test and the attach) and creates the session, typed into, read
+        with `screen`, detached with Ctrl+\; a second attach is typed into and killed with its process tree, and the
+        session and the same server run on; a reattach through the library starts from a snapshot whose terminal
+        reads exactly as `screen` did; `type` reaches the library client and its input reaches `screen`; the binary
+        staged again as `e2e-b` hands the server over on its attach (`screen --all` unchanged, the old server gone);
+        `print` reaches a library client and `screen`; `kill` ends it. The other test starts the server from an
+        attach killed at once (the server, detached from it, runs on), then `list`, `kill` (on Unix a program
+        ignoring the hangup outlives it, exit 1), `kill --force`, and the idle server's exit. The update, which the
+        Testing Strategy names for these tests, comes before `print`: on Windows the new server resizes the
+        pseudoconsole it took over, which repaints its own screen over text `print` wrote only into the session's
+        terminal (`windows-2025`'s first run)
+      - the binary harness (`Namespace`, `Outer`, `Answers`) moved from `tests/cli.rs` into `tests/binary/mod.rs`
+        (not in the file list), shared by both, with a namespace's executable, `stage`, `Namespace::server` and
+        `Outer::kill` added
+- [x] run on `ubuntu-26.04`, `macos-26` and `windows-2025` (debugged in the VMs), each under a private namespace
+      - `cross-platform.yml` already runs `cargo test -p agterm-session` on all three, so the workflow is unchanged;
+        run 39522041125 green on all three (`ci/cps-task-24`, deleted after); the VMs were not needed, the one
+        Windows failure (above) being readable from its log
+- [x] run gates
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session`/`agterm-pty` for macOS), the lint report; workspace tests
+        headless 4592 passed, 0 failed; selftests 835 passed; no conformance run, as in Tasks 16–23 (no staged binary
+        uses the server yet)
 
 ### Task 25: Switch live sessions to `agterm-session` (attach subprocess still in use)
 
