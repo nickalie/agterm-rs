@@ -14,7 +14,11 @@
 //! connection, to hand over to the replacement executable ([`crate::protocol::HandoffRequest`]); the answer comes once
 //! the handoff committed (`ok`) or failed before its commit. A server advertises
 //! [`crate::protocol::CAPABILITY_HANDOFF_REQUEST`] when this host can hand over ([`Support`]: on Windows only behind
-//! the `ConPTY` layout gate, `windows.rs`). One handoff runs at a time.
+//! the `ConPTY` layout gate, `windows.rs`). One handoff runs at a time, and a failed one is not run again: a request
+//! for the build and protocol of a handoff this server failed is answered at once with that failure's reason, before
+//! anything is fenced ([`Failures`]), so a client process that did not see the first attempt (each pane's attach runs
+//! in a process of its own) disconnects nobody by asking. Settled with Codex (the run's
+//! `discussions/task-25-handoff-retry-across-processes`).
 //!
 //! # The steps
 //!
@@ -78,9 +82,9 @@ pub use windows::{SupportMatrix, gate};
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -269,9 +273,10 @@ pub(super) fn export(shared: &Arc<Shared>, request: &HandoffRequest) -> Result<(
     if let Support::Refused(reason) = &shared.handoff {
         return Err(super::no_handoff(reason));
     }
-    if shared.handing_off.swap(true, Ordering::AcqRel) {
-        return Err(failed("a handoff of this server is already in progress"));
-    }
+    shared
+        .failed_handoffs
+        .begin(&shared.handing_off, request)
+        .map_err(failed)?;
     let mut exporter = Exporter {
         shared,
         request,
@@ -284,12 +289,51 @@ pub(super) fn export(shared: &Arc<Shared>, request: &HandoffRequest) -> Result<(
     if let Err(message) = &result {
         tracing::warn!(%message, "the update handoff failed; this server keeps its sessions");
         exporter.roll_back();
-        shared.handing_off.store(false, Ordering::Release);
+        shared.failed_handoffs.fail(&shared.handing_off, request, message);
     }
     if let Some(channel) = &exporter.channel {
         let _ = std::fs::remove_dir_all(channel);
     }
     result.map_err(failed)
+}
+
+/// The handoffs a server failed, each by the build and protocol it was asked to hand over to, with its reason; never
+/// forgotten while the server runs (time passing does not make a failed handoff work, and a new build is another
+/// request). A handoff begins and a failed one ends under the same lock, so a request racing a failing handoff finds
+/// it running or failed, never a gap to begin it again in.
+#[derive(Debug, Default)]
+pub(super) struct Failures {
+    failed: Mutex<Vec<(String, u32, String)>>,
+}
+
+impl Failures {
+    /// Begins the handoff `request` asks for, setting `handing_off`: refused with the earlier reason when one to the
+    /// same build and protocol failed, or while one runs.
+    pub(super) fn begin(&self, handing_off: &AtomicBool, request: &HandoffRequest) -> Result<(), String> {
+        let failed = self.failed.lock().unwrap_or_else(PoisonError::into_inner);
+        let earlier = failed
+            .iter()
+            .find(|(build, protocol, _)| *build == request.expected_build && *protocol == request.expected_protocol);
+        if let Some((_, _, reason)) = earlier {
+            return Err(reason.clone());
+        }
+        if handing_off.swap(true, Ordering::AcqRel) {
+            return Err("a handoff of this server is already in progress".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Ends the handoff `request` asked for, rolled back after it failed for `reason`: remembered, then `handing_off`
+    /// cleared, so connections are admitted again.
+    pub(super) fn fail(&self, handing_off: &AtomicBool, request: &HandoffRequest, reason: &str) {
+        let mut failed = self.failed.lock().unwrap_or_else(PoisonError::into_inner);
+        failed.push((
+            request.expected_build.clone(),
+            request.expected_protocol,
+            reason.to_owned(),
+        ));
+        handing_off.store(false, Ordering::Release);
+    }
 }
 
 /// The exporter's state, for its rollback.
@@ -835,5 +879,82 @@ mod tests {
         let error = read_line(&server, Duration::from_millis(200)).unwrap_err();
         assert!(error.contains("did not answer"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    fn request(build: &str, protocol: u32) -> HandoffRequest {
+        HandoffRequest {
+            import_exe: "/opt/ngterm/bin/agterm-session".to_owned(),
+            expected_build: build.to_owned(),
+            expected_protocol: protocol,
+        }
+    }
+
+    #[test]
+    fn a_failed_handoff_is_refused_again_with_its_reason_and_another_build_or_protocol_begins() {
+        let failures = Failures::default();
+        let handing_off = AtomicBool::new(false);
+        let asked = request("new", PROTOCOL_VERSION);
+        assert_eq!(failures.begin(&handing_off, &asked), Ok(()));
+        assert!(handing_off.load(Ordering::Acquire));
+        let running = failures.begin(&handing_off, &asked).unwrap_err();
+        assert!(running.contains("already in progress"), "{running}");
+        failures.fail(&handing_off, &asked, "the replacement refused the manifest");
+        assert!(!handing_off.load(Ordering::Acquire), "connections are admitted again");
+
+        // the same build and protocol, from any executable: the earlier reason, as it was, and nothing begun
+        let moved = HandoffRequest {
+            import_exe: "/elsewhere/agterm-session".to_owned(),
+            ..asked.clone()
+        };
+        for again in [&asked, &moved] {
+            assert_eq!(
+                failures.begin(&handing_off, again),
+                Err("the replacement refused the manifest".to_owned())
+            );
+            assert!(!handing_off.load(Ordering::Acquire));
+        }
+        // another protocol of the same build, or another build: a handoff of its own
+        let other_protocol = request("new", PROTOCOL_VERSION + 1);
+        assert_eq!(failures.begin(&handing_off, &other_protocol), Ok(()));
+        failures.fail(&handing_off, &other_protocol, "refused too");
+        assert_eq!(
+            failures.begin(&handing_off, &request("newer", PROTOCOL_VERSION)),
+            Ok(())
+        );
+    }
+
+    /// Requests racing failing handoffs to one build begin it once: each failure is remembered before the next request
+    /// could begin it.
+    #[test]
+    fn requests_racing_a_failing_handoff_begin_it_once() {
+        const RACERS: usize = 8;
+        let failures = Arc::new(Failures::default());
+        let handing_off = Arc::new(AtomicBool::new(false));
+        let start = Arc::new(std::sync::Barrier::new(RACERS));
+        let racers: Vec<_> = (0..RACERS)
+            .map(|_| {
+                let (failures, handing_off, start) =
+                    (Arc::clone(&failures), Arc::clone(&handing_off), Arc::clone(&start));
+                thread::spawn(move || {
+                    start.wait();
+                    race(&failures, &handing_off)
+                })
+            })
+            .collect();
+        let begun: u32 = racers.into_iter().map(|racer| racer.join().unwrap()).sum();
+        assert_eq!(begun, 1);
+    }
+
+    /// Asks for one handoff over and over, failing each one it begins; how many it began.
+    fn race(failures: &Failures, handing_off: &AtomicBool) -> u32 {
+        let asked = request("new", PROTOCOL_VERSION);
+        let mut begun = 0;
+        for _ in 0..2_000 {
+            if failures.begin(handing_off, &asked).is_ok() {
+                begun += 1;
+                failures.fail(handing_off, &asked, "failed");
+            }
+        }
+        begun
     }
 }

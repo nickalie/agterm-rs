@@ -32,7 +32,7 @@ use agterm_core::{Core, LiveInstall};
 use agterm_proto::ControlLiveEndpoint;
 use agterm_session::client::Client;
 use agterm_session::host::ServerHost;
-use agterm_session::launch::{Runtime, bundled_build_id};
+use agterm_session::launch::Runtime;
 use agterm_session::server::spawn::{HandoffAttempt, StartOptions};
 use agterm_term::{Host, Launch, Pane};
 
@@ -56,10 +56,11 @@ pub fn install(core: &mut Core, env: &dyn Env) {
         executable: runtime.executable.to_string_lossy().into_owned(),
         socket_directory: directory.clone(),
     };
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().and_then(bundled_build_id));
-    update(&runtime, &directory, bundled.as_deref());
+    // the build every client of this host expects: the one staged for the executable it starts (the debug override's
+    // when one is set), as the host's own calls and each pane's attach expect it
+    let options = StartOptions::new(&runtime.executable);
+    let bundled = options.build.clone();
+    update(&runtime, &directory, &options);
     let outdated_before = launch_cutoff(bundled.as_deref(), &runtime.state_dir, SystemTime::now());
     let wrap = wrap_inputs(&runtime);
     core.install_live_sessions(LiveInstall {
@@ -72,23 +73,26 @@ pub fn install(core: &mut Core, env: &dyn Env) {
     core.run_live_launch();
 }
 
-/// The update handoff (`agterm_session::server::handoff`): a server of another build than the staged `bundled` one
+/// The update handoff (`agterm_session::server::handoff`): a server of another build than the one `options` expect
 /// running in `directory` is asked to hand its sessions over to the staged `agterm-session`, and a committed handoff is
 /// recorded, so the sessions it carried over are not offered for reset as predating this build
 /// ([`record_handoff`]); a failed one records nothing, and the reset offer stands. Nothing without a running server
-/// or a staged id (an unstaged build checks no build). Before any pane attaches, so each pane's `agterm-session attach`
-/// finds the staged build and asks for nothing itself.
-fn update(runtime: &Runtime, directory: &str, bundled: Option<&str>) {
-    if bundled.is_none() || !agterm_core::live::support::is_executable_file(&runtime.executable) {
+/// or a staged id (an unstaged build checks no build). Before any pane attaches: after a committed handoff each pane's
+/// `agterm-session attach` finds the staged build and asks for nothing; after a failed one each asks the old server
+/// once more (a process of its own, it never saw this attempt), which answers with the same failure at once and
+/// disconnects nobody, and the pane attaches to it.
+fn update(runtime: &Runtime, directory: &str, options: &StartOptions) {
+    let Some(bundled) = options.build.as_deref() else {
+        return;
+    };
+    if !agterm_core::live::support::is_executable_file(&runtime.executable) {
         return;
     }
-    let mut options = StartOptions::new(&runtime.executable);
-    options.build = bundled.map(str::to_owned);
-    match Client::new(directory).update(&options) {
+    match Client::new(directory).update(options) {
         Ok(None) => {}
         Ok(Some(HandoffAttempt::Committed { from })) => {
             tracing::info!(%from, to = bundled, "live sessions handed over to this build");
-            record_handoff(bundled, &runtime.state_dir, SystemTime::now());
+            record_handoff(Some(bundled), &runtime.state_dir, SystemTime::now());
         }
         Ok(Some(HandoffAttempt::Failed { from, reason })) => {
             tracing::warn!(%from, to = bundled, %reason, "the live sessions stay with the older build");

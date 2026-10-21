@@ -198,8 +198,31 @@ fn session_host(executable: &Path, dir: &str) -> agterm_session::host::ServerHos
     agterm_session::host::ServerHost::new(executable, dir)
 }
 
+/// Removes a sandbox's live-session namespace `dir` (in `/tmp`, outside the sandbox's root) once its server stopped:
+/// it stops by itself within its idle grace after its last session went, and lets go of the namespace's lock then
+/// (`server.lock`, held while it listens; a lock file removed under a listening server would let a second one bind).
+/// Its server still listening at the deadline, the directory is left as it is.
+fn remove_live_namespace(dir: &Path) {
+    let deadline = Instant::now() + agterm_session::server::lifecycle::IDLE_GRACE + DEADLINE;
+    let lock = dir.join(agterm_session::endpoint::LOCK_FILE_NAME);
+    loop {
+        let free = match std::fs::File::open(&lock) {
+            Ok(file) => file.try_lock().is_ok(),
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
+        if free {
+            let _ = std::fs::remove_dir_all(dir);
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Kills every live session of the sandbox's namespace through its own server, however the test ended; the server
-/// then stops by itself.
+/// then stops by itself, and the namespace goes with it.
 struct Sessions {
     executable: PathBuf,
     dir: String,
@@ -221,6 +244,7 @@ impl Drop for Sessions {
         if let Ok(names) = self.names() {
             session_host(&self.executable, &self.dir).kill_batch(&names);
         }
+        remove_live_namespace(Path::new(&self.dir));
     }
 }
 

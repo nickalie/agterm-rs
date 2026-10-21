@@ -488,44 +488,35 @@ mod live {
         }
     }
 
-    /// The pids of this namespace's processes this machine shows: its server (`agterm-session server <dir>`) and every
-    /// process whose environment carries `AGTERM_LIVE_DIR=<dir>` (the sessions' programs and their attach clients). Linux
-    /// reads them from `/proc`; elsewhere none are seen, and the server's own listing stands alone.
+    /// The pids of this namespace's processes, read from `/proc`: its server (`agterm-session server <dir>`) and every
+    /// process whose environment carries `AGTERM_LIVE_DIR=<dir>` (the sessions' programs and their attach clients).
     fn processes_in(dir: &str) -> Vec<i32> {
-        #[cfg(target_os = "linux")]
-        {
-            let marker = format!("{}={dir}", agterm_core::live::DIRECTORY_VARIABLE);
-            let Ok(entries) = std::fs::read_dir("/proc") else {
-                return Vec::new();
-            };
-            let words = |pid: i32, file: &str| -> Vec<Vec<u8>> {
-                std::fs::read(format!("/proc/{pid}/{file}"))
-                    .map(|bytes| bytes.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect())
-                    .unwrap_or_default()
-            };
-            entries
-                .filter_map(Result::ok)
-                .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
-                .filter(|pid| {
-                    let argv = words(*pid, "cmdline");
-                    let server = argv.len() >= 3
-                        && argv[0].ends_with(b"/agterm-session")
-                        && argv[1] == b"server"
-                        && argv[2] == dir.as_bytes();
-                    server || words(*pid, "environ").iter().any(|var| var == marker.as_bytes())
-                })
-                .collect()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = dir;
-            Vec::new()
-        }
+        let marker = format!("{}={dir}", agterm_core::live::DIRECTORY_VARIABLE);
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        let words = |pid: i32, file: &str| -> Vec<Vec<u8>> {
+            std::fs::read(format!("/proc/{pid}/{file}"))
+                .map(|bytes| bytes.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect())
+                .unwrap_or_default()
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|pid| {
+                let argv = words(*pid, "cmdline");
+                let server = argv.len() >= 3
+                    && argv[0].ends_with(b"/agterm-session")
+                    && argv[1] == b"server"
+                    && argv[2] == dir.as_bytes();
+                server || words(*pid, "environ").iter().any(|var| var == marker.as_bytes())
+            })
+            .collect()
     }
 
     /// End this test's namespace through its own server, and only it: every session it lists killed, then the server's
     /// own exit once idle (`agterm_session::server::lifecycle::IDLE_GRACE` after its last client, so nothing here asks it
-    /// anything meanwhile) and every process of the namespace gone (Linux); one that outlives the deadline is killed by
+    /// anything meanwhile) and every process of the namespace gone; one that outlives the deadline is killed by
     /// its pid, which names this namespace alone, and fails the test.
     fn reap(host: &ServerHost, dir: &str) {
         let listed = host.list();

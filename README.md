@@ -128,7 +128,8 @@ its patches in `build/patches/`, so a complete prefix is reused as is and a pin 
 ```sh
 scripts/build-ghostty-vt.sh    # the pinned, patched libghostty-vt source (Ghostty's vt C API) with its Zig packages,
                                # and Ghostty's themes, shell integration and terminfo at the same pin
-scripts/build-zmx.sh           # the pinned, patched zmx behind Live sessions
+scripts/build-zmx.sh           # the pinned, patched zmx, still built but no longer behind Live sessions
+                               # (they run on the staged agterm-session)
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
 scripts/fetch-fonts.sh         # the fonts Ghostty embeds, which the GPUI frontend embeds too (below)
 scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the system's, else the pinned Arch package

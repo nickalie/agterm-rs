@@ -131,8 +131,9 @@ if [[ "$display" == headless ]] && ! env -u WAYLAND_DISPLAY -u DISPLAY weston --
 fi
 
 # Concurrent suites starve each other's software-rendered pane mounts past their deadlines: queue instead. This shell
-# holds the lock and runs the suite in a child without its descriptor, so the zmx daemons that outlive a run by design
-# do not keep holding it. One descriptor for the try and the wait: no window in which a queued run says nothing.
+# holds the lock and runs the suite in a child without its descriptor, so the instances' session servers, which outlive
+# a run by design, do not keep holding it. One descriptor for the try and the wait: no window in which a queued run says
+# nothing.
 if [[ -z "$locked" ]]; then
     lock="${CONFORMANCE_LOCK:-}"
     if [[ -z "$lock" ]]; then

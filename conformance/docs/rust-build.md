@@ -228,20 +228,20 @@ until the switch, was folded into it).
 
 Build. The native inputs come first, each into its vendored prefix (README > Native dependencies):
 `scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `agterm-ghostty-vt-sys`'s build script builds
-with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`), `scripts/fetch-fonts.sh` (the fonts the terminal
-embeds) and `scripts/build-zmx.sh` (zmx, for `live-sessions` and `live-any-shell`). `run-rust-linux.sh` then builds
+with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`) and `scripts/fetch-fonts.sh` (the fonts the
+terminal embeds); the live sessions' server, `agterm-session`, is a workspace binary. `run-rust-linux.sh` then builds
 the release workspace without what links WPE WebKit and `agterm-gpui` with its default `html` feature, so the staged
 app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR`
 runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
 `bin/agterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's and the fork's CLI is `agtermctl`,
-and the CLI tests expect the adapter's name in usage lines) and `bin/zmx` with `share/ngterm/zmx-BUILD`
-(the staged zmx's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and `share/ghostty` (themes, shell
-integration) from the libghostty-vt prefix, agterm's own themes beside Ghostty's, and the agent integrations' payloads
-under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`, that would be the fork's state
-dir). There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK, libghostty or
-layer-shell is linked at all.
+and the CLI tests expect the adapter's name in usage lines) and `bin/agterm-session` with
+`share/ngterm/session-BUILD` (the staged server's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and
+`share/ghostty` (themes, shell integration) from the libghostty-vt prefix, agterm's own themes beside Ghostty's, and
+the agent integrations' payloads under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`,
+that would be the fork's state dir). There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK,
+libghostty or layer-shell is linked at all.
 
 Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lavapipe, from
 `scripts/fetch-lavapipe.sh`: `AGTERM_LAVAPIPE_ICD` when set; the distribution's package where one is installed

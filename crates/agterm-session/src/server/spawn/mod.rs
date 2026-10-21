@@ -26,7 +26,8 @@
 //! `build_record`). A server whose protocol refuses the client's role is asked the same; when that fails the call
 //! fails ([`StartError::HandoffFailed`]). Once means once per process for that server and that expected build: a
 //! failed attempt is remembered, and later calls report it without asking again, since every attempt disconnects
-//! the server's clients (`attempts.rs`).
+//! the server's clients (`attempts.rs`). Another client process asking again is answered at once by the server, which
+//! does not run a handoff it failed again and disconnects nobody for it ([`crate::server::handoff`]).
 //!
 //! # Private images on Windows
 //!

@@ -1,11 +1,12 @@
 //! The update handoff through the `agterm-session` binary, on every OS: servers started detached from the test, as a
 //! client starts them ([`connect_or_start`]), each in a private namespace of its own, sessions created and read over
 //! the wire. A handoff keeps the shell, its screen and its scrollback, and an attached client reattaches to the new
-//! server; a failed one leaves the old server serving, and a client does not ask for it again; a client of another
-//! build hands the server over by itself, with the staged binary replaced while the server runs (on Windows, which
-//! cannot replace a running executable, the server runs a private copy); continuous output loses no byte across it;
-//! and a server that does not hand over refuses and keeps serving (on Windows, where the `ConPTY` layout gate refuses
-//! an unknown layout before any handle is read, as `server::handoff`'s unit tests show).
+//! server; a failed one leaves the old server serving, a client does not ask for it again, and the server answers it
+//! asked again by another client at once, its clients left attached; a client of another build hands the server over by
+//! itself, with the staged binary replaced while the server runs (on Windows, which cannot replace a running
+//! executable, the server runs a private copy); continuous output loses no byte across it; and a server that does not
+//! hand over refuses and keeps serving (on Windows, where the `ConPTY` layout gate refuses an unknown layout before any
+//! handle is read, as `server::handoff`'s unit tests show).
 //!
 //! Every session gets the test's environment without the live agterm's `AGTERM_*` and `ZMX_*` variables, and every
 //! server is the test's own: no handoff here ever reaches another one.
@@ -135,12 +136,22 @@ impl Namespace {
 
     /// Ask the running server, on a control connection, to hand over to `exe` of `build`; its answer.
     fn hand_over(&self, exe: &Path, build: &str) -> TestResult<Result<(), agterm_session::protocol::ControlError>> {
+        self.hand_over_at(exe, build, PROTOCOL_VERSION)
+    }
+
+    /// [`Namespace::hand_over`] to a replacement of `protocol`.
+    fn hand_over_at(
+        &self,
+        exe: &Path,
+        build: &str,
+        protocol: u32,
+    ) -> TestResult<Result<(), agterm_session::protocol::ControlError>> {
         let Connected { mut stream, .. } =
             connect_existing(&self.endpoint, &hello(Role::Control), PATIENCE)?.ok_or("no server to hand over")?;
         let request = HandoffRequest {
             import_exe: exe.to_string_lossy().into_owned(),
             expected_build: build.to_owned(),
-            expected_protocol: PROTOCOL_VERSION,
+            expected_protocol: protocol,
         };
         write_control(&mut stream, &Control::HandoffRequest(request))?;
         match read_frame(&mut stream)?.control()? {
@@ -428,6 +439,30 @@ fn a_failed_handoff_is_not_asked_again_and_the_clients_stay_attached() -> TestRe
     // asked nothing, the server left the reattached client attached
     namespace.type_line("once", &support::tagged("still-attached"))?;
     after.expect("got:still-attached")?;
+    Ok(())
+}
+
+/// A handoff the server failed, asked for again by a client that never saw it (another process, each pane's attach
+/// one: no memo of its own), is answered at once with the same failure, and the client attached since stays attached;
+/// another protocol of that build is a handoff of its own, which disconnects it.
+#[test]
+fn a_server_answers_a_failed_handoff_asked_again_and_keeps_its_clients_attached() -> TestResult {
+    const UNREACHABLE: &str = "a build no replacement is";
+    let namespace = Namespace::new()?;
+    let options = StartOptions::new(EXE);
+    let mut before = Client::attach(&namespace, &options, "asked", Some(shell()))?;
+    let first = namespace.hand_over(Path::new(EXE), UNREACHABLE)?.unwrap_err();
+    assert_eq!(first.code, ErrorCode::HandoffFailed);
+    before.closed()?;
+    let mut after = Client::attach(&namespace, &options, "asked", None)?;
+
+    assert_eq!(namespace.hand_over(Path::new(EXE), UNREACHABLE)?, Err(first));
+    namespace.type_line("asked", &support::tagged("still-attached"))?;
+    after.expect("got:still-attached")?;
+
+    let other = namespace.hand_over_at(Path::new(EXE), UNREACHABLE, PROTOCOL_VERSION + 1)?;
+    assert!(other.is_err(), "no replacement is of that build either");
+    after.closed()?;
     Ok(())
 }
 

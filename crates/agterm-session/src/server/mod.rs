@@ -337,6 +337,8 @@ struct Shared {
     connections: Mutex<Connections>,
     /// A handoff runs: connections accepted meanwhile are closed at once.
     handing_off: AtomicBool,
+    /// The handoffs this server failed, which it does not run again.
+    failed_handoffs: handoff::Failures,
     /// The listener the accept loop owns, for a handoff to pass on.
     listener: Mutex<Weak<Listener>>,
 }
@@ -394,6 +396,7 @@ impl Shared {
             generation: AtomicU64::new(0),
             connections: Mutex::new(Connections::default()),
             handing_off: AtomicBool::new(false),
+            failed_handoffs: handoff::Failures::default(),
             listener: Mutex::new(Weak::new()),
         })
     }

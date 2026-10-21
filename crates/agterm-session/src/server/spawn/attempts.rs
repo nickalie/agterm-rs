@@ -1,6 +1,8 @@
 //! The handoffs this process asked for, so that a server of another build is asked once ([`super::connect_or_start`]):
 //! every attempt disconnects the server's clients, even one that then fails, so a failing handoff asked again by each
-//! client reattaching would keep disconnecting the others.
+//! client reattaching would keep disconnecting the others. Across processes the server itself holds the line: it
+//! answers a request for a handoff it failed at once, without running it again ([`crate::server::handoff`]), so this
+//! memo saves the round trip and keeps what the server never saw (no handoff capability, a lost answer).
 //!
 //! The memo is process-wide and keyed by the endpoint, the server's pid and build, and the build expected; it never
 //! expires (time passing does not make a refused handoff work): a new server (another pid or build), another expected

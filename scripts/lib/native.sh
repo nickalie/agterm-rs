@@ -70,13 +70,14 @@ sha256_of() {
 }
 
 # FILE's size in bytes and modification time in nanoseconds since the Unix epoch, as `<size> <mtime-ns>`: GNU stat
-# (Linux, Git Bash), else BSD stat (stock macOS).
+# (Linux, Git Bash), else BSD stat (stock macOS); in the C locale, whose decimal point is the dot (a comma-decimal
+# locale's GNU stat writes `<seconds>,<digits>`).
 size_and_mtime_ns() {
   local stat
   if stat --version >/dev/null 2>&1; then
-    stat="$(stat -c '%s %.9Y' "$1")" || return 1
+    stat="$(LC_ALL=C stat -c '%s %.9Y' "$1")" || return 1
   else
-    stat="$(stat -f '%z %.9Fm' "$1")" || return 1
+    stat="$(LC_ALL=C stat -f '%z %.9Fm' "$1")" || return 1
   fi
   # `<seconds>.<nine digits>` as one number of nanoseconds
   printf '%s\n' "$stat" | sed -e 's/\.//' -e 's/ 0*\([0-9]\)/ \1/'
