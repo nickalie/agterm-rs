@@ -2,7 +2,7 @@
 //!
 //! - [`MainLoop`]: posts work to the thread that owns the app state (the GPUI main thread in `agterm-gpui`).
 //! - [`Surface`]: one live terminal (libghostty-vt in the frontend's terminal element), owned on the main thread.
-//! - [`SessionHost`]: the daemons that keep live sessions alive across app restarts (zmx).
+//! - [`SessionHost`]: the daemons that keep live sessions alive across app restarts (the session server's).
 //! - [`ProcessLauncher`]: starts helper processes (overlay programs, hooks, custom commands).
 //! - [`ProcessTable`]: reads the process table (a pane's foreground program for the tree and the restore capture).
 //!
@@ -180,8 +180,8 @@ pub struct ProcessRecord {
     pub foreground: i32,
 }
 
-/// The daemons that keep live sessions running while no app is attached (zmx). Called from the main thread and
-/// from worker threads, hence `Send + Sync`.
+/// The daemons that keep live sessions running while no app is attached (the session server's). Called from the main
+/// thread and from worker threads, hence `Send + Sync`.
 ///
 /// A confirmed [`SessionHost::kill`] or [`SessionHost::kill_batch`] also hangs up the foreground job the killed
 /// daemon's shell leaves running, as closing a terminal would have (upstream's `ProcessSweeper`): the daemon signals

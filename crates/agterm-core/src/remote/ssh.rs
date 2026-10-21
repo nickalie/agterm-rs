@@ -62,10 +62,11 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
 const GONE_GUARD: &str = "printf '%s\\n' 'agterm: remote session is gone'; exit 1";
 
 /// One ssh invocation attaching to `daemon` on `host` for the lifetime of the pane (upstream's `attachCommand`, which
-/// runs the far machine's zmx): `-tt`, as `agterm-session attach` reads termios and the window size, no lifetime
-/// deadline, and `LogLevel=ERROR` so ssh's own banners stay off the pane. The attach contract's variables the account
-/// may carry are cleared, as an inherited `AGTERM_LIVE_SESSION` refuses the attach (zmx switched session there) and a
-/// prefix would rename the daemon; `lead` opts the far attach client into explicit leadership.
+/// runs the far machine's zmx; here its `agterm-session attach`): `-tt`, as `agterm-session attach` reads termios and
+/// the window size, no lifetime deadline, and `LogLevel=ERROR` so ssh's own banners stay off the pane. The attach
+/// contract's variables the account may carry are cleared, as an inherited `AGTERM_LIVE_SESSION` refuses the attach
+/// (upstream's zmx switched session there) and a prefix would rename the daemon; `lead` opts the far attach client into
+/// explicit leadership.
 ///
 /// # Errors
 ///

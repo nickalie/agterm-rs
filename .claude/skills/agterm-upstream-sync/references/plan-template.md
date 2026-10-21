@@ -15,7 +15,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 - Bring agterm-rs from upstream `umputun/agterm` <old tag> to <new tag> (<N> commits, releases <list>). The
   mechanical part is done on branch `upstream-sync-<new tag>` (commit `<sha>`): catalog and ui-ids regenerated,
-  pins <changed: what | unchanged>, vendored copies <synced | conflicts: which>, parity-target mentions bumped.
+  upstream's pins <moved: what | unchanged>, vendored copies <synced | conflicts: which>, parity-target mentions bumped.
 - This plan ports the behavior: <one line per task group>.
 - Out of scope: <the no-port list, one line, or "upstream CI, packaging and release metadata">.
 
@@ -31,9 +31,9 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   - coverage gate: <ok | the uncovered keys, each with its task>
   - `run-rust-linux.sh` (full): ratchet <holds | breaks: ids and cause>; newly green: <ids added | none>
 - Already in the Rust build (no task): <feature — evidence: file / ratchet id>, or "nothing".
-- Not run on this host: <the ratchet's `not run on this host` ids and why (no zsh login shell / no zmx)>, or "none".
-- Native pins: <unchanged | ZMX_REV a -> b, patches apply | ...>; upstream's GHOSTTY_REV <unchanged | a -> b, a task
-  reviews it against LIBGHOSTTY_VT_REV>.
+- Not run on this host: <the ratchet's `not run on this host` ids and why (no zsh login shell)>, or "none".
+- Upstream's pins (none is a pin here): ZMX_REV and zmx-patches <unchanged | a -> b and the changed patches, a task
+  ports them into agterm-session>; GHOSTTY_REV <unchanged | a -> b, a task reviews it against LIBGHOSTTY_VT_REV>.
 
 ## Safety rules
 

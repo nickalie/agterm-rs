@@ -1,6 +1,6 @@
 //! The Ghostty shell integration a wrapped pane's login shell starts with, ported from Ghostty's
 //! `src/termio/shell_integration.zig` (at the pinned `LIBGHOSTTY_VT_REV`). libghostty injects it only into a shell it spawns
-//! itself; a live pane's shell is the zmx daemon's child, so the wrap injects it the same way:
+//! itself; a live pane's shell is the session server's child, so the wrap injects it the same way:
 //!
 //! - zsh as upstream agterm: `ZDOTDIR` names the integration, the app's own one handed on as `GHOSTTY_ZSH_ZDOTDIR`;
 //! - bash in POSIX mode (`--posix`), whose interactive start reads `ENV`: the integration script, told by
@@ -46,8 +46,8 @@ pub const PWSH_LOAD: &str = "if ($env:AGTERM_PWSH_INTEGRATION) { try { . ([scrip
     [System.IO.File]::ReadAllText($env:AGTERM_PWSH_INTEGRATION))) } catch { \
     Microsoft.PowerShell.Utility\\Write-Warning \"ngterm: the shell integration did not load: $_\" } }";
 /// PowerShell's flags before the `-Command` that loads the integration: no banner, and an interactive shell once the
-/// command ran. `-Login` (Unix only, where it must come first) makes it a login shell, as zmx makes zsh and fish one;
-/// Windows has no login profiles, and Windows PowerShell 5.1 refuses the flag.
+/// command ran. `-Login` (Unix only, where it must come first) makes it a login shell, as the server makes zsh and fish
+/// one; Windows has no login profiles, and Windows PowerShell 5.1 refuses the flag.
 const PWSH_INTERACTIVE: &[&str] = if cfg!(windows) {
     &["-NoLogo", "-NoExit"]
 } else {
@@ -153,9 +153,9 @@ impl LoginShell {
         }
     }
 
-    /// The program a new daemon runs when the attach carries nothing to replay. zmx itself starts `$SHELL` as a login
-    /// shell (`-zsh`, `-fish`), which zsh and fish need; bash reads `ENV` only in POSIX mode, a flag zmx never passes;
-    /// PowerShell reads no integration by itself, so its `-Command` loads it ([`PWSH_LOAD`]).
+    /// The program a new daemon runs when the attach carries nothing to replay. The session server itself starts
+    /// `$SHELL` as a login shell (`-l`), which zsh and fish need; bash reads `ENV` only in POSIX mode, a flag the
+    /// server never passes; PowerShell reads no integration by itself, so its `-Command` loads it ([`PWSH_LOAD`]).
     #[must_use]
     pub fn login_arguments(self, shell: &str) -> Vec<String> {
         match self {

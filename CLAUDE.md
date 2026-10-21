@@ -32,7 +32,6 @@ below, not a later phase. Build, run and test commands are in [README.md](README
 | `agterm-pty` | the PTY layer of plain and live panes: a child on a PTY (openpty, ConPTY; its process group or kill-on-close job), herdr's PTY actor (poll and wake pipe on Unix, reader and writer threads on Windows) with the handoff's quiesce, duplicate, rollback and release, over the vendored portable-pty | any |
 | `agterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed by an IO thread per pane from a PTY, or for a live pane from its session's attach stream in process, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | any |
 | `agterm-session` | the live-session server on herdr's architecture, the app's session host: wire, endpoint, lifecycle and detached spawn per OS; the pane runtime (a session's program on a PTY, its terminal state, the fan-out to attached clients); the update handoff; the client library and the `SessionHost` over it; the binary's server and its attach-contract CLI; the foreground job and its sweeper and the process table, on every OS; the live-launch inputs (session host executable, build id, login shell, resources, namespace); the `/proc` stat and cmdline parsers | any |
-| `agterm-zmx` | the `SessionHost` over the patched zmx, which nothing runs any more (the app's live sessions are `agterm-session`'s); it goes with zmx | Linux, macOS |
 | `agterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `ProcessTable` (`agterm-session`'s, re-exported), logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process | Linux |
 | `agterm-wpe-sys`, `agterm-wpe-platform-sys`, `agterm-wpe-javascriptcore-sys` | checked-in gir output over WPE WebKit, one crate per GObject namespace (`scripts/gen-wpe-bindings.sh`) | Linux |
 | `agterm-wpe` | WPE WebKit host for the HTML overlays: offscreen pages on an engine thread of their own (or in a worker process), frames out as dmabufs or SHM | Linux |
@@ -94,9 +93,10 @@ toolkit-neutral, so another frontend can drive them.
    checks, the workspace tests headless, the suite's selftests), then a full `conformance/tools/run-rust-linux.sh` in
    the background; add the newly green ids to the ratchet (`check_ratchet.py`).
 
-A new upstream release moves the catalog's tag (`conformance/tools/gen_catalog.py`), `.upstream/agterm` and the zmx
-pin in `build/pins.env` together. The Ghostty pin follows ghostty main, not upstream's libghostty: its bump is a change
-of its own, with what it regenerates (`build/pins.env` names it).
+A new upstream release moves the catalog's tag (`conformance/tools/gen_catalog.py`) and `.upstream/agterm` together. The
+build runs no zmx: what an upstream release changes in its zmx (the pin, its patches) is ported into `agterm-session` as
+behavior, under `live.*` and the attach contract. The Ghostty pin follows ghostty main, not upstream's libghostty: its
+bump is a change of its own, with what it regenerates (`build/pins.env` names it).
 
 ## Gates
 
@@ -111,8 +111,8 @@ of its own, with what it regenerates (`build/pins.env` names it).
 
 ## Never touch the user's running agterm
 
-Agents here usually run inside a pane of the user's live agterm, whose `AGTERM_*` and `ZMX_*` variables point at it.
-Every dev instance, probe or `ngtermctl` call stays off it:
+Agents here usually run inside a pane of the user's live agterm, whose `AGTERM_*` variables (and `ZMX_*`, where that
+agterm runs its sessions on zmx) point at it. Every dev instance, probe or `ngtermctl` call stays off it:
 
 - Launch a checkout's build only through `scripts/run-gpui-dev.sh` (or the suite): the build shares the installed
   ngterm's application id and state (README holds them), so a plain launch is forwarded to the running instance

@@ -1,9 +1,9 @@
-//! Explicit zmx leadership in the app (upstream's `ZmxLeadBook`, `Ghostty/PaneLead.swift` and
-//! `ControlServer+PaneLead.swift`): a wrapped pane's zmx client reports its role as a terminal title, a pane that does
-//! not lead is covered, and taking the lead is always a fresh attach into a new terminal, since the covered one drew
-//! output laid out for another client's grid. A pane whose zmx reported a role reads its screen and cursor, and types,
-//! through the daemon: the role is a report up to 250 ms behind the daemon, so it never guarantees delivery through
-//! the pane's own surface.
+//! Explicit live-session leadership in the app (upstream's `ZmxLeadBook`, `Ghostty/PaneLead.swift` and
+//! `ControlServer+PaneLead.swift`): a wrapped pane's attach reports its role as a terminal title, a pane that does not
+//! lead is covered, and taking the lead is always a fresh attach into a new terminal, since the covered one drew output
+//! laid out for another client's grid. A pane whose attach reported a role reads its screen and cursor, and types,
+//! through the daemon: the role is a report up to 250 ms behind the daemon, so it never guarantees delivery through the
+//! pane's own surface.
 
 use std::collections::HashMap;
 
@@ -76,7 +76,7 @@ impl LeadBook {
 /// Where a pane's reads and typing go (upstream's `PaneSource`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PaneSource {
-    /// The pane's own surface: its zmx never reported a role, or the read is of the viewport of a pane that leads.
+    /// The pane's own surface: its attach never reported a role, or the read is of the viewport of a pane that leads.
     Surface,
     /// The pane's daemon, by name.
     Daemon(String),
@@ -93,7 +93,7 @@ pub struct LeadCover {
 }
 
 impl Core {
-    /// Where a pane carrying `token` reads and types: the daemon once its zmx reported a role, the surface for the
+    /// Where a pane carrying `token` reads and types: the daemon once its attach reported a role, the surface for the
     /// viewport of a pane that leads (`viewport`: a plain `session.text`, the one read whose meaning is the pane's own
     /// scrolled view).
     pub(crate) fn pane_source(&self, surface: &dyn Surface, viewport: bool) -> PaneSource {
@@ -172,7 +172,7 @@ impl Core {
     }
 
     /// The lead the tree reports for the pane carrying `token`: `leader`, `follower` or `unowned`, absent until its
-    /// zmx reported one.
+    /// attach reported one.
     #[must_use]
     pub(crate) fn pane_lead(&self, token: &str) -> Option<&'static str> {
         let identity = Uuid::parse_str(token).ok()?;

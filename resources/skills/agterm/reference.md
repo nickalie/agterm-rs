@@ -2020,7 +2020,7 @@ text on the Mac showing it, and on the Mac it runs on as well.
   included. Text that starts with `-` is read as an option, and `-h` or `--help` prints help and exits 0
   with nothing copied: pipe such text on stdin, or write `ngtermctl clipboard set -- "-text"`. Refused when empty, and above about 6 MB (libghostty drops a longer clipboard write whole).
 - Needs no terminal, so an agent's shell tool can run it. It does need the pane's own environment:
-  `ZMX_SESSION` and `ZMX_DIR`, which a main or split pane started under Live sessions carries. A scratch,
+  `AGTERM_LIVE_SESSION` and `AGTERM_LIVE_DIR`, which a main or split pane started under Live sessions carries. A scratch,
   quick or overlay terminal, and a pane started in another restore mode, is refused with `this pane has
   no live session; run it in a main or split pane started under Live sessions`. `pbcopy` is a fallback
   there only when the clipboard wanted is this Mac's own: an overlay shown on another Mac still runs here.

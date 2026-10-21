@@ -125,7 +125,7 @@ pub struct LiveProbe {
     pub ui_test_launch: bool,
     /// `AGTERM_UITEST_ENABLE_LIVE=1` opts a UI-test launch back in.
     pub ui_test_opt_in: bool,
-    /// The bundled zmx executable.
+    /// The bundled session server executable.
     pub executable: PathBuf,
     /// The login shell in the password database.
     pub login_shell: Option<String>,
@@ -213,13 +213,13 @@ mod tests {
     #[test]
     fn the_probe_rejects_in_upstreams_order() {
         let dir = tempfile::tempdir().unwrap();
-        let zmx = dir.path().join("zmx");
+        let server = dir.path().join("agterm-session");
         let resources = dir.path().join("share");
         let own = dir.path().join("own");
         let mut probe = LiveProbe {
             ui_test_launch: true,
             ui_test_opt_in: false,
-            executable: PathBuf::from("zmx"),
+            executable: PathBuf::from("agterm-session"),
             login_shell: Some("/bin/tcsh".to_owned()),
             resources_dir: Some(resources.clone()),
             own_resources_dir: Some(own.clone()),
@@ -227,23 +227,23 @@ mod tests {
         assert_eq!(probe.rejection(), Some(LiveRejection::UiTestLaunch));
         probe.ui_test_opt_in = true;
         assert_eq!(probe.rejection(), Some(LiveRejection::ExecutablePathNotAbsolute));
-        probe.executable.clone_from(&zmx);
+        probe.executable.clone_from(&server);
         assert_eq!(
             probe.unavailable_reason().as_deref(),
             Some("the live-session executable is unavailable")
         );
-        fs::write(&zmx, "#!/bin/sh\n").unwrap();
+        fs::write(&server, "#!/bin/sh\n").unwrap();
         assert_eq!(probe.rejection(), Some(LiveRejection::ExecutableUnavailable));
         // what makes it executable: its mode on Unix, its extension on Windows
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&zmx, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).unwrap();
         }
         #[cfg(windows)]
         {
-            let exe = zmx.with_extension("exe");
-            fs::rename(&zmx, &exe).unwrap();
+            let exe = server.with_extension("exe");
+            fs::rename(&server, &exe).unwrap();
             probe.executable = exe;
         }
         assert_eq!(probe.rejection(), Some(LiveRejection::UnsupportedLoginShell));

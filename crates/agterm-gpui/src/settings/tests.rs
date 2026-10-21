@@ -282,7 +282,7 @@ fn a_blank_custom_directory_reads_not_set() {
 #[test]
 fn the_live_refusal_reason_follows_the_restart_hint() {
     let live = Snapshot {
-        live_unavailable: Some("zmx is missing.".to_owned()),
+        live_unavailable: Some("the live-session executable is unavailable".to_owned()),
         ..snapshot(AppSettings {
             restore_mode: Some(RestoreMode::Live),
             ..AppSettings::default()
@@ -297,7 +297,7 @@ fn the_live_refusal_reason_follows_the_restart_hint() {
     assert_eq!(ids[hint + 1], "settings-restore-live-unavailable");
     assert_eq!(
         item(&items, "settings-restore-live-unavailable").title,
-        "zmx is missing."
+        "the live-session executable is unavailable"
     );
     assert_eq!(
         item(&items, "settings-restore-restart-hint").title,

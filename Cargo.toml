@@ -18,7 +18,6 @@ agterm-ghostty-vt = { path = "crates/agterm-ghostty-vt" }
 agterm-host = { path = "crates/agterm-host" }
 agterm-core = { path = "crates/agterm-core" }
 agterm-server = { path = "crates/agterm-server" }
-agterm-zmx = { path = "crates/agterm-zmx" }
 agterm-session = { path = "crates/agterm-session" }
 agterm-pty = { path = "crates/agterm-pty" }
 agterm-app = { path = "crates/agterm-app" }

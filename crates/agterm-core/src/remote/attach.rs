@@ -1,6 +1,6 @@
 //! `live.attach` and File ▸ Attach Remote (upstream's `attachRemoteSession` in `ControlServer+Zmx.swift` and
 //! `AppActions+RemoteAttach.swift`): a local session attached to one of another machine's live sessions, each pane an
-//! ssh into the origin's zmx daemon, marked remote, never persisted.
+//! ssh into the origin's live session, marked remote, never persisted.
 //!
 //! The remote is resolved again before anything is created, so a session gone since the list was taken fails rather
 //! than handing back a fresh shell wearing its name; everything that can fail is checked before the model is touched.

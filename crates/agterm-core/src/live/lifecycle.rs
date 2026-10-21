@@ -1,5 +1,6 @@
-//! Reading and reaping the daemon namespace (upstream's `ZmxLifecycle.swift`): the `zmx list` parser, the leader map,
-//! the gate that paces foreground refreshes and the launch reap policy. The client running them is `agterm-zmx`'s.
+//! Reading and reaping the daemon namespace (upstream's `ZmxLifecycle.swift`): the leader map, the gate that paces
+//! foreground refreshes and the launch reap policy, over the records the session host lists (`agterm-session`'s
+//! `ServerHost`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -8,85 +9,6 @@ use agterm_host::LiveSessionRecord;
 
 use super::is_daemon_name;
 use crate::persist::RestoreMode;
-
-/// Why a `zmx list` output was refused. A refused listing is never an empty namespace: nothing may be reaped from it.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ListParseError {
-    #[error("a zmx list row has no name")]
-    MissingName,
-    #[error("the zmx list row of {0} has no client count")]
-    MissingClients(String),
-    #[error("invalid zmx client count: {0}")]
-    InvalidClients(String),
-    #[error("invalid zmx leader pid: {0}")]
-    InvalidLeaderPid(String),
-}
-
-/// The records of a `zmx list` output: one tab-separated `key=value` row per daemon, the current one marked `→ `. An
-/// `err=` row (a daemon zmx could not read) keeps no client count; invalid creation metadata is dropped rather than
-/// failing the listing, which reap and host discovery depend on.
-///
-/// # Errors
-///
-/// A row without a name, without a client count (and no `err=`), or with a malformed count or leader pid.
-pub fn parse_list(output: &str) -> Result<Vec<LiveSessionRecord>, ListParseError> {
-    output
-        .split(is_newline)
-        .filter(|line| !line.is_empty())
-        .map(parse_row)
-        .collect()
-}
-
-/// Swift's `Character.isNewline`, the separator upstream splits the listing on.
-fn is_newline(c: char) -> bool {
-    matches!(
-        c,
-        '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
-    )
-}
-
-fn parse_row(line: &str) -> Result<LiveSessionRecord, ListParseError> {
-    let line = line.trim_matches(|c: char| c.is_whitespace());
-    let line = line.strip_prefix("→ ").unwrap_or(line);
-    let mut name = None;
-    let mut clients = None;
-    let mut leader_pid = None;
-    let mut created_at = None;
-    let mut has_error = false;
-    for field in line.split('\t') {
-        if let Some(raw) = field.strip_prefix("name=") {
-            name = Some(raw);
-        } else if let Some(raw) = field.strip_prefix("clients=") {
-            clients = Some(
-                raw.parse::<u32>()
-                    .map_err(|_| ListParseError::InvalidClients(raw.to_owned()))?,
-            );
-        } else if let Some(raw) = field.strip_prefix("pid=") {
-            let pid = raw.parse::<i32>().ok().filter(|pid| *pid > 0);
-            leader_pid = Some(pid.ok_or_else(|| ListParseError::InvalidLeaderPid(raw.to_owned()))?);
-        } else if let Some(raw) = field.strip_prefix("created=") {
-            created_at = raw
-                .parse::<i64>()
-                .ok()
-                .and_then(|value| u64::try_from(value).ok())
-                .filter(|value| *value > 0);
-        } else if field.starts_with("err=") {
-            has_error = true;
-        }
-    }
-    let name = name
-        .filter(|name| !name.is_empty())
-        .ok_or(ListParseError::MissingName)?;
-    if clients.is_none() && !has_error {
-        return Err(ListParseError::MissingClients(name.to_owned()));
-    }
-    Ok(LiveSessionRecord {
-        name: name.to_owned(),
-        clients,
-        leader_pid,
-        created_at,
-    })
-}
 
 /// The leader pid of every app daemon that reported one, by name; other names are left out.
 #[must_use]
@@ -182,71 +104,15 @@ mod tests {
     }
 
     #[test]
-    fn the_parser_keeps_client_counts_and_unreachable_names() {
-        let output = "name=agterm-a\tpid=10\tclients=0\tcreated=1\tcwd=/tmp\n\
-                      → name=agterm-b\tpid=11\tclients=2\tcreated=1\tcmd=zsh\r\n\
-                      name=agterm-busy\terr=Timeout\tstatus=unreachable\n";
-        assert_eq!(
-            parse_list(output).unwrap(),
-            [
-                record("agterm-a", Some(0), Some(10), Some(1)),
-                record("agterm-b", Some(2), Some(11), Some(1)),
-                record("agterm-busy", None, None, None),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_parser_reads_the_creation_time_without_ever_failing_on_it() {
-        for (field, expected) in [
-            ("\tcreated=1790000000", Some(1_790_000_000)),
-            ("", None),
-            ("\tcreated=0", None),
-            ("\tcreated=wat", None),
-            ("\tcreated=-5", None),
-        ] {
-            assert_eq!(
-                parse_list(&format!("name=agterm-a\tpid=10\tclients=0{field}\n")).unwrap(),
-                [record("agterm-a", Some(0), Some(10), expected)],
-                "{field}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_parser_refuses_partial_output_instead_of_reaping_from_it() {
-        assert_eq!(parse_list(""), Ok(Vec::new()));
-        assert_eq!(parse_list("pid=10\tclients=0\n"), Err(ListParseError::MissingName));
-        assert_eq!(
-            parse_list("name=agterm-a\tclients=wat\n"),
-            Err(ListParseError::InvalidClients("wat".to_owned()))
-        );
-        assert_eq!(
-            parse_list("name=agterm-a\tclients=-1\n"),
-            Err(ListParseError::InvalidClients("-1".to_owned()))
-        );
-        assert_eq!(
-            parse_list("name=agterm-a\tpid=wat\tclients=0\n"),
-            Err(ListParseError::InvalidLeaderPid("wat".to_owned()))
-        );
-        assert_eq!(
-            parse_list("name=agterm-a\tpid=0\tclients=0\n"),
-            Err(ListParseError::InvalidLeaderPid("0".to_owned()))
-        );
-        assert_eq!(
-            parse_list("name=agterm-a\tpid=1\n"),
-            Err(ListParseError::MissingClients("agterm-a".to_owned()))
-        );
-    }
-
-    #[test]
     fn the_leader_map_keeps_only_generated_names_with_a_readable_pid() {
         let (app, no_pid, unreachable) = (fresh(), fresh(), fresh());
-        let records = parse_list(&format!(
-            "name={app}\tpid=10\tclients=0\nname=other\tpid=11\tclients=0\nname=agterm-notes\tpid=12\tclients=0\n\
-             name={no_pid}\tclients=0\nname={unreachable}\terr=Timeout\tstatus=unreachable\n"
-        ))
-        .unwrap();
+        let records = [
+            record(&app, Some(0), Some(10), None),
+            record("other", Some(0), Some(11), None),
+            record("agterm-notes", Some(0), Some(12), None),
+            record(&no_pid, Some(0), None, None),
+            record(&unreachable, None, None, None),
+        ];
         assert_eq!(leaders(&records), BTreeMap::from([(app, 10)]));
     }
 

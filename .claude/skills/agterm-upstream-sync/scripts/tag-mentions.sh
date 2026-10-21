@@ -10,7 +10,7 @@
 #              mirror is the `parity_level` assert in selftests/test_impls.py::test_swift_macos_profile_follows_launch_mode.
 #              Edit both by hand (the selftest file also holds unrelated version fixtures; the script tags only
 #              that assert `reference`, the rest of the file `keep`)
-#   pins       build/pins.env comments: rewritten with the pins (pins-delta.sh), dates included
+#   pins       build/pins.env comments naming upstream's pins: rewritten by hand from pins-delta.sh's report
 #   resources  integrations/mod.rs: names the release resources/ was copied from; bump once sync-resources.sh ran
 #   claim      what the Rust build *claims* to implement: PARITY_LEVEL in agterm-proto, the tests and docs that
 #              mirror it, linux-ui-checklist.md's header. Bumped in the plan's last task, after the port, never in

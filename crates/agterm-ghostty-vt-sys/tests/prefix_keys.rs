@@ -1,9 +1,9 @@
-//! The Ghostty pin and zmx's key their prefixes independently: bumping a `LIBGHOSTTY_VT_` pin (the library, or the
-//! Ghostty resources vendored beside it) or a libghostty-vt patch leaves the zmx prefix where it is, and a `ZMX_` pin
-//! bump leaves the libghostty-vt prefix where it is.
+//! The Ghostty pin keys its prefix alone: bumping a `LIBGHOSTTY_VT_` pin (the library, its Zig, or the Ghostty
+//! resources vendored beside it) or a libghostty-vt patch moves the libghostty-vt prefix, and another build's pin or
+//! patches leave it where it is.
 //!
-//! Each case runs the real `--print-prefix` of the build scripts over a copy of the repository's scripts, pins and
-//! patches with one pin line edited; nothing is fetched or built. The scripts run with the bash the build script
+//! Each case runs the real `--print-prefix` of the build script over a copy of the repository's scripts, pins and
+//! patches with one pin line edited; nothing is fetched or built. The script runs with the bash the build script
 //! uses (`script.rs`, which finds Git for Windows's on Windows).
 
 #[path = "../script.rs"]
@@ -11,12 +11,6 @@ mod script;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, PartialEq, Eq)]
-struct Prefixes {
-    ghostty_vt: String,
-    zmx: String,
-}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -40,7 +34,7 @@ fn checkout(edit: impl Fn(&str) -> String) -> tempfile::TempDir {
     let root = repo_root();
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("scripts/lib")).unwrap();
-    for script in ["lib/native.sh", "build-ghostty-vt.sh", "build-zmx.sh"] {
+    for script in ["lib/native.sh", "build-ghostty-vt.sh"] {
         fs::copy(
             root.join("scripts").join(script),
             dir.path().join("scripts").join(script),
@@ -54,35 +48,28 @@ fn checkout(edit: impl Fn(&str) -> String) -> tempfile::TempDir {
     dir
 }
 
-fn print_prefix(checkout: &Path, name: &str) -> String {
+fn print_prefix(checkout: &Path) -> String {
     // the same vendor root for every checkout, so only the keys can differ
     script::run(
-        &checkout.join("scripts").join(name),
+        &checkout.join("scripts/build-ghostty-vt.sh"),
         &["--print-prefix"],
         &[("AGTERM_VENDOR", Path::new("/agterm-vendor"))],
     )
-    .unwrap_or_else(|err| panic!("{name}: {err}"))
+    .unwrap_or_else(|err| panic!("build-ghostty-vt.sh: {err}"))
 }
 
-fn prefixes(edit: impl Fn(&str) -> String) -> Prefixes {
-    prefixes_of(&checkout(edit))
+fn vt_prefix(edit: impl Fn(&str) -> String) -> String {
+    print_prefix(checkout(edit).path())
 }
 
-/// The prefixes after `patch` changed one file of the checkout's `build/patches/` (pins unedited).
-fn patched_prefixes(patch: &str) -> Prefixes {
+/// The prefix after `patch` changed one file of the checkout's `build/patches/` (pins unedited).
+fn patched_prefix(patch: &str) -> String {
     let dir = checkout(str::to_owned);
     let path = dir.path().join("build/patches").join(patch);
     let mut text = fs::read_to_string(&path).unwrap();
     text.push_str("\n# edited\n");
     fs::write(&path, text).unwrap();
-    prefixes_of(&dir)
-}
-
-fn prefixes_of(dir: &tempfile::TempDir) -> Prefixes {
-    Prefixes {
-        ghostty_vt: print_prefix(dir.path(), "build-ghostty-vt.sh"),
-        zmx: print_prefix(dir.path(), "build-zmx.sh"),
-    }
+    print_prefix(dir.path())
 }
 
 /// Replace the value of the one `NAME="..."` line in pins.env.
@@ -105,54 +92,47 @@ fn bump(pins: &str, name: &str, value: &str) -> String {
 }
 
 #[test]
-fn the_prefixes_are_named_after_their_builds() {
-    let base = prefixes(str::to_owned);
-    assert!(base.ghostty_vt.starts_with("/agterm-vendor/ghostty-vt-"), "{base:?}");
-    assert!(base.zmx.starts_with("/agterm-vendor/zmx-"), "{base:?}");
+fn the_prefix_is_named_after_its_build() {
+    let base = vt_prefix(str::to_owned);
+    assert!(base.starts_with("/agterm-vendor/ghostty-vt-"), "{base}");
 }
 
 #[test]
-fn a_libghostty_vt_bump_moves_only_the_vt_prefix() {
-    let base = prefixes(str::to_owned);
-    let bumped = prefixes(|pins| bump(pins, "LIBGHOSTTY_VT_REV", "0000000000000000000000000000000000000000"));
-    assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
-    assert_eq!(bumped.zmx, base.zmx);
+fn a_libghostty_vt_pin_bump_moves_the_prefix() {
+    let base = vt_prefix(str::to_owned);
+    for (name, value) in [
+        ("LIBGHOSTTY_VT_REV", "0".repeat(40)),
+        ("LIBGHOSTTY_VT_ZIG_VERSION", "0.16.1".to_owned()),
+        // the resources live in the vt prefix: a new theme package rebuilds it
+        ("LIBGHOSTTY_VT_THEMES_SHA256", "0".repeat(64)),
+    ] {
+        assert_ne!(vt_prefix(|pins| bump(pins, name, &value)), base, "{name}");
+    }
 }
 
 #[test]
-fn a_libghostty_vt_zig_bump_moves_only_the_vt_prefix() {
-    let base = prefixes(str::to_owned);
-    let bumped = prefixes(|pins| bump(pins, "LIBGHOSTTY_VT_ZIG_VERSION", "0.16.1"));
-    assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
-    assert_eq!(bumped.zmx, base.zmx);
+fn a_libghostty_vt_patch_moves_the_prefix() {
+    let base = vt_prefix(str::to_owned);
+    assert_ne!(
+        patched_prefix("ghostty-vt/0001-kitty-placement-namespace-and-parent.patch"),
+        base
+    );
 }
 
 #[test]
-fn a_theme_package_bump_moves_only_the_vt_prefix() {
-    // the resources live in the vt prefix: a new theme package rebuilds it
-    let base = prefixes(str::to_owned);
-    let bumped = prefixes(|pins| bump(pins, "LIBGHOSTTY_VT_THEMES_SHA256", &"0".repeat(64)));
-    assert_ne!(bumped.ghostty_vt, base.ghostty_vt);
-    assert_eq!(bumped.zmx, base.zmx);
-}
-
-#[test]
-fn a_libghostty_vt_patch_moves_only_the_vt_prefix() {
-    let base = prefixes(str::to_owned);
-    let patched = patched_prefixes("ghostty-vt/0001-kitty-placement-namespace-and-parent.patch");
-    assert_ne!(patched.ghostty_vt, base.ghostty_vt);
-    assert_eq!(patched.zmx, base.zmx);
-}
-
-#[test]
-fn a_zmx_bump_or_patch_leaves_the_vt_prefix() {
-    let base = prefixes(str::to_owned);
-    let bumped = prefixes(|pins| bump(pins, "ZMX_REV", "0000000000000000000000000000000000000000"));
-    assert_ne!(bumped.zmx, base.zmx);
-    assert_eq!(bumped.ghostty_vt, base.ghostty_vt);
-    let patched = patched_prefixes("zmx/0001-explicit-leadership.patch");
-    assert_ne!(patched.zmx, base.zmx);
-    assert_eq!(patched.ghostty_vt, base.ghostty_vt);
+fn other_builds_pins_and_patches_leave_the_prefix() {
+    let base = vt_prefix(str::to_owned);
+    for (name, value) in [
+        ("HERDR_REV", "0".repeat(40)),
+        ("GIR_REV", "0".repeat(40)),
+        ("WPE_ARCH_PACKAGE_SHA256", "0".repeat(64)),
+        ("LAVAPIPE_ARCH_PACKAGE_SHA256", "0".repeat(64)),
+        ("WESTON_SHA256", "0".repeat(64)),
+        ("FONTS_JETBRAINS_MONO_SHA256", "0".repeat(64)),
+    ] {
+        assert_eq!(vt_prefix(|pins| bump(pins, name, &value)), base, "{name}");
+    }
+    assert_eq!(patched_prefix("gir/0001-version-from-env.patch"), base);
 }
 
 /// What the build script reads: the repository's own prefix, in the host's native form (on Windows cygpath's

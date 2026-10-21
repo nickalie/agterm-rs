@@ -140,7 +140,7 @@ pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
     let Some(title) = core.deliver_notification(resolved.window, resolved.session, PaneRole::Main, title, body) else {
         return Err(ControlError::rejected("session's window is not open"));
     };
-    // only a control-origin notification travels to viewers: a terminal's reaches them through zmx itself
+    // only a control-origin notification travels to viewers: a terminal's reaches them through its live session itself
     core.publish_notify(resolved.session, title, body);
     let mut result = with_id(resolved.session);
     if !core.banners_enabled() {

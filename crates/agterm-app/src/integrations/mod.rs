@@ -23,10 +23,11 @@
 //! - every script and plugin calls `ngtermctl` where upstream's calls `agtermctl` (the wrappers' default, their
 //!   comments and the shell integration's);
 //! - the Pi extension and both `OpenCode` plugins call the wrapper in `~/.config/ngterm/agent-status`;
-//! - the skill speaks of the `live` group where upstream's names `zmx`, and it is named `ngterm` (frontmatter `name`, a
-//!   description that also triggers on ngterm and `ngtermctl`), its text, examples and `show-image.sh` running
-//!   `ngtermctl` wherever upstream runs `agtermctl`, the far side of a remote attach included
-//!   (`remote::tree::REMOTE_CLI`): both are patches over upstream's tree (`build/patches/skill-agterm`).
+//! - the skill speaks of the `live` group and the attach contract's `AGTERM_LIVE_*` variables where upstream's names
+//!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
+//!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a
+//!   remote attach included (`remote::tree::REMOTE_CLI`): all are patches over upstream's tree
+//!   (`build/patches/skill-agterm`).
 
 pub mod cli;
 pub mod files;

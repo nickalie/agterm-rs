@@ -78,7 +78,7 @@ pub enum Reason {
     /// Its leader is orphaned or attributed to the app.
     #[default]
     Unsupervised,
-    /// Its daemon was created before this state directory's recorded zmx build change.
+    /// Its daemon was created before this state directory's recorded session server build change.
     Outdated,
 }
 

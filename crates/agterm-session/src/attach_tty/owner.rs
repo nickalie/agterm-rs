@@ -6,8 +6,9 @@
 //! # What the client writes of its own
 //!
 //! - The role title of a managed attach (`server::lead::role_title`), the newest replacing one not yet written: zmx's
-//!   relay (`role.zig` of `build/patches/zmx/0001-explicit-leadership.patch`). A sequence that stays unfinished for
-//!   [`INJECT_WAIT`] is ended with CAN, which only a terminal whose client is changing role or relaying sees.
+//!   relay (`role.zig` of upstream's `scripts/zmx-patches/0001-explicit-leadership.patch`). A sequence that stays
+//!   unfinished for [`INJECT_WAIT`] is ended with CAN, which only a terminal whose client is changing role or relaying
+//!   sees.
 //! - A probe at the start, when the client runs in a terminal: OSC 10, 11 and 12, OSC 4 for the 256 colours, `CSI 16
 //!   t` (the cell's pixels), `CSI ? 996 n` (dark or light), a Kitty graphics query, and DA1 last, whose answer (the
 //!   fence) says every answer before it is in. Mode 2031 is turned on in the outer terminal, so a change of its

@@ -6,7 +6,7 @@
 //!
 //! Linux has no responsibility API to tell a daemon's supervising process (upstream's `LiveAttributionProbe` over
 //! `responsibility_get_pid_responsible_for_pid`) and no session host, so every leader attributes as unknown: a reset
-//! offers the daemons that predate the recorded zmx build, never an "unsupervised" one.
+//! offers the daemons that predate the recorded session server build, never an "unsupervised" one.
 
 use std::collections::BTreeSet;
 use std::thread;

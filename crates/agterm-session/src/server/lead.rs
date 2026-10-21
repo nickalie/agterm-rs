@@ -6,10 +6,9 @@
 //!
 //! Sources:
 //! - the rules are upstream agterm's explicit leadership for zmx (`scripts/zmx-patches/0001-explicit-leadership.patch`
-//!   in `.upstream/agterm`, carried here as `build/patches/zmx/0001`: the daemon's `handleManage`, `setLeader`,
-//!   `roleOf`, `notifyRoles`, and the leadership parts of `handleInit`, `handleInput`, `handleResize` and
-//!   `closeClient`), which `agterm-core`'s lead policy and the conformance suite pin, and its client's role title
-//!   (`role.zig`) under the attach contract's name;
+//!   in `.upstream/agterm`: the daemon's `handleManage`, `setLeader`, `roleOf`, `notifyRoles`, and the leadership parts
+//!   of `handleInit`, `handleInput`, `handleResize` and `closeClient`), which `agterm-core`'s lead policy and the
+//!   conformance suite pin, and its client's role title (`role.zig`) under the attach contract's name;
 //! - [`is_user_input`] is zmx's `isUserInput` with its `parseKittyCsiU` (`src/util.zig` at `8bab1f0`, the zmx agterm
 //!   ran on; MIT, NOTICE), over the states of Ghostty's VT parser it runs (`src/terminal/parse_table.zig` and
 //!   `src/terminal/Parser.zig` at `LIBGHOSTTY_VT_REV`), mirrored here for the actions it looks at;

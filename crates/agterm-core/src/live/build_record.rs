@@ -4,10 +4,10 @@
 //! beside the `agterm-session` binary (`share/ngterm/session-BUILD`, `scripts/stage.sh`), as
 //! `agterm_session::build_id` reads it.
 //!
-//! Unlike zmx, the session server hands its sessions over to a server of the new build (its update handoff): once
-//! that handoff committed ([`record_handoff`]), the sessions created before the launch run in the bundled build, and
-//! the outdated reason is off for that build ([`launch_cutoff`] gives no cutoff). A handoff that failed records
-//! nothing, so the sessions stay outdated and the reset offer stands.
+//! Unlike upstream's zmx, the session server hands its sessions over to a server of the new build (its update
+//! handoff): once that handoff committed ([`record_handoff`]), the sessions created before the launch run in the
+//! bundled build, and the outdated reason is off for that build ([`launch_cutoff`] gives no cutoff). A handoff that
+//! failed records nothing, so the sessions stay outdated and the reset offer stands.
 
 use std::fs;
 use std::path::Path;

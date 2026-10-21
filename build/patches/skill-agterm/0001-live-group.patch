@@ -1,7 +1,7 @@
 The bundled agterm skill in the Rust build's vocabulary: upstream's control group `zmx.*` and `agtermctl zmx` are
 `live.*` and `agtermctl live` there, the inventory is `result.live`, the tree key `backedByLive`, and the texts that
 named zmx speak of live sessions and the session host (conformance/docs/rust-build.md > The `live` group). The attach
-contract's `ZMX_SESSION`/`ZMX_DIR` stay until the session server renames them. sync-resources.sh reapplies this to
+contract's `ZMX_SESSION`/`ZMX_DIR` are renamed in 0003-live-attach-contract.patch. sync-resources.sh reapplies this to
 upstream's plugins/agterm/skills/agterm after every sync.
 
 --- a/SKILL.md

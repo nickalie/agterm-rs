@@ -1,5 +1,5 @@
-//! What zmx reports joined against what agterm's panes claim (upstream's `ZmxInventory.swift`), the rows `live.list`
-//! explains, and the prune policy over them.
+//! What the session host lists joined against what agterm's panes claim (upstream's `ZmxInventory.swift`), the rows
+//! `live.list` explains, and the prune policy over them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +21,7 @@ pub enum ClaimState {
 }
 
 /// What the listing could see of the daemon itself. Separate from the client count because `clients == None` alone
-/// cannot tell a daemon that is gone from one zmx failed to read.
+/// cannot tell a daemon that is gone from one the host failed to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr)]
 #[strum(serialize_all = "camelCase")]
 pub enum DaemonObservation {
@@ -216,8 +216,8 @@ impl Facts {
 
 /// The daemons `live.prune` may take; `None` when no prune is safe at all. Every term is required: a complete,
 /// conflict-free inventory, an identity no pane claims, a daemon observed running with no clients. A closed window's
-/// panes are claimed with zero clients, so the count alone never implies an orphan. Observed, not guaranteed: pinned
-/// zmx has no kill-if-detached, so the caller re-lists right before it kills and drops anything that gained a client.
+/// panes are claimed with zero clients, so the count alone never implies an orphan. Observed, not guaranteed: the
+/// host has no kill-if-detached, so the caller re-lists right before it kills and drops anything that gained a client.
 #[must_use]
 pub fn names_to_prune(result: &InventoryResult) -> Option<Vec<String>> {
     result.inventory_complete.then(|| {

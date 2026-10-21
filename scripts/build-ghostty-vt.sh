@@ -5,7 +5,7 @@
 # agterm-ghostty-vt-sys's build script (`zig build -Demit-lib-vt` over this prefix's tree, for cargo's target, into its
 # OUT_DIR), which never reaches the network: everything that needs it or the shell happens here. The key hashes the
 # LIBGHOSTTY_VT_ pins of build/pins.env (the one Ghostty pin), build/patches/ghostty-vt/, the prefix layout and the
-# host arch, so a zmx pin never moves it and a complete prefix is reused as is.
+# host arch, so another build's pin never moves it and a complete prefix is reused as is.
 #
 # The patches (build/patches/ghostty-vt/*.patch, applied in name order with no fuzz) add C API the app needs and the
 # pin lacks, and the recorded fixes and parity behaviors; build/patches/ghostty-vt/README.md lists each with its reason,

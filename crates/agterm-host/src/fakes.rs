@@ -920,8 +920,8 @@ mod tests {
         assert_eq!(host.kill("agterm-a", true), KillOutcome::Killed);
         assert!(matches!(host.kill("agterm-a", true), KillOutcome::Failed(_)));
         assert!(host.screen("agterm-a", false).is_err());
-        host.fail_list("zmx list timed out");
-        assert_eq!(host.list(), Err(HostError("zmx list timed out".to_owned())));
+        host.fail_list("live session list timed out");
+        assert_eq!(host.list(), Err(HostError("live session list timed out".to_owned())));
     }
 
     #[test]

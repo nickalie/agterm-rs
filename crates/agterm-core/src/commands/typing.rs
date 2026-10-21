@@ -115,9 +115,9 @@ fn typed_result(core: &mut Core, id: Uuid, pane: StatusPane, text: &str, reset: 
     }
 }
 
-/// Types `text` into pane `pane` of session `id` as user input: the keystrokes, then the status clear typing
-/// carries (upstream's `injectAsUserInput`). A pane whose zmx reported a role types through its daemon's acknowledged
-/// path instead (upstream's `coveredType`). False when the pane has no realized terminal.
+/// Types `text` into pane `pane` of session `id` as user input: the keystrokes, then the status clear typing carries
+/// (upstream's `injectAsUserInput`). A pane whose attach reported a role types through its daemon's acknowledged path
+/// instead (upstream's `coveredType`). False when the pane has no realized terminal.
 ///
 /// # Errors
 ///

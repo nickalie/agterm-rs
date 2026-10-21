@@ -96,7 +96,7 @@ impl Core {
     /// lives: in a window's tree, or held by a pending soft close whose terminal still runs. The scratch reports into
     /// nothing, as upstream's scratch is not wired to the session's fields. Nothing is saved. Whether it landed.
     pub fn report_pane(&mut self, session: Uuid, token: &str, report: &PaneReport) -> bool {
-        // a live pane's zmx reports its lead as a title under a reserved prefix, never shown as one
+        // a live pane's attach reports its lead as a title under a reserved prefix, never shown as one
         if let PaneReport::Title(title) = report
             && let Some(notice) = crate::live::lead::LeadNotice::parse(title)
         {
@@ -224,8 +224,8 @@ fn swap_error(refusal: SwapRefusal) -> ControlError {
 // MARK: - lead
 
 /// `session.lead [--pane]`: takes the lead of a pane's live-session client: a covered pane is attached again with the
-/// claim (unless a takeover is already on its way), a leading one answers ok, and one whose zmx never reported a role
-/// has no lead to take.
+/// claim (unless a takeover is already on its way), a leading one answers ok, and one whose attach never reported a
+/// role has no lead to take.
 fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let pane = parse_surface_pane(args.pane.as_deref())?;
     if pane == Some(StatusPane::Scratch) {
@@ -249,8 +249,8 @@ fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     else {
         return Err(not_realized());
     };
-    // a pane that already leads answers ok, so a caller can ask without reading `lead` first; one whose zmx never
-    // reported a role has no lead to take
+    // a pane that already leads answers ok, so a caller can ask without reading `lead` first; one whose attach
+    // never reported a role has no lead to take
     let Ok(identity) = Uuid::parse_str(&token) else {
         return Err(not_realized());
     };

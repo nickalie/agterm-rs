@@ -162,7 +162,7 @@ about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
 A full run stays the default and is required at milestones (the GPUI switch, the plan's Task 34, was one), and whenever a
-change touches the harness or shared crates broadly (agterm-core, -proto, -host, -server, -ctl, -zmx, -app or
+change touches the harness or shared crates broadly (agterm-core, -proto, -host, -server, -ctl, -session, -app or
 -term). Between them a task's routine run is ratchet-only; it finds newly passing ids only among its `--also`
 selections, so a task that turns on a broad area (the terminal, say) grows the list with a full run.
 `--nodeid-report` cannot be combined with `--coverage-gate`.
@@ -196,7 +196,8 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
   harness's own.
 - Each instance gets a fresh root (`/tmp/agt-*`, or under `CONFORMANCE_TMP`) holding its `HOME`, XDG homes, state
   dir and socket; the guards refuse any of them outside it.
-  Its zmx directory derives from that state dir.
+  Its live-session socket directory (the references' zmx one, the Rust build's session server namespace) derives
+  from that state dir.
 - Linux instances get a unique `AGTERM_APP_ID`, never the installed one, and a private `XDG_RUNTIME_DIR`.
 - Linux instances draw into their own headless weston with their own dbus-daemon, so no window, notification or
   a11y object reaches the desktop.

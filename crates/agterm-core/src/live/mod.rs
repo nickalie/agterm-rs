@@ -1,18 +1,18 @@
 //! Live sessions, the host-free half (upstream's `ZmxSupport.swift`, `ZmxReplayScript.swift`,
 //! `ZmxLifecycle.swift`, `ZmxInventory.swift`, `LiveReset.swift`, `ZmxBuildRecord.swift`, `ZmxLead.swift`). The session
-//! server that hosts the sessions (`agterm-session`, in zmx's place) and the host's launch inputs live in the
-//! `agterm-session` crate, which implements [`agterm_host::SessionHost`] over these.
+//! server that hosts the sessions in place of upstream's zmx and the host's launch inputs live in the `agterm-session`
+//! crate, which implements [`agterm_host::SessionHost`] over these.
 //!
 //! - this module: a pane's daemon name and back, the instance's socket directory and the attach contract's variables;
 //! - [`support`]: the wrap configuration of a pane, its rejections, the launch disposition and the attach command;
 //! - [`replay`]: the shell script a wrapped pane runs a captured or creation command with;
 //! - [`shell_integration`]: the shell integration a wrapped zsh, bash, fish or PowerShell login shell starts with;
-//! - [`lifecycle`]: the `zmx list` parser, the leader map, the launch reap policy and the refresh gate;
+//! - [`lifecycle`]: the leader map, the launch reap policy and the refresh gate;
 //! - [`inventory`]: pane claims joined against the observed daemons, and the prune policy;
 //! - [`reset`]: Reset Live Sessions: selection, the one-shot marker, next-launch narrowing and the outcome;
 //! - [`build_record`]: when this state directory first launched the bundled session server build;
 //! - [`lead`]: which client of a daemon leads its grid, from the role reports in terminal titles;
-//! - [`screen`]: the `zmx screen` reply;
+//! - [`screen`]: the last lines of a session's screen read;
 //! - [`sweep`]: the foreground job a killed daemon's shell leaves behind.
 
 pub mod build_record;

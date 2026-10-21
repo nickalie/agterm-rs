@@ -1,6 +1,6 @@
-# Shared helpers of the native build scripts (build-ghostty-vt.sh, build-zmx.sh, build-weston.sh, fetch-wpe.sh,
-# fetch-lavapipe.sh, fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, pkg-config.sh, stage.sh,
-# lib/dev-instance.sh). Sourced, not run.
+# Shared helpers of the native build scripts (build-ghostty-vt.sh, build-weston.sh, fetch-wpe.sh, fetch-lavapipe.sh,
+# fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, pkg-config.sh, stage.sh, lib/dev-instance.sh).
+# Sourced, not run.
 #
 # Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. libghostty-vt's prefix holds a patched source tree, not
@@ -262,16 +262,13 @@ host_zig_arch() {
   esac
 }
 
-# The pinned sha256 of the Zig archive of BUILD (a pin prefix: LIBGHOSTTY_VT, ZMX) for this host:
-# BUILD_ZIG_SHA256_<OS>_<ARCH>, or, for a build pinned on Linux alone (zmx), BUILD_ZIG_SHA256_<ARCH> on Linux.
+# The pinned sha256 of the Zig archive of BUILD (a pin prefix: LIBGHOSTTY_VT) for this host:
+# BUILD_ZIG_SHA256_<OS>_<ARCH>.
 zig_pin_sha256() {
   local build="$1" os arch name
   os="$(upper "$(host_os)")" || exit
   arch="$(upper "$(host_zig_arch)")" || exit
   name="${build}_ZIG_SHA256_${os}_${arch}"
-  if [[ -z "${!name:-}" && "$os" == LINUX ]]; then
-    name="${build}_ZIG_SHA256_${arch}"
-  fi
   [[ -n "${!name:-}" ]] || die "build/pins.env pins no Zig for $build on $(host_os) $(host_zig_arch) ($name)"
   echo "${!name}"
 }

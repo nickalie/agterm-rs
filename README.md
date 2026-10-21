@@ -40,9 +40,9 @@ Linux and Windows are equal targets; today it is built and tested on Linux, and 
 ## Prerequisites
 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).
-- Zig 0.16.0 for libghostty-vt and zmx (`*_ZIG_VERSION` in `build/pins.env`). The build scripts take
-  `AGTERM_GHOSTTY_VT_ZIG` / `AGTERM_ZMX_ZIG`, a zig 0.16.0 on `PATH` or from mise, else they download the pinned
-  ziglang.org tarball and check its sha256.
+- Zig 0.16.0 for libghostty-vt (`LIBGHOSTTY_VT_ZIG_VERSION` in `build/pins.env`). `scripts/build-ghostty-vt.sh`
+  takes `AGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH` or from mise, else it downloads the pinned ziglang.org archive
+  of the host's OS and arch and checks its sha256.
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.
 - WPE WebKit 2.54+ with its WPEPlatform API for the HTML overlays (feature `html`, the default; see
   [WPE WebKit](#wpe-webkit)).
@@ -128,8 +128,6 @@ its patches in `build/patches/`, so a complete prefix is reused as is and a pin 
 ```sh
 scripts/build-ghostty-vt.sh    # the pinned, patched libghostty-vt source (Ghostty's vt C API) with its Zig packages,
                                # and Ghostty's themes, shell integration and terminfo at the same pin
-scripts/build-zmx.sh           # the pinned, patched zmx, still built but no longer behind Live sessions
-                               # (they run on the staged agterm-session)
 scripts/fetch-wpe.sh           # the pinned WPE WebKit binary package, only where the system has none (below)
 scripts/fetch-fonts.sh         # the fonts Ghostty embeds, which the GPUI frontend embeds too (below)
 scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the system's, else the pinned Arch package
@@ -328,7 +326,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
-- `build/`: `pins.env`, the ghostty-vt, zmx, gir, calloop, GPUI and portable-pty patches, agterm's own themes.
+- `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, agterm's own themes.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.

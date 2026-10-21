@@ -143,7 +143,7 @@ also runs with `--must-pass live-sessions`, as reference-macos.
 ## The `live` group
 
 The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no
-`zmx` in its code, its control protocol or its CLI, ahead of the session server that replaces zmx itself. An upstream
+`zmx` in its code, its control protocol or its CLI, and the session server (`agterm-session`) in place of zmx itself. An upstream
 Mac and this build can therefore no longer view each other's sessions (`live.tree HOST` runs `ngtermctl live tree` on
 the far side, an attached row's stream `ngtermctl live present`), and neither can this build and a Rust build from
 before the rename.
@@ -199,7 +199,8 @@ refuses an upstream text that names zmx and that it does not list, and `selftest
 listed text against the Rust sources.
 
 The bundled agent skill (`resources/skills/agterm`, installed as `ngterm`) is upstream's with
-`build/patches/skill-agterm/` applied (the `live` names, then this build's: `ngterm`, `ngtermctl`):
+`build/patches/skill-agterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
+contract's `AGTERM_LIVE_*`):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 

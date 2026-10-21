@@ -1452,15 +1452,46 @@ Order after Task 7, as two lanes that meet:
   {privileges,quit}.rs`, `crates/agterm-term/tests/launch.rs`, `crates/agterm-term/src/bench.rs`,
   `crates/agterm-wpe-sys/tests/provider.rs`, `conformance/docs/rust-build.md`, `.claude/skills/agterm-upstream-sync/**`
 
-- [ ] point every caller at `agterm-session` directly and delete the crate, the build script, the pins and patches;
+- [x] point every caller at `agterm-session` directly and delete the crate, the build script, the pins and patches;
       Zig remains only for libghostty-vt (`LIBGHOSTTY_VT_ZIG_*`)
-- [ ] keep upstream's names only for the Swift adapters (`LEFTOVER_NAMES`, `zmx_client.py`) and the scrub of the
+      - nothing called `agterm-zmx` any more (Task 25): the crate, `scripts/build-zmx.sh`, `build/patches/zmx/` and the
+        `ZMX_*` pins went with their workspace and lock entries; `native.sh` lost the Linux-only Zig sum fallback,
+        `rust-linux.yml` the zmx prefix and its Zig. What only zmx's output needed left core too
+        (`lifecycle::parse_list`, `screen::parse_screen`), and `bench.rs` its zmx rows (`pty_ceiling` keeps the plain
+        PTY's). Comments that described zmx as this build's host name the session server; those citing zmx as a port
+        source keep it, at `8bab1f0` (upstream's `ZMX_REV`) in place of the dropped pin. README, CLAUDE.md (crate map,
+        the upstream-release rule, the isolation rule's `ZMX_*` as the installed agterm's), `rust-build.md`,
+        `conformance/README.md` and the Ghostty patch README follow
+- [x] keep upstream's names only for the Swift adapters (`LEFTOVER_NAMES`, `zmx_client.py`) and the scrub of the
       installed agterm's `ZMX_*`
-- [ ] upstream-sync skill: an upstream zmx change maps onto `live.*` and the attach contract; a herdr change means
+      - the suite's upstream vocabulary and adapters are unchanged; test fixtures that named zmx as this build's host
+        (core's probe and remote endpoint, the host fakes, the settings refusal) use the session server's names. The
+        bundled skill still told agents `clipboard set` reads `ZMX_SESSION`/`ZMX_DIR`: a third skill patch
+        (`build/patches/skill-agterm/0003-live-attach-contract.patch`) names `AGTERM_LIVE_SESSION`/`_DIR`
+        (`sync-resources.sh --check v0.36.0 v0.36.0` unchanged)
+- [x] upstream-sync skill: an upstream zmx change maps onto `live.*` and the attach contract; a herdr change means
       "port into `agterm-session`"
-- [ ] tests: the gpui live process tests and `agterm-term`'s live tests run, not skip; `prefix_keys.rs` keeps the
+      - `pins-delta.sh` takes `OLD_TAG NEW_TAG` and only reports (no pin here): upstream's `ZMX_REV` with zmx's compare
+        URL, the changed `scripts/zmx-patches/` files and `GHOSTTY_REV`; SKILL.md step 2 turns a zmx move into a plan
+        task porting it into `agterm-session` under `live.*` and the attach contract, and says a herdr change is a
+        change of its own into `agterm-session`, never part of a sync; `areas.md` (the attach contract's names, herdr
+        is not upstream, the pins and patches rows), `sync-resources.sh` (no zmx-patches mapping), `classify-diff.py`,
+        the plan template and the hard rules follow
+- [x] tests: the gpui live process tests and `agterm-term`'s live tests run, not skip; `prefix_keys.rs` keeps the
       Ghostty prefix independent of anything zmx left
-- [ ] run gates and the full conformance run
+      - `privileges.rs` and `quit.rs` pass under `AGTERM_REQUIRE_DISPLAY_TESTS=1` (a skip fails there), `tests/live.rs`
+        runs its 11 tests; `prefix_keys.rs` checks the libghostty-vt prefix alone: its pins (revision, Zig, themes)
+        and a patch move it, the other builds' pins (herdr, gir, WPE, lavapipe, weston, fonts) and the gir patch do
+        not; `provider.rs` bumps `HERDR_REV` where it bumped `ZMX_REV`
+- [x] run gates and the full conformance run
+      - fmt, locked metadata, tracing and vendored-source checks, clippy (workspace with all features, the frontend
+        without its default features, `agterm-session`/`agterm-pty`/`agterm-term`/`agterm-core`/`agterm-host` for
+        macOS), the lint report; workspace tests headless 4593 passed, 0 failed (a first run, beside the selftests at
+        a load of 14, failed `quick_terminal`'s weston case on the unzoomed size, as in Task 27; it passed in the quiet
+        run); selftests 842 passed; full conformance 653 passed, 14 skipped, ratchet holds (667 ids, the 14
+        `live-sessions` ones not run on this fish host); on `ci/cps-task-28` (a commit-tree of this tree with a
+        `ci/**` trigger for `rust-linux.yml`, deleted after) `cross-platform.yml` 39567082629 green on all three OSes
+        and `rust-linux.yml` 39567082606 green, its zsh leg 667 passed with every `live-sessions` id
 
 ### Task 29: Verify acceptance criteria
 

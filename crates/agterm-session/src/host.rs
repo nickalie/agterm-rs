@@ -1,5 +1,6 @@
-//! The [`SessionHost`] over the session server ([`crate::client`]), in place of `agterm-zmx`'s `ZmxClient`: the same
-//! operations with the same error kinds and outcomes, over api calls instead of zmx invocations.
+//! The [`SessionHost`] over the session server ([`crate::client`]), in place of upstream's `ZmxClient`
+//! (`agterm/Ghostty/ZmxClient.swift`): the same operations with the same error kinds and outcomes, over api calls
+//! instead of zmx invocations.
 //!
 //! - **The namespace.** Every call reaches the server of the instance's namespace only (the directory the host was
 //!   made with). The host never starts a server: one that does not run holds no session, which is an empty listing,

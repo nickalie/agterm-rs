@@ -1,7 +1,7 @@
-//! `ServerHost`, the `SessionHost` over the session server, on every OS: `agterm-zmx`'s host tests (upstream's
-//! `ZmxClientTests.swift` and the real-zmx tests) ported onto it, against a scripted peer for each answer and error
-//! path, and against a real server run in the test process for the round trip, the forced batch kill that leaves
-//! nothing of the namespace running, and a restart's foreground job.
+//! `ServerHost`, the `SessionHost` over the session server, on every OS: the zmx host's tests (upstream's
+//! `ZmxClientTests.swift`, and the real-zmx tests of the crate this host replaced) ported onto it, against a scripted
+//! peer for each answer and error path, and against a real server run in the test process for the round trip, the
+//! forced batch kill that leaves nothing of the namespace running, and a restart's foreground job.
 //!
 //! Every session gets the test's environment without the live agterm's `AGTERM_*` and `ZMX_*` variables, in a private
 //! namespace.

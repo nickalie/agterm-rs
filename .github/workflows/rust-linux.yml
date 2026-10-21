@@ -38,25 +38,22 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      # The prefixes, the Zig toolchains they were built with and the Zig global cache of the libghostty-vt builds;
+      # The prefixes, the Zig toolchain libghostty-vt's was prepared with and the Zig global cache of its builds;
       # keyed like the prefixes themselves (`ngterm`: the share/ngterm manifest layout; native.sh holds `prefix_key`
       # and the libghostty-vt prefix's layout, part of its key).
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-rs/vendor
           key: vendor-ngterm-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
-      - name: pinned Zig toolchains (sha256 from build/pins.env)
+      - name: pinned Zig toolchain (sha256 from build/pins.env)
         shell: bash
         run: |
           source scripts/lib/native.sh
-          for build in LIBGHOSTTY_VT ZMX; do
-            version_var="${build}_ZIG_VERSION"
-            mkdir -p "$VENDOR_ROOT"
-            # Assign first: a failure inside $(...) of an echo argument would not reach errexit.
-            sha="$(zig_pin_sha256 "$build")"
-            zig="$(find_zig "${!version_var}" "$sha" "")"
-            echo "$build: $zig"
-          done
+          mkdir -p "$VENDOR_ROOT"
+          # Assign first: a failure inside $(...) of an echo argument would not reach errexit.
+          sha="$(zig_pin_sha256 LIBGHOSTTY_VT)"
+          zig="$(find_zig "$LIBGHOSTTY_VT_ZIG_VERSION" "$sha" "")"
+          echo "LIBGHOSTTY_VT: $zig"
       # the patched source agterm-ghostty-vt-sys builds the static libghostty-vt from (with zig, offline, when
       # `cargo build --workspace` builds it); Ghostty's resources beside it
       - name: libghostty-vt prefix
@@ -64,9 +61,6 @@ jobs:
       # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
       - name: terminal fonts
         run: scripts/fetch-fonts.sh
-      # built here so the vendor cache this job saves holds it
-      - name: zmx prefix
-        run: scripts/build-zmx.sh
       # GPUI needs a seat on its headless weston, which only --fake-seat gives (weston 15.0+; Ubuntu 26.04 ships 14):
       # the pinned weston, first on PATH, where agterm-gpui's process tests look for one taking it.
       - name: weston prefix (--fake-seat)

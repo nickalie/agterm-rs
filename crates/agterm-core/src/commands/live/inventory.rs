@@ -98,7 +98,7 @@ fn entry(row: &InventoryRow, outdated_before: Option<u64>) -> ControlLiveEntry {
 }
 
 /// `live.prune`: kills the daemons the inventory shows as unclaimed and detached. The gate is checked and revalidated,
-/// never atomic: pinned zmx has no kill-if-detached, so this re-lists right before it kills and drops any candidate
+/// never atomic: the host has no kill-if-detached, so this re-lists right before it kills and drops any candidate
 /// that gained a client in between.
 fn prune(core: &mut Core) -> Outcome {
     let inventory = core.inventory()?;
@@ -188,7 +188,7 @@ fn kill(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         return Err(ControlError::rejected(refusal));
     }
     let host = core.live.require_host()?;
-    // only an exact confirmation may close a live pane: zmx exits zero after unlinking a socket it could not reach
+    // only an exact confirmation may close a live pane: a stale socket the host cleaned up confirms nothing
     match host.kill(&row.daemon, true) {
         KillOutcome::Killed => {}
         KillOutcome::StaleSocket => {

@@ -20,7 +20,7 @@ pub struct LaunchSeed {
     pub command: Option<String>,
     pub initial_input: Option<String>,
     pub wait_after_command: bool,
-    /// Variables the terminal runs with on top of the pane's own environment: a wrapped pane's zmx configuration.
+    /// Variables the terminal runs with on top of the pane's own environment: a wrapped pane's attach contract.
     pub env: Vec<(String, String)>,
     /// The pane attaches to its live-session daemon (upstream's `backedByZmx`, `backedByLive` on the wire here), fixed
     /// at spawn as its disposition is.

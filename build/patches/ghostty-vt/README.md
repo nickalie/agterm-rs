@@ -168,7 +168,7 @@ patch: `build/patches/ghostty-vt/0004-formatter-unstyled-blanks.patch`
 
 origin: upstream agterm v0.36.0's `scripts/zmx-patches/ghostty/0001-formatter-unstyled-blanks.patch` (MIT), the patch
 upstream applies to the Ghostty its zmx links; rebased onto the pin (line numbers; the code is upstream's). zmx's copy
-(`build/patches/zmx/ghostty/`) stays until zmx goes.
+(`build/patches/zmx/ghostty/`) went with zmx.
 
 agterm issue: none; parity with upstream's re-attach snapshot
 

@@ -31,9 +31,14 @@ to `ControlDispatcher+Zmx.swift`, `ControlServer+Zmx.swift` or `ZmxCommands.swif
 `agterm-core/src/commands/live*`, `agterm-core/src/remote/` and `agterm-ctl/src/live.rs` under those names: a new
 command `zmx.foo` becomes `live.foo`, a new string naming zmx gets the live-session wording and a row in that table,
 and a test the suite adds keeps upstream's names, read through the adapter's vocabulary
-(`conformance/agterm_conformance/vocabulary.py`, with a `LIVE_TEXTS` entry for a new text that names zmx). What the
-bundled zmx binary speaks (`attach`, `ZMX_*`, `list`/`screen` output) keeps its names until the session server
-replaces it.
+(`conformance/agterm_conformance/vocabulary.py`, with a `LIVE_TEXTS` entry for a new text that names zmx). What
+upstream's zmx binary speaks (`zmx attach`, `ZMX_*`, `list`/`screen` output, the patched `zmx-role;` title) is
+`agterm-session`'s here, under its own names (`agterm-session attach`, `AGTERM_LIVE_*`, `ngterm-live-role;`; the same
+table): this build runs no zmx, so an upstream change to zmx or to its patches (`pins-delta.sh` reports both) is
+ported into `agterm-session` (`cli`, `attach_tty`, `server::lead`, `server::snapshot`) under those names.
+
+**herdr is not upstream.** `agterm-session` is herdr's session server taken as code (`HERDR_REV` in
+`build/pins.env`); a herdr change is ported into `agterm-session` as a change of its own, never through this sync.
 
 A behavior change usually spans several of these at once (a feature commit touches protocol + dispatcher + cli +
 core + ui). The plan groups it by **command group or feature**, not by area: one task per group, holding every area
@@ -63,18 +68,19 @@ the Linux equivalent, or a recorded "no Linux counterpart" in the checklist.
 
 ## Vendored copies and native pins
 
-`sync-resources.sh` handles these mechanically; only its `conflict` lines become plan tasks.
+`sync-resources.sh` handles the copies mechanically; only its `conflict` lines become plan tasks. Upstream's pins
+and zmx patches have no copy here: `pins-delta.sh` reports their moves for the plan.
 
 | upstream | copy here | notes |
 |---|---|---|
 | `agterm/Resources/agent-status/` | `resources/agent-status/` | carries Linux glue (the Codex adapter reads JSON with python3/jq; the Pi and OpenCode plugins call the wrapper in `~/.config/ngterm/agent-status`); a conflict there is a manual merge keeping it |
-| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs, as `ngterm`: upstream's tree plus `build/patches/skill-agterm/` (the `live` names, then this build's names: its frontmatter `name` and description, and every command it runs is `ngtermctl`, the far side of a remote attach included), rebuilt whole on every sync; a `conflict` names the patch to refresh against the new tree (regenerate it as `diff -u` of upstream's files and the hand-merged copy), and `sync-resources.sh --check TAG TAG` verifies the copy. An upstream change that brings new `agtermctl` calls is renamed the same way in the names patch |
+| `plugins/agterm/skills/agterm/` | `resources/skills/agterm/` | the agent skill the app installs, as `ngterm`: upstream's tree plus `build/patches/skill-agterm/` (the `live` names, this build's names: its frontmatter `name` and description, and every command it runs is `ngtermctl`, the far side of a remote attach included, then the attach contract's `AGTERM_LIVE_*` variables), rebuilt whole on every sync; a `conflict` names the patch to refresh against the new tree (regenerate it as `diff -u` of upstream's files and the hand-merged copy), and `sync-resources.sh --check TAG TAG` verifies the copy. An upstream change that brings new `agtermctl` calls is renamed the same way in the names patch |
 | `agterm/Resources/hud/` | `crates/agterm-gpui/resources/hud/` | `hud.sh`, included with `include_str!` |
 | `agterm/Resources/custom-themes/` | `build/themes/` | agterm's own themes |
 | `agterm/Resources/ghostty-defaults.conf` | `crates/agterm-core/src/ghostty_config/ghostty-defaults.conf` | adapted (Linux chords, comments): usually a conflict, merge the setting, keep the Linux binds |
-| `scripts/zmx-patches/*.patch` (+ `ghostty/`) | `build/patches/zmx/` | upstream's own zmx patches; a change rebuilds zmx. `0003-first-attach-snapshot.patch` is this repository's own (no upstream counterpart): keep it, and re-check that it applies after upstream's |
+| `scripts/zmx-patches/*.patch` (+ `ghostty/`) | none | upstream's own zmx patches; this build runs no zmx, so `pins-delta.sh` reports a change and a plan task ports it into `agterm-session` (the leadership patch is `server::lead`); `ghostty/` is also `build/patches/ghostty-vt/0004` (below) |
 | `LICENSE` | `resources/LICENSE.upstream` | |
-| `scripts/setup.sh` (`ZMX_REV`) | `build/pins.env` | via `pins-delta.sh`; Zig version from the rev's `build.zig.zon`, sums from ziglang.org |
+| `scripts/setup.sh` (`ZMX_REV`) | none | not a pin here: `pins-delta.sh` reports a move, a plan task ports what zmx changed into `agterm-session` |
 | `scripts/setup.sh` (`GHOSTTY_REV`) | none | not a pin here: the Ghostty pin is `LIBGHOSTTY_VT_REV` (ghostty main), `pins-delta.sh` reports upstream's move |
 
 `build/patches/ghostty-vt/*.patch` are this repository's libghostty-vt patches (C API the app needs, and recorded fixes
@@ -82,7 +88,7 @@ and parity behaviors; its `README.md` lists each with its origin): a `LIBGHOSTTY
 re-applies them (`scripts/build-ghostty-vt.sh` does, with `--fuzz=0`), and `scripts/gen-ghostty-vt-bindings.sh`
 regenerates the checked-in bindings afterwards, `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key
 table. One of them is upstream's: `scripts/zmx-patches/ghostty/0001-formatter-unstyled-blanks.patch`, rebased onto the
-Ghostty pin as `0004-formatter-unstyled-blanks.patch`, so an upstream change to it is ported into both copies.
+Ghostty pin as `0004-formatter-unstyled-blanks.patch`, so an upstream change to it is ported into that copy.
 
 A new entry under `agterm/Resources/` (reported `unmapped`) has no copy yet: deciding where it goes is a plan task.
 

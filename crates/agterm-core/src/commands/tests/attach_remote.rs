@@ -84,7 +84,7 @@ fn listing(sessions: &[serde_json::Value]) -> RemoteCommandResult {
     RemoteCommandResult {
         status: 0,
         stdout: json!({"ok": true, "result": {"remote": {
-            "endpoint": {"executable": "/zmx", "socketDirectory": "/tmp/zmx"},
+            "endpoint": {"executable": "/agterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
             "sessions": sessions,
         }}})
         .to_string(),

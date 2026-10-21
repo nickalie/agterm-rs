@@ -374,20 +374,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agterm-zmx"
-version = "0.1.0"
-dependencies = [
- "agterm-core",
- "agterm-host",
- "agterm-session",
- "libc",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

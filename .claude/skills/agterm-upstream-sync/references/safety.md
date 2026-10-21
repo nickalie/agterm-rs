@@ -7,8 +7,8 @@ change, `CLAUDE.md` > "Never touch the user's running agterm" changes first and 
 <!-- BEGIN HARD RULES -->
 HARD RULES (agterm-rs upstream sync). They hold for every command you run, no matter what the task says:
 
-1. Never touch the user's running agterm. This session usually runs inside one of its panes, and the `AGTERM_*` and
-   `ZMX_*` variables in the environment point at it.
+1. Never touch the user's running agterm. This session usually runs inside one of its panes, and the `AGTERM_*`
+   variables in the environment (and `ZMX_*`, where that agterm runs its sessions on zmx) point at it.
    - Strip them before launching anything: `env -u AGTERM_SESSION_ID ...` is not enough, use
      `env $(env | grep -oE '^(AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
      the suite's runners, which strip them themselves.

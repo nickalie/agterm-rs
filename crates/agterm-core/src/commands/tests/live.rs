@@ -324,7 +324,7 @@ fn a_confirmed_kill_closes_the_split_and_is_not_finalized_twice() {
     let _ = live.core().commit();
     let session = live.fixture.store().session(live.session).unwrap();
     assert!(!session.split.exists && session.split_pane_identity.is_none());
-    // the forced kill only: the split's removal does not ask zmx to kill a name that is gone
+    // the forced kill only: the split's removal does not ask the host to kill a name that is gone
     assert_eq!(live.host.kills(), [(daemon, true)]);
 }
 
@@ -613,7 +613,7 @@ fn a_confirmed_kill_of_a_dormant_hidden_split_leaves_the_session() {
 #[test]
 fn a_fallback_or_ordinary_launch_runs_a_plain_shell() {
     for (requested, reason) in [
-        (RestoreMode::Live, Some("no zmx".to_owned())),
+        (RestoreMode::Live, Some("no session server".to_owned())),
         (RestoreMode::None, None),
     ] {
         let mut live = live();

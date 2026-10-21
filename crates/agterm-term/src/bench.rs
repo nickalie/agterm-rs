@@ -1,18 +1,18 @@
 //! Measurements of the read path and the VT lock (Task 9's profiling and lock-latency check), run by hand:
 //!
 //! ```text
-//! TERM_BENCH_DIR=<scratch dir> [TERM_BENCH_ZMX=<zmx binary>] [TERM_BENCH_SESSION=<agterm-session binary>] \
+//! TERM_BENCH_DIR=<scratch dir> [TERM_BENCH_SESSION=<agterm-session binary>] \
 //!   cargo test --release -p agterm-term --lib bench -- --ignored --nocapture --test-threads 1
 //! ```
 //!
 //! Each scenario runs a pane with a UI stand-in: a paint thread calling [`Pane::frame`] every 16 ms and a key thread
 //! taking the VT lock every 4 ms the way key encoding will (Task 10), and prints one JSON line. Scenarios: a `cat` of a
-//! 50 MiB text file on a plain shell, through `zmx attach` (private `ZMX_DIR` under the scratch dir, reaped by it) and
-//! in a live pane attached in process to the session server (a private namespace, reaped through its server), a
-//! burst of Kitty PNG transmissions (1920x1080), resizes that reflow a full scrollback, and the session server's idle
-//! memory for N sessions that each printed 20 000 lines (`idle_sessions_memory`).
+//! 50 MiB text file on a plain shell and in a live pane attached in process to the session server (a private
+//! namespace, reaped through its server), a burst of Kitty PNG transmissions (1920x1080), resizes that reflow a full
+//! scrollback, the session server's idle memory for N sessions that each printed 20 000 lines
+//! (`idle_sessions_memory`), and the PTY's own ceiling (`pty_ceiling`).
 //!
-//! Linux only: it reads `/proc` and runs zmx.
+//! Linux only: it reads `/proc`.
 #![cfg(target_os = "linux")]
 
 use std::fmt::Write as _;
@@ -202,41 +202,15 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 
-fn command(script: &str, zmx: Option<(&Path, &Path, &str)>) -> PaneCommand {
-    let mut command = match zmx {
-        Some((zmx, dir, session)) => PaneCommand::new(zmx)
-            .arg("attach")
-            .arg(session)
-            .arg("/bin/sh")
-            .arg("-c")
-            .arg(script)
-            .env("ZMX_DIR", dir),
-        None => PaneCommand::new("/bin/sh").arg("-c").arg(script),
-    };
+fn command(script: &str) -> PaneCommand {
+    let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if (name.starts_with("AGTERM_") || name.starts_with("ZMX_")) && !(zmx.is_some() && name == "ZMX_DIR") {
+        if name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
             command = command.env_remove(key);
         }
     }
     command
-}
-
-/// Kill every process whose environment carries `ZMX_DIR=<dir>` (the bench's own zmx only).
-fn reap_zmx(dir: &Path) {
-    let needle = format!("ZMX_DIR={}", dir.display());
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
-            continue;
-        };
-        let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
-            continue;
-        };
-        if environ.split(|byte| *byte == 0).any(|var| var == needle.as_bytes()) {
-            // SAFETY: plain kill(2) of a process carrying the bench's own ZMX_DIR.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-        }
-    }
 }
 
 /// Run `script` (which ends by printing `MARK`) to completion under the UI stand-ins; the wall time to the mark.
@@ -263,8 +237,6 @@ fn run_to_mark(pane: &Pane) -> (Duration, Ui, String) {
 #[derive(Clone, Copy)]
 enum Via<'a> {
     Plain,
-    /// `zmx attach`: the binary, its `ZMX_DIR`.
-    Zmx(&'a Path, &'a Path),
     /// A live pane attached in process: the `agterm-session` binary, the namespace directory.
     Live(&'a Path, &'a Path),
 }
@@ -325,8 +297,7 @@ fn cat_scenario(name: &str, file: &Path, via: Via<'_>) {
     let session = format!("bench-{}-{name}", std::process::id());
     let config = PaneConfig::new(bench_size());
     let pane = match via {
-        Via::Plain => Pane::spawn(&command(&script, None), &config).unwrap(),
-        Via::Zmx(zmx, dir) => Pane::spawn(&command(&script, Some((zmx, dir, session.as_str()))), &config).unwrap(),
+        Via::Plain => Pane::spawn(&command(&script), &config).unwrap(),
         Via::Live(server, namespace) => live_pane(&script, server, namespace, &session, &config),
     };
     let (wall, mut ui, mark) = run_to_mark(&pane);
@@ -348,7 +319,6 @@ fn cat_scenario(name: &str, file: &Path, via: Via<'_>) {
     drop(pane);
     match via {
         Via::Plain => {}
-        Via::Zmx(_, dir) => reap_zmx(dir),
         Via::Live(_, namespace) => reap_live(namespace),
     }
 }
@@ -362,20 +332,12 @@ fn live_namespace(label: &str) -> PathBuf {
 
 #[test]
 #[ignore = "a measurement, run by hand (see the module docs)"]
-fn read_path_plain_and_zmx() {
+fn read_path_plain_and_live() {
     let Some(dir) = bench_dir() else { return };
     std::fs::create_dir_all(&dir).unwrap();
     let file = text_file(&dir);
     for run in 1..=3 {
         cat_scenario(&format!("cat-plain-{run}"), &file, Via::Plain);
-    }
-    if let Some(zmx) = std::env::var_os("TERM_BENCH_ZMX").map(PathBuf::from) {
-        let zmx_dir = dir.join("zmx");
-        std::fs::create_dir_all(&zmx_dir).unwrap();
-        for run in 1..=3 {
-            cat_scenario(&format!("cat-zmx-{run}"), &file, Via::Zmx(&zmx, &zmx_dir));
-        }
-        reap_zmx(&zmx_dir);
     }
     if let Some(server) = std::env::var_os("TERM_BENCH_SESSION").map(PathBuf::from) {
         let namespace = live_namespace("cat");
@@ -402,7 +364,7 @@ fn memory_kib(pid: u32) -> (u64, u64) {
 }
 
 /// Task 2's idle memory baseline against the session server: N sessions, each an idle `/bin/sh` that printed 20 000
-/// lines, every client detached; the server's memory, against N idle zmx daemons'.
+/// lines, every client detached; the server's memory (Task 2 measured N idle zmx daemons against it).
 #[test]
 #[ignore = "a measurement, run by hand (see the module docs)"]
 fn idle_sessions_memory() {
@@ -452,7 +414,7 @@ fn kitty_png_burst() {
         "sleep 1; cat {}; printf '\\nMARK\\n'; exec sleep 30",
         shell_quote(&file)
     );
-    let pane = Pane::spawn(&command(&script, None), &PaneConfig::new(SIZE)).unwrap();
+    let pane = Pane::spawn(&command(&script), &PaneConfig::new(SIZE)).unwrap();
     // Ghostty's own default storage (320 MB), so all ten images are decoded and kept
     lock(&pane.shared().vt)
         .terminal
@@ -474,7 +436,7 @@ fn resize_reflows_a_full_scrollback() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = text_file(&dir);
     let script = format!("cat {}; printf '\\nMARK\\n'; exec sleep 60", shell_quote(&file));
-    let pane = Arc::new(Pane::spawn(&command(&script, None), &PaneConfig::new(SIZE)).unwrap());
+    let pane = Arc::new(Pane::spawn(&command(&script), &PaneConfig::new(SIZE)).unwrap());
     let _ = run_to_mark(&pane);
     let mut resizes = Vec::new();
     let done = AtomicBool::new(false);
@@ -503,16 +465,15 @@ fn resize_reflows_a_full_scrollback() {
     );
 }
 
-/// The zmx pipeline's ceiling on this machine: the same `cat` through `zmx attach` into a PTY whose reader only
-/// discards (no VT, no locks, blocking reads), so the pane's own cost can be told from zmx's.
-fn null_reader(name: &str, file: &Path, zmx: Option<(&Path, &Path)>, buffer_size: usize) {
+/// The PTY's ceiling on this machine: the same `cat` into a PTY whose reader only discards (no VT, no locks, blocking
+/// reads), so the pane's own cost can be told from the pipeline's.
+fn null_reader(name: &str, file: &Path, buffer_size: usize) {
     use std::io::Read as _;
     let script = format!(
         "sleep 1; s=$(date +%s%N); cat {}; e=$(date +%s%N); printf '\\nMARK cat_ns=%s\\n' $((e - s)); exec sleep 30",
         shell_quote(file)
     );
-    let session = format!("null-{}", std::process::id());
-    let command = command(&script, zmx.map(|(zmx, dir)| (zmx, dir, session.as_str())));
+    let command = command(&script);
     let size = bench_size();
     let agterm_pty::Spawned { master, mut child } = agterm_pty::spawn(&command, size.pty()).unwrap();
     let killer = child.killer();
@@ -549,28 +510,18 @@ fn null_reader(name: &str, file: &Path, zmx: Option<(&Path, &Path)>, buffer_size
     );
     killer.kill_tree().unwrap();
     child.wait().unwrap();
-    if let Some((_, dir)) = zmx {
-        reap_zmx(dir);
-    }
 }
 
 #[test]
 #[ignore = "a measurement, run by hand (see the module docs)"]
-fn zmx_ceiling() {
+fn pty_ceiling() {
     let Some(dir) = bench_dir() else { return };
-    let Some(zmx) = std::env::var_os("TERM_BENCH_ZMX").map(PathBuf::from) else {
-        return;
-    };
     std::fs::create_dir_all(&dir).unwrap();
     let file = text_file(&dir);
-    let zmx_dir = dir.join("zmx");
-    std::fs::create_dir_all(&zmx_dir).unwrap();
     for run in 1..=3 {
-        null_reader(&format!("null-plain-{run}"), &file, None, 256 * 1024);
-        null_reader(&format!("null-zmx-{run}"), &file, Some((&zmx, &zmx_dir)), 256 * 1024);
-        null_reader(&format!("null-zmx-4k-{run}"), &file, Some((&zmx, &zmx_dir)), 4096);
+        null_reader(&format!("null-plain-{run}"), &file, 256 * 1024);
+        null_reader(&format!("null-plain-4k-{run}"), &file, 4096);
         // a reader that falls behind: 4 KiB reads with a 100 µs pause each
-        null_reader(&format!("null-zmx-slow-{run}"), &file, Some((&zmx, &zmx_dir)), 4095);
+        null_reader(&format!("null-plain-slow-{run}"), &file, 4095);
     }
-    reap_zmx(&zmx_dir);
 }

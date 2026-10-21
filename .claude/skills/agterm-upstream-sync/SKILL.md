@@ -1,6 +1,6 @@
 ---
 name: agterm-upstream-sync
-description: "Bring agterm-rs up to a new release of upstream umputun/agterm, its parity target: resolve the current and target tags, sort the upstream diff by area (protocol and dispatcher by command group, ControlServer, agtermctlKit, Swift tests, UI, contract docs, vendored resources, native pins, no-port), do the mechanical bump on branch upstream-sync-TAG (catalog, pins.env with verified Zig sums, patches, vendored copies, tag mentions), run the gates, and write a docs/plans/ plan for /plan-exec-revmux with one task per affected command group. It ports no features itself. Use it in agterm-rs whenever the user mentions a new upstream agterm release or tag, syncing or catching up with upstream, bumping the parity target, or what changed upstream since the current tag: 'sync with upstream', 'upstream released v0.37', 'синхронизируй с апстримом', 'вышел новый релиз agterm', 'перенеси изменения нового релиза upstream', 'что изменилось в upstream'."
+description: "Bring agterm-rs up to a new release of upstream umputun/agterm, its parity target: resolve the current and target tags, sort the upstream diff by area (protocol and dispatcher by command group, ControlServer, agtermctlKit, Swift tests, UI, contract docs, vendored resources, native pins, no-port), do the mechanical bump on branch upstream-sync-TAG (catalog, vendored copies and patches, tag mentions; upstream's zmx and Ghostty pins reported for the plan), run the gates, and write a docs/plans/ plan for /plan-exec-revmux with one task per affected command group. It ports no features itself. Use it in agterm-rs whenever the user mentions a new upstream agterm release or tag, syncing or catching up with upstream, bumping the parity target, or what changed upstream since the current tag: 'sync with upstream', 'upstream released v0.37', 'синхронизируй с апстримом', 'вышел новый релиз agterm', 'перенеси изменения нового релиза upstream', 'что изменилось в upstream'."
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent
 ---
 
@@ -136,25 +136,29 @@ because every plan task's subagent starts from this branch and must be able to r
    counted as new, so take the full list from `coverage-map.py` after the commit (item 5). gen_catalog may reflow long
    hand-written exemption lines: that is formatting, keep it. A parse error writes nothing; report it and leave
    the catalog to a plan task (the generator itself needs work, `conformance/tools/gen_catalog.py`).
-2. **Native pins**: `bash SKILL_DIR/scripts/pins-delta.sh [--upstream DIR] TARGET`. `PINS=unchanged` → the revisions are TARGET's too: bump the tag in the
-   comment above each pin and keep its date. Otherwise put the printed values into `build/pins.env`, and rewrite the comment above each moved pin
-   (`# zmx behind live sessions, upstream's ZMX_REV (.upstream/agterm scripts/setup.sh, <version>, <date>)`). Then,
-   in the background: `scripts/build-zmx.sh` when a `ZMX_*` pin or `build/patches/zmx/` moved. It downloads, checks
-   every sha256, and applies the patches with `--fuzz=0`. A sum mismatch, a patch that no longer applies or a failed
-   build → `git checkout -- build/pins.env`, save the log to `WORK/`, and record a plan task "move <pin> to <rev>:
-   rebase <patch> / fix <error>" with the log's key lines. Upstream's `GHOSTTY_REV` is not a pin here (the script
-   reports it): the Ghostty pin is `LIBGHOSTTY_VT_REV`, which follows ghostty main; when upstream's moved, record a
-   plan task to review the Ghostty-level changes it brings (config keys, binds, shell integration) against
-   `LIBGHOSTTY_VT_REV`, and leave any bump of that pin (`scripts/build-ghostty-vt.sh`,
-   `scripts/gen-ghostty-vt-bindings.sh`, `scripts/gen-ghostty-config-keys.sh`) to a change of its own.
+2. **Upstream's pins**: `bash SKILL_DIR/scripts/pins-delta.sh [--upstream DIR] CURRENT TARGET`. Nothing upstream pins
+   is a pin here, so it changes no file: it reports upstream's `ZMX_REV` and `GHOSTTY_REV` and every file of
+   upstream's `scripts/zmx-patches/` that changed. `PINS=unchanged` → nothing to do. This build runs no zmx: a moved
+   `ZMX_REV` or a changed zmx patch → a plan task "port zmx <old>..<new> into agterm-session" that reviews the zmx
+   commits (the compare URL the script prints) and the patch diff (`git -C .upstream/agterm diff CURRENT TARGET --
+   scripts/zmx-patches`) for what the session server, its attach CLI and the attach contract carry of it, ports that
+   under `live.*` and the attach contract (`references/areas.md` > The `zmx` group is `live` here), and records what
+   it leaves out and why; a change to `zmx-patches/ghostty/` goes into the libghostty-vt patch taken from it
+   (`build/patches/ghostty-vt/README.md`). Upstream's `GHOSTTY_REV` is not a pin here either: the Ghostty pin is
+   `LIBGHOSTTY_VT_REV`, which follows ghostty main; when upstream's moved, record a plan task to review the
+   Ghostty-level changes it brings (config keys, binds, shell integration) against `LIBGHOSTTY_VT_REV`, and leave
+   any bump of that pin (`scripts/build-ghostty-vt.sh`, `scripts/gen-ghostty-vt-bindings.sh`,
+   `scripts/gen-ghostty-config-keys.sh`) to a change of its own. A herdr change is never part of this sync: herdr is
+   the session server's source, not upstream, and moving `HERDR_REV` is a change of its own that ports into
+   `agterm-session`.
 3. **Vendored copies**: `bash SKILL_DIR/scripts/sync-resources.sh [--upstream DIR] --patches WORK/patches CURRENT TARGET`.
    It applies upstream's own diff to each copy (`resources/agent-status`, `hud.sh`, themes, `ghostty-defaults.conf`,
-   zmx patches, `LICENSE.upstream`) only where it applies cleanly, so the Linux glue in the copies survives; the
+   `LICENSE.upstream`) only where it applies cleanly, so the Linux glue in the copies survives; the
    agent skill (`resources/skills/agterm`) is rebuilt as the new upstream tree plus `build/patches/skill-agterm/` (its
-   `live` names, then this build's `ngterm`/`ngtermctl` ones), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
+   `live` names, this build's `ngterm`/`ngtermctl` ones, then the attach contract's `AGTERM_LIVE_*`), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
    upstream diff command (`git -C .upstream/agterm diff CURRENT TARGET -- <path>`), not the temp patch.
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
-   `crates/agterm-app/src/integrations/mod.rs`'s header. A zmx patch change also needs `scripts/build-zmx.sh` (as in 2).
+   `crates/agterm-app/src/integrations/mod.rs`'s header.
 4. **Tag mentions**: `bash SKILL_DIR/scripts/tag-mentions.sh CURRENT TARGET --apply` rewrites the `bump` class
    (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml) and lists the rest with its class. Then by hand:
    `reference` (swift_macos.py's `PARITY_LEVEL` with its assert in `conformance/selftests/test_impls.py`); `pins` and
@@ -196,7 +200,7 @@ Read the outcome as the plan's starting point:
   Find which part (a pin, a resource) by its log, take that part out of the bump (revert it in a new commit),
   rerun, and make it a plan task. The branch never carries a red ratchet id.
 - **Not run on this host**: check_ratchet prints `not run on this host:` for listed Live ids when the host cannot
-  claim `live-sessions`/`live-any-shell` (no zsh, no zmx). They hold the ratchet without running; name them in the
+  claim `live-sessions`/`live-any-shell` (no zsh login shell). They hold the ratchet without running; name them in the
   plan's Context, since a task touching Live cannot see them green locally (CI's zsh job runs them).
 - **Newly green ids**: check_ratchet prints `newly passing, not in the list (N):` with the ids (no such line: none).
   Add them with
@@ -229,8 +233,8 @@ End with this report, in the user's language:
 ## Upstream CURRENT → TARGET (<N> commits, releases ...)
 
 **What changed upstream** — one line per feature/fix, with its PR and the areas it touches.
-**Done mechanically** (branch `upstream-sync-TARGET`, commits <sha> ...) — catalog (+x/-y items), pins, vendored
-copies, tag mentions; each thing left out of the bump and why.
+**Done mechanically** (branch `upstream-sync-TARGET`, commits <sha> ...) — catalog (+x/-y items), vendored copies, tag
+mentions, upstream's pin moves reported; each thing left out of the bump and why.
 **Baseline gates** — each gate's result; the expected reds and which task turns each green; the ratchet.
 **Left for the plan** — `docs/plans/<file>`: the task list, one line each.
 **Already in the Rust build** — clusters with no task, with the evidence.

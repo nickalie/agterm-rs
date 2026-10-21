@@ -1,7 +1,7 @@
 //! Live sessions in the app (upstream's `agterm/Control/ControlServer+Zmx.swift`, `ControlDispatcher+Zmx.swift`, the
 //! zmx wiring of `agtermApp.swift`, `Ghostty/ZmxLaunch.swift`, `ZmxForegroundResolver.swift`, `PaneLead.swift` and the
-//! Live sessions reset): the frontend installs a [`SessionHost`] over the staged zmx and the wrap inputs, and this
-//! module owns everything the core decides with them.
+//! Live sessions reset): the frontend installs a [`SessionHost`] over the staged session server and the wrap inputs,
+//! and this module owns everything the core decides with them.
 //!
 //! - the runtime (here): what the frontend installed, the launch reap's findings, the pane finalizer that ends a
 //!   removed pane's daemon, and the requests a command leaves for the frontend (a pane replaced in place, a quit);
