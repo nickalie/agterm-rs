@@ -677,7 +677,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let mask_file = dir.path().join("mask");
-        let probe = format!("grep '^SigBlk:' /proc/$$/status > {}", mask_file.display());
+        // the shell reads its own mask by becoming the reader: a forked `grep` reading `/proc/$$/status` races dash,
+        // which blocks every signal around its (v)fork until the child execs (seen on ubuntu-26.04 as a full mask)
+        let probe = format!("exec grep '^SigBlk:' /proc/self/status > {}", mask_file.display());
         let (status, _) = run_to_end(&probe, &plain_base());
         assert_eq!(status, 0);
         let line = std::fs::read_to_string(&mask_file).unwrap();

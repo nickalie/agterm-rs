@@ -1495,22 +1495,44 @@ Order after Task 7, as two lanes that meet:
 
 ### Task 29: Verify acceptance criteria
 
-- [ ] libghostty-vt builds from the sys crate's build script on Linux, macOS and Windows with networking off once the
+- [x] libghostty-vt builds from the sys crate's build script on Linux, macOS and Windows with networking off once the
       prefix exists; `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty`, `agterm-term`, `agterm-session` (and
-      `agterm-app` if Task 15 joined it) test green on all three in `cross-platform.yml`
-- [ ] every Ghostty patch is listed in `build/patches/ghostty-vt/README.md` with its remove-when condition
-- [ ] no `agterm-zmx`, zmx build or `ZMX_*` pin remains; `git grep -i zmx` finds only the allowed places (the Swift
+      - 2026-10-21: the sys crate built from a fresh target dir inside `unshare --net` (`cargo build --offline`,
+        zig build under `OUT_DIR`, 1 m 17 s); `cross-platform.yml` 39653260400 green on ubuntu-26.04, macos-26 and
+        windows-2025 (the crates of README > CI, `agterm-app` not among them)
+- [x] every Ghostty patch is listed in `build/patches/ghostty-vt/README.md` with its remove-when condition
+      - 0001 to 0004, each with status, reason, remove when and verification
+- [x] no `agterm-zmx`, zmx build or `ZMX_*` pin remains; `git grep -i zmx` finds only the allowed places (the Swift
       adapters and `zmx_client.py`, the suite's upstream vocabulary, the upstream-sync tooling's patterns, the
       environment scrub, the deviation record, docs describing upstream or the past)
-- [ ] live sessions: on Linux through the app and the suite (create, quit and relaunch, reattach with the screen,
+      - no crate, build script or pin left; the crates' mentions are the `AGTERM_*`/`ZMX_*` scrubs, upstream's Swift
+        names (`ZmxLaunch`, `ZmxClient`), what zmx did (the snapshot's attribution in NOTICE among them) and tests
+        asserting no zmx name is ours
+- [x] live sessions: on Linux through the app and the suite (create, quit and relaunch, reattach with the screen,
       kill, prune, reset, `clipboard set`, an update handoff); on macOS and Windows CI at the session-server API and
       `agterm-core` level (create, detach, reattach with the screen, print, kill, list, handoff), since `agterm-ctl`
       and the app are not built there yet
-- [ ] the remote paths green against `agterm-session attach` (`agterm-core`'s attach-remote and remote tests)
-- [ ] performance against Task 2's baselines: the 50 MiB `cat` no slower than through zmx, idle RSS for N panes no
+      - `crates/agterm-gpui/tests/live_update.rs`: an update handoff across a relaunch (same daemon and leader,
+        the screen back, input after it, the build record handed over), a prune of an orphan and a confirmed reset
+        that reopens the app on new sessions; rust-linux.yml's zsh leg holds all 667 ratchet ids, the 14
+        `live-sessions` ones (relaunch, kill, `clipboard set`) among them; `agterm-session`'s e2e, api and handoff
+        tests and `agterm-core` on all three in `cross-platform.yml` (macOS's `getpgid` race in pane.rs fixed)
+- [x] the remote paths green against `agterm-session attach` (`agterm-core`'s attach-remote and remote tests)
+      - those tests green on all three, plus `agterm-session`'s cli test running the far end's line from
+        `remote::ssh::attach_command` under `sh -c` (attaches and types; a gone session runs the guard, exit 1)
+- [x] performance against Task 2's baselines: the 50 MiB `cat` no slower than through zmx, idle RSS for N panes no
       larger than N idle zmx daemons
-- [ ] every gate in README > Test; the full `conformance/tools/run-rust-linux.sh` in the background with the ratchet
+      - 2026-10-21, dev box (load ≈2), `bench.rs` in release: plain 0.327/0.320/0.365 s, live in process
+        0.559/0.474/0.503 s, against Task 2's zmx 0.801/0.899/0.906 s (and Task 26's same-day zmx 1.45–1.55 s);
+        the server's idle RSS for 1/4/16 sessions 6.3/9.1/19.6 MiB against N zmx daemons' 14.6/54.3/222.9 MiB;
+        the GPUI pane as Task 26 measured it (live 2.10–2.30 s against zmx 2.25–2.63 s)
+- [x] every gate in README > Test; the full `conformance/tools/run-rust-linux.sh` in the background with the ratchet
       unchanged or grown; `cross-platform.yml` and `rust-linux.yml` green
+      - fmt, locked metadata, tracing and vendored-source checks, both clippy runs, the lint report; workspace
+        tests headless 4599 passed, 0 failed; selftests 842 passed; full conformance 653 passed, 14 skipped, ratchet
+        holds (667 ids, the 14 `live-sessions` ones not run on this host); on `ci/cps-task-29c` (a commit-tree of
+        this tree with a `ci/**` push trigger for rust-linux.yml, deleted after): rust-linux.yml 39653260467 green
+        (bash, fish and zsh legs; the zsh one holds every id), cross-platform.yml 39653260400 green
 
 ### Task 30: [Final] Update documentation
 

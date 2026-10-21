@@ -273,6 +273,7 @@ dependencies = [
  "agterm-core",
  "agterm-ghostty-vt",
  "agterm-host",
+ "agterm-proto",
  "agterm-pty",
  "base64 0.23.1",
  "interprocess",

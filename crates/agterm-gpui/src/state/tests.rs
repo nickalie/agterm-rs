@@ -579,6 +579,45 @@ fn a_new_windows_first_focus_leaves_frontmost_to_a_later_command() {
 }
 
 #[test]
+fn the_answer_to_a_raise_leaves_frontmost_to_a_later_command() {
+    let mut library = WindowLibrary::seeded("/home/u");
+    let first = library.active_window_id().unwrap();
+    let second = library.new_window(None);
+    let mut state = AppState::new(core(library, None));
+    // `window.select` raises the first window, then `window.go` takes the second before the window manager answered
+    let select = crate::keymap_actions::window_request(WindowCmd::Select, first, None);
+    assert!(state.core.dispatch(&select).ok);
+    let raised = FirstFocus::Raised {
+        frontmost_takes: state.core.frontmost_takes(),
+    };
+    let go = crate::keymap_actions::window_request(WindowCmd::Select, second, None);
+    assert!(state.core.dispatch(&go).ok);
+    state.window_activated(first, Some(raised));
+    assert_eq!(state.key_window(), Some(first), "it holds the keyboard");
+    assert_eq!(
+        state.core.library().frontmost_window_id,
+        Some(second),
+        "the later command keeps frontmost"
+    );
+    // with no command since the raise, its answer counts
+    let raised = FirstFocus::Raised {
+        frontmost_takes: state.core.frontmost_takes(),
+    };
+    state.window_activated(second, Some(raised));
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+    let select = crate::keymap_actions::window_request(WindowCmd::Select, first, None);
+    assert!(state.core.dispatch(&select).ok);
+    let raised = FirstFocus::Raised {
+        frontmost_takes: state.core.frontmost_takes(),
+    };
+    state.window_activated(first, Some(raised));
+    assert_eq!(state.core.library().frontmost_window_id, Some(first));
+    // the user's own activation always counts
+    state.window_activated(second, None);
+    assert_eq!(state.core.library().frontmost_window_id, Some(second));
+}
+
+#[test]
 fn a_new_windows_first_focus_leaves_frontmost_to_a_later_new_window() {
     let library = WindowLibrary::seeded("/home/u");
     let first = library.active_window_id().unwrap();

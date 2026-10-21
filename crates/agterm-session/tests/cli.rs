@@ -228,6 +228,45 @@ fn a_gone_session_runs_the_guard_and_the_attach_fails() -> TestResult {
     Ok(())
 }
 
+/// The far end of an attach from another machine: the line `agterm-core`'s ssh attach has the far machine's shell run
+/// (the last word of `remote::ssh::attach_command`, run by `sh -c` as sshd runs it), under the attach contract's
+/// variables of a pane the account may carry, attaches the session it names and types into it, its end leaving the
+/// session running; for a session that is gone it runs the guard and fails, creating nothing. Unix only: the line is
+/// a POSIX shell's, as the far side of an ssh attach is.
+#[cfg(unix)]
+#[test]
+fn the_remote_attach_line_attaches_its_session_and_fails_for_a_gone_one() -> TestResult {
+    let namespace = Namespace::new()?;
+    let endpoint = agterm_proto::ControlLiveEndpoint {
+        executable: namespace.executable.to_string_lossy().into_owned(),
+        socket_directory: namespace.directory.to_string_lossy().into_owned(),
+    };
+    let remote_line = |daemon: &str| -> TestResult<String> {
+        let argv = agterm_core::remote::ssh::attach_command("far.example", &endpoint, daemon, None)
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(argv.last().ok_or("no remote command line")?.clone())
+    };
+    let carried = [
+        ("AGTERM_LIVE_SESSION", "outer"),
+        ("AGTERM_LIVE_SESSION_PREFIX", "outer."),
+    ];
+    let name = agterm_core::live::daemon_name(uuid::Uuid::new_v4());
+    namespace.create(&name, spec(shell_argv()))?;
+    let mut client = namespace.on_terminal("/bin/sh", &["-c", &remote_line(&name)?], &carried, &Answers::basic())?;
+    client.type_line(&tagged("far"))?;
+    client.expect("got:far");
+    namespace.screen_until(&name, |text| text.contains("got:far"));
+    client.kill()?;
+    assert_eq!(namespace.session_names(), std::slice::from_ref(&name));
+
+    let gone = agterm_core::live::daemon_name(uuid::Uuid::new_v4());
+    let mut client = namespace.on_terminal("/bin/sh", &["-c", &remote_line(&gone)?], &carried, &Answers::basic())?;
+    client.expect("agterm: remote session is gone");
+    assert_eq!(client.wait()?, 1, "the guard's status");
+    assert_eq!(namespace.session_names(), [name]);
+    Ok(())
+}
+
 #[test]
 fn an_attach_inside_a_session_is_refused() -> TestResult {
     let namespace = Namespace::new()?;

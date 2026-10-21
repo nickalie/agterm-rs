@@ -139,7 +139,23 @@ impl Namespace {
 
     /// `agterm-session attach <args>` on a PTY of its own, the test its outer terminal answering as `answers` says.
     pub fn attach<S: AsRef<str>>(&self, args: &[S], extra: &[(&str, &str)], answers: &Answers) -> TestResult<Outer> {
-        Outer::spawn(self, args, extra, answers)
+        let command = agterm_pty::Command::new(&self.executable)
+            .arg("attach")
+            .args(args.iter().map(AsRef::as_ref));
+        Outer::spawn(self, command, extra, answers)
+    }
+
+    /// `program <args>` on a PTY of its own in this namespace's environment, the test its outer terminal: what runs
+    /// an attach of its own (a remote attach line, say).
+    pub fn on_terminal<S: AsRef<str>>(
+        &self,
+        program: &str,
+        args: &[S],
+        extra: &[(&str, &str)],
+        answers: &Answers,
+    ) -> TestResult<Outer> {
+        let command = agterm_pty::Command::new(program).args(args.iter().map(AsRef::as_ref));
+        Outer::spawn(self, command, extra, answers)
     }
 }
 
@@ -246,7 +262,7 @@ fn outer_terminal(output: Arc<Mutex<Vec<u8>>>, answers: &Answers) -> agterm_pty:
     })
 }
 
-/// `agterm-session attach` on a PTY, with the test as its outer terminal.
+/// `agterm-session attach` (or what runs one) on a PTY, with the test as its outer terminal.
 pub struct Outer {
     handle: ActorHandle,
     pub child: Child,
@@ -255,16 +271,13 @@ pub struct Outer {
 }
 
 impl Outer {
-    fn spawn<S: AsRef<str>>(
+    fn spawn(
         namespace: &Namespace,
-        args: &[S],
+        command: agterm_pty::Command,
         extra: &[(&str, &str)],
         answers: &Answers,
     ) -> TestResult<Self> {
-        let mut command = agterm_pty::Command::new(&namespace.executable)
-            .arg("attach")
-            .args(args.iter().map(AsRef::as_ref))
-            .env_clear();
+        let mut command = command.env_clear();
         for (name, value) in namespace.environment(extra) {
             command = command.env(name, value);
         }

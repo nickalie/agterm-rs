@@ -33,7 +33,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agterm_core::model::{AppStore, Session, WindowLibrary};
 use agterm_core::titlebar::UNTITLED;
@@ -229,10 +229,19 @@ pub struct WindowView {
     minimize_requests: Cell<u64>,
     /// What the window's first activation knows of its build, until that activation or [`FIRST_FOCUS_GRACE`] after
     /// its first frame.
-    first_focus: Rc<Cell<Option<FirstFocus>>>,
+    first_focus: FirstFocusCell,
+    /// When a command last raised the window and the core's frontmost takes then, until the window's next activation
+    /// (the window manager's answer to the raise, within [`RAISE_ANSWER_GRACE`]).
+    raised: RaiseCell,
     poster: Poster,
     _subscriptions: Vec<Subscription>,
 }
+
+/// A window's first activation's knowledge of its build, shared with its activation observer ([`FirstFocus`]).
+type FirstFocusCell = Rc<Cell<Option<FirstFocus>>>;
+
+/// When a command last raised a window and the core's frontmost takes then, shared with its activation observer.
+type RaiseCell = Rc<Cell<Option<(Instant, u64)>>>;
 
 impl WindowView {
     /// The root of model window `id`, over `deck`, built when the core's frontmost takes stood at `frontmost_takes`;
@@ -255,29 +264,7 @@ impl WindowView {
             false
         });
         crate::keymap_dispatch::register_window(window.window_handle(), KeyOrigin::Window(id));
-        let posting = poster.clone();
-        let first_focus = Rc::new(Cell::new(Some(FirstFocus::Built { frontmost_takes })));
-        let (fresh, expiring) = (Rc::clone(&first_focus), Rc::clone(&first_focus));
-        window.on_next_frame(move |_, cx| {
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(FIRST_FOCUS_GRACE).await;
-                expiring.set(None);
-            })
-            .detach();
-        });
-        let activation = cx.observe_window_activation(window, move |view, window, cx| {
-            if !window.is_window_active() {
-                // a walk ends when the window loses the keyboard
-                view.switcher.update(cx, SessionSwitcher::reset);
-                check_keyboard_left(cx);
-            }
-            if window.is_window_active() {
-                let first = fresh.take();
-                post(&posting, move |state: &mut AppState| state.window_activated(id, first));
-            } else {
-                post(&posting, move |state: &mut AppState| state.key_window_lost(id));
-            }
-        });
+        let (activation, first_focus, raised) = Self::observe_activation(id, &poster, frontmost_takes, window, cx);
         let bounds = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
         let titlebar = cx.new(|_| Titlebar::new(id, poster.clone()));
         let sidebar = cx.new(|_| Sidebar::new(id, poster.clone()));
@@ -322,9 +309,51 @@ impl WindowView {
             pending_minimized: Rc::new(Cell::new(None)),
             minimize_requests: Cell::new(0),
             first_focus,
+            raised,
             poster,
             _subscriptions: vec![activation, bounds, opening, popped, alerts],
         }
+    }
+
+    /// Observes model window `id`'s activation, built when the core's frontmost takes stood at `frontmost_takes`: each
+    /// one is posted through `poster` with what it knows of the window's build or of a command's raise
+    /// ([`FirstFocus`]). The subscription, the window's first focus and its last raise.
+    fn observe_activation(
+        id: Uuid,
+        poster: &Poster,
+        frontmost_takes: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Subscription, FirstFocusCell, RaiseCell) {
+        let posting = poster.clone();
+        let first_focus = Rc::new(Cell::new(Some(FirstFocus::Built { frontmost_takes })));
+        let (fresh, expiring) = (Rc::clone(&first_focus), Rc::clone(&first_focus));
+        let raised = Rc::new(Cell::new(None));
+        let answering = Rc::clone(&raised);
+        window.on_next_frame(move |_, cx| {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(FIRST_FOCUS_GRACE).await;
+                expiring.set(None);
+            })
+            .detach();
+        });
+        let activation = cx.observe_window_activation(window, move |view, window, cx| {
+            if !window.is_window_active() {
+                // a walk ends when the window loses the keyboard
+                view.switcher.update(cx, SessionSwitcher::reset);
+                check_keyboard_left(cx);
+            }
+            if window.is_window_active() {
+                let raise = answering.take().and_then(|(at, frontmost_takes): (Instant, u64)| {
+                    (at.elapsed() < RAISE_ANSWER_GRACE).then_some(FirstFocus::Raised { frontmost_takes })
+                });
+                let first = fresh.take().or(raise);
+                post(&posting, move |state: &mut AppState| state.window_activated(id, first));
+            } else {
+                post(&posting, move |state: &mut AppState| state.key_window_lost(id));
+            }
+        });
+        (activation, first_focus, raised)
     }
 
     /// The window's popovers.
@@ -872,11 +901,15 @@ impl WindowView {
         }
     }
 
-    /// Applies a window command's request (upstream's `WindowRegistry` actions). GPUI has no client positioning on
-    /// Linux, so a move (which this host never claims) is only logged.
-    pub fn apply(&self, request: WindowRequest, window: &mut Window, cx: &mut App) {
+    /// Applies a window command's request (upstream's `WindowRegistry` actions), the core's frontmost takes standing at
+    /// `frontmost_takes`. GPUI has no client positioning on Linux, so a move (which this host never claims) is only
+    /// logged.
+    pub fn apply(&self, request: WindowRequest, frontmost_takes: u64, window: &mut Window, cx: &mut App) {
         match request {
-            WindowRequest::Raise(_) => self.present(window, cx),
+            WindowRequest::Raise(_) => {
+                self.raised.set(Some((Instant::now(), frontmost_takes)));
+                self.present(window, cx);
+            }
             WindowRequest::Resize { size: requested, .. } => {
                 // leaving the maximized state makes the window take the size now, as `setFrame` resizes a zoomed
                 // `NSWindow` at once
@@ -1017,6 +1050,11 @@ const LEAVE_CHECK_DELAY: Duration = Duration::from_millis(150);
 /// on mapping it ([`AppState::window_activated`]): that one follows the map at once, while a window left unfocused then
 /// is activated later only by the user, whose activation always counts, whatever commands took frontmost before.
 const FIRST_FOCUS_GRACE: Duration = Duration::from_secs(1);
+
+/// How long after a command raised a window its next activation still counts as the window manager's answer to that
+/// raise ([`AppState::window_activated`]): a loaded compositor can answer a raise after a later command raised another
+/// window, and that late answer must not take frontmost back.
+const RAISE_ANSWER_GRACE: Duration = Duration::from_secs(2);
 
 /// A window (an agterm window, the quick terminal's panel) lost the keyboard, or the panel removed its own window: once the next activation had its chance,
 /// the key monitor forgets its consumed keys when no window of the app holds the keyboard.

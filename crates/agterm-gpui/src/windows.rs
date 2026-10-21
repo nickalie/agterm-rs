@@ -162,8 +162,9 @@ impl Windows {
             }
         }
         self.present_built(&built, cx);
+        let frontmost_takes = state.core.frontmost_takes();
         for request in state.core.take_window_requests() {
-            self.apply(request, cx);
+            self.apply(request, frontmost_takes, cx);
         }
         let quick = QuickEnv {
             env: &self.env,
@@ -332,8 +333,9 @@ impl Windows {
         }
     }
 
-    /// Applies one window command's request to its window; a window gone since asks nothing.
-    fn apply(&self, request: WindowRequest, cx: &mut App) {
+    /// Applies one window command's request to its window, the core's frontmost takes standing at `frontmost_takes`; a
+    /// window gone since asks nothing.
+    fn apply(&self, request: WindowRequest, frontmost_takes: u64, cx: &mut App) {
         let window = match request {
             WindowRequest::Raise(window)
             | WindowRequest::ToggleZoom(window)
@@ -343,7 +345,9 @@ impl Windows {
             | WindowRequest::Move { window, .. } => window,
         };
         if let Some(ui) = self.shown.get(&window) {
-            let applied = ui.handle.update(cx, |view, window, cx| view.apply(request, window, cx));
+            let applied = ui
+                .handle
+                .update(cx, |view, window, cx| view.apply(request, frontmost_takes, window, cx));
             if applied.is_err() {
                 tracing::debug!("a window request found its window gone");
             }

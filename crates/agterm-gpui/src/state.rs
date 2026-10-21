@@ -34,8 +34,8 @@ use crate::instance::Activation;
 use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GpuiMainLoop;
 
-/// What a new window's first activation, while it may still be the focus the window manager grants on mapping it,
-/// knows of the window's build ([`AppState::window_activated`]).
+/// What a window's activation that may be the window manager's own doing knows of it ([`AppState::window_activated`]):
+/// a new window's first one, the focus the window manager grants on mapping it, or the answer to a command's raise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FirstFocus {
     /// Built when the core's [`frontmost_takes`](agterm_core::Core::frontmost_takes) stood at this count.
@@ -43,6 +43,9 @@ pub enum FirstFocus {
     /// Built and then minimized by its own command (`window.new --minimized`), which handed frontmost to a window in
     /// view.
     Parked,
+    /// Raised by a command when the core's frontmost takes stood at this count: the activation may be the window
+    /// manager's late answer to that raise.
+    Raised { frontmost_takes: u64 },
 }
 
 /// How long a quit a command asked for waits, so the command's reply is written first.
@@ -1008,11 +1011,16 @@ impl AppState {
     /// manager grants a new window when it maps it (`first`, [`FirstFocus`]) while another open window is frontmost
     /// and either a command took frontmost since the window was built or the window was built parked: that focus
     /// arrives after the open, so after such a command, which keeps frontmost, as on macOS, where a new window is key
-    /// before the open returns. Frontmost the model set itself (a restore, a reopen) does not hold the window back.
+    /// before the open returns. Frontmost the model set itself (a restore, a reopen) does not hold the window back. The
+    /// window manager's answer to a command's raise is held back the same way once a later command took frontmost
+    /// for another open window (`window.select` then `window.go` on a loaded compositor, which focuses the first
+    /// window after the second was asked for).
     pub fn window_activated(&mut self, window: Uuid, first: Option<FirstFocus>) {
         self.set_key_window(Some(window));
         let held_back = match first {
-            Some(FirstFocus::Built { frontmost_takes }) => self.core.frontmost_takes() != frontmost_takes,
+            Some(FirstFocus::Built { frontmost_takes } | FirstFocus::Raised { frontmost_takes }) => {
+                self.core.frontmost_takes() != frontmost_takes
+            }
             Some(FirstFocus::Parked) => true,
             None => false,
         };
@@ -1022,7 +1030,7 @@ impl AppState {
             && frontmost != window
             && library.is_open(frontmost)
         {
-            tracing::debug!(%window, %frontmost, "a new window's first focus came after a command took frontmost");
+            tracing::debug!(%window, %frontmost, "the window manager's focus came after a command took frontmost");
             return;
         }
         self.report_frontmost(window);

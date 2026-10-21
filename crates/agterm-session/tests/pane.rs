@@ -443,13 +443,32 @@ fn job_controlling_shell() -> SessionSpec {
     script("set -m; (trap '' HUP; exec sh -c 'echo \"started:$$:\"; exec sleep 300 </dev/null >/dev/null 2>&1') & wait")
 }
 
+/// The process group of `pid`, asked again while it answers none, up to [`PATIENCE`]. A job is named as soon as it is
+/// forked, while it may still be execing its `sleep`, and macOS's `getpgid` misses a process for a moment there: xnu's
+/// exec replaces the process structure, and its lookup (`proc_find`) refuses the new one until it is inserted
+/// (`P_REF_NEW`), answering `ESRCH` (seen on macos-26 as `(15841, -1)`). A job really gone still answers -1.
+#[cfg(unix)]
+fn group_of(pid: u32) -> TestResult<libc::pid_t> {
+    let pid = libc::pid_t::try_from(pid)?;
+    let started = Instant::now();
+    let mut retried = false;
+    loop {
+        // SAFETY: `getpgid` has no memory preconditions.
+        let group = unsafe { libc::getpgid(pid) };
+        if group > 0 || started.elapsed() >= PATIENCE {
+            if group > 0 && retried {
+                eprintln!("getpgid({pid}) answered after {:?}", started.elapsed());
+            }
+            return Ok(group);
+        }
+        retried = true;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// The descendant `pid` sits in a process group other than the program `program`'s.
 #[cfg(unix)]
 fn assert_own_group(program: u32, pid: u32) -> TestResult {
-    let group_of = |pid: u32| -> TestResult<libc::pid_t> {
-        // SAFETY: `getpgid` has no memory preconditions.
-        Ok(unsafe { libc::getpgid(libc::pid_t::try_from(pid)?) })
-    };
     let groups = (group_of(program)?, group_of(pid)?);
     assert!(groups.0 > 0 && groups.1 > 0, "{groups:?}");
     assert_ne!(groups.0, groups.1, "the job shares the shell's group");

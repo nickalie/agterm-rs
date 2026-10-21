@@ -68,6 +68,8 @@ windows-sys = { workspace = true, features = [
 wmi.workspace = true
 
 [dev-dependencies]
+# The remote attach line the CLI tests run (`agterm-core::remote::ssh`) takes the endpoint's wire type.
+agterm-proto.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
