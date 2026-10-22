@@ -1,12 +1,12 @@
 ---
 name: agterm-upstream-sync
-description: "Bring agterm-rs up to a new release of upstream umputun/agterm, its parity target: resolve the current and target tags, sort the upstream diff by area (protocol and dispatcher by command group, ControlServer, agtermctlKit, Swift tests, UI, contract docs, vendored resources, native pins, no-port), do the mechanical bump on branch upstream-sync-TAG (catalog, vendored copies and patches, tag mentions; upstream's zmx and Ghostty pins reported for the plan), run the gates, and write a docs/plans/ plan for /plan-exec-revmux with one task per affected command group. It ports no features itself. Use it in agterm-rs whenever the user mentions a new upstream agterm release or tag, syncing or catching up with upstream, bumping the parity target, or what changed upstream since the current tag: 'sync with upstream', 'upstream released v0.37', 'синхронизируй с апстримом', 'вышел новый релиз agterm', 'перенеси изменения нового релиза upstream', 'что изменилось в upstream'."
+description: "Bring ngterm up to a new release of upstream umputun/agterm, its parity target: resolve the current and target tags, sort the upstream diff by area (protocol and dispatcher by command group, ControlServer, agtermctlKit, Swift tests, UI, contract docs, vendored resources, native pins, no-port), do the mechanical bump on branch upstream-sync-TAG (catalog, vendored copies and patches, tag mentions; upstream's zmx and Ghostty pins reported for the plan), run the gates, and write a docs/plans/ plan for /plan-exec-revmux with one task per affected command group. It ports no features itself. Use it in ngterm whenever the user mentions a new upstream agterm release or tag, syncing or catching up with upstream, bumping the parity target, or what changed upstream since the current tag: 'sync with upstream', 'upstream released v0.37', 'синхронизируй с апстримом', 'вышел новый релиз agterm', 'перенеси изменения нового релиза upstream', 'что изменилось в upstream'."
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent
 ---
 
 # agterm-upstream-sync
 
-Moves agterm-rs from the upstream release it targets to a newer one, in three parts: the **analysis** (what changed
+Moves ngterm from the upstream release it targets to a newer one, in three parts: the **analysis** (what changed
 upstream, by area, and what of it the Rust build already has), the **mechanical bump** on a branch (everything that
 needs no porting judgment), and a **plan** for the porting, which `/plan-exec-revmux` executes. The skill ports no
 behavior itself: a feature port needs the per-task implement → test → revmux review loop that plan-exec-revmux
@@ -20,15 +20,15 @@ run them from the checkout being synced; in a git worktree that is the worktree.
 ## Hard rules
 
 `references/safety.md` holds them between `BEGIN HARD RULES` / `END HARD RULES`. Read the file now and keep to it for
-every command in this run. In short: never touch the user's running agterm (strip `AGTERM_*`/`ZMX_*`, explicit
+every command in this run. In short: never touch the user's running ngterm (strip `NGTERM_*`/`AGTERM_*`/`ZMX_*`, explicit
 `--socket` on every `ngtermctl`, private state dir and live-session namespace, GUI only headless, never
-`pkill agterm-session`);
+`pkill ngterm-session`);
 `.upstream/agterm` is read-only except fetching and checking out the new tag; never push, tag or release; never edit
 `docs/plans/completed/`; anything over ~30 s runs in the background.
 
 **Paste the block verbatim into every subagent prompt you send and into the plan's "Safety rules" section.**
 Subagents and the plan's task subagents do not see this skill or the user's memory; a rule that is not in their
-prompt does not exist for them, and a subagent that reached the user's live agterm is how these rules came about.
+prompt does not exist for them, and a subagent that reached the user's live ngterm is how these rules came about.
 
 ## Arguments
 
@@ -42,7 +42,7 @@ upstream-sync-<new tag>` when the session has a scratchpad directory, else `/tmp
 ## Step 0. Preflight
 
 From the repository root (`git rev-parse --show-toplevel`; it must hold `conformance/catalog.yaml` and
-`crates/agterm-proto`):
+`crates/ngterm-proto`):
 
 - `gh`, `git`, `curl`, `python3`, `patch`, `xvfb-run`, `weston`, `dbus-daemon` on `PATH`; `gh auth status` ok.
 - `.venv/bin/python` exists, else create it in the background: `python3 -m venv .venv && .venv/bin/pip install -e conformance`.
@@ -61,7 +61,7 @@ bash SKILL_DIR/scripts/resolve-tags.sh [TARGET]
 ```
 
 Prints `CURRENT` (the catalog's `upstream:`), `TARGET`, `STATUS`, and `RELEASES` (every release in between).
-Exit 3 (`up-to-date` or `older`): tell the user "agterm-rs targets CURRENT, the latest upstream release is TARGET:
+Exit 3 (`up-to-date` or `older`): tell the user "ngterm targets CURRENT, the latest upstream release is TARGET:
 nothing to sync" and stop. A release that skips versions is synced in one go; `RELEASES` says which changelogs to
 read.
 
@@ -139,7 +139,7 @@ because every plan task's subagent starts from this branch and must be able to r
 2. **Upstream's pins**: `bash SKILL_DIR/scripts/pins-delta.sh [--upstream DIR] CURRENT TARGET`. Nothing upstream pins
    is a pin here, so it changes no file: it reports upstream's `ZMX_REV` and `GHOSTTY_REV` and every file of
    upstream's `scripts/zmx-patches/` that changed. `PINS=unchanged` → nothing to do. This build runs no zmx: a moved
-   `ZMX_REV` or a changed zmx patch → a plan task "port zmx <old>..<new> into agterm-session" that reviews the zmx
+   `ZMX_REV` or a changed zmx patch → a plan task "port zmx <old>..<new> into ngterm-session" that reviews the zmx
    commits (the compare URL the script prints) and the patch diff (`git -C .upstream/agterm diff CURRENT TARGET --
    scripts/zmx-patches`) for what the session server, its attach CLI and the attach contract carry of it, ports that
    under `live.*` and the attach contract (`references/areas.md` > The `zmx` group is `live` here), and records what
@@ -150,15 +150,15 @@ because every plan task's subagent starts from this branch and must be able to r
    any bump of that pin (`scripts/build-ghostty-vt.sh`, `scripts/gen-ghostty-vt-bindings.sh`,
    `scripts/gen-ghostty-config-keys.sh`) to a change of its own. A herdr change is never part of this sync: herdr is
    the session server's source, not upstream, and moving `HERDR_REV` is a change of its own that ports into
-   `agterm-session`.
+   `ngterm-session`.
 3. **Vendored copies**: `bash SKILL_DIR/scripts/sync-resources.sh [--upstream DIR] --patches WORK/patches CURRENT TARGET`.
    It applies upstream's own diff to each copy (`resources/agent-status`, `hud.sh`, themes, `ghostty-defaults.conf`,
    `LICENSE.upstream`) only where it applies cleanly, so the Linux glue in the copies survives; the
-   agent skill (`resources/skills/agterm`) is rebuilt as the new upstream tree plus `build/patches/skill-agterm/` (its
-   `live` names, this build's `ngterm`/`ngtermctl` ones, then the attach contract's `AGTERM_LIVE_*`), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
+   agent skill (`resources/skills/ngterm`) is rebuilt as the new upstream tree plus `build/patches/skill-ngterm/` (its
+   `live` names, this build's `ngterm`/`ngtermctl` ones, then the attach contract's `NGTERM_LIVE_*`), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
    upstream diff command (`git -C .upstream/agterm diff CURRENT TARGET -- <path>`), not the temp patch.
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
-   `crates/agterm-app/src/integrations/mod.rs`'s header.
+   `crates/ngterm-app/src/integrations/mod.rs`'s header.
 4. **Tag mentions**: `bash SKILL_DIR/scripts/tag-mentions.sh CURRENT TARGET --apply` rewrites the `bump` class
    (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml) and lists the rest with its class. Then by hand:
    `reference` (swift_macos.py's `PARITY_LEVEL` with its assert in `conformance/selftests/test_impls.py`); `pins` and
@@ -174,7 +174,7 @@ because every plan task's subagent starts from this branch and must be able to r
 
 ## Step 5. Baseline gates
 
-Run CLAUDE.md's gate on the branch, all in the background, with `AGTERM_*`/`ZMX_*` stripped, each command's
+Run CLAUDE.md's gate on the branch, all in the background, with `NGTERM_*`/`AGTERM_*`/`ZMX_*` stripped, each command's
 output in `WORK/<name>.log`:
 
 ```bash
@@ -192,7 +192,7 @@ prefixes (`scripts/build-*.sh --verify`; build what is missing first).
 
 Read the outcome as the plan's starting point:
 
-- **Expected reds**: `agterm-proto/tests/catalog.rs` and agterm-ctl's `the_command_tree_is_the_catalogs_cli` fail
+- **Expected reds**: `ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli` fail
   while the catalog lists wire names or CLI subcommands the code lacks; the coverage gate fails on the new items no
   test covers. Each becomes part of a plan task (the wire names in the first task). Record the exact test names
   and keys. When they are green (the code already has the names), the plan has no skeleton task.

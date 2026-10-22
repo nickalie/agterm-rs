@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # The pkg-config of every cargo build in this repository (.cargo/config.toml sets PKG_CONFIG to it; an exported
 # PKG_CONFIG wins): the system pkg-config, where WPE WebKit's system wpe-webkit-2.0 wins when it is at least
-# WPE_API_VERSION (the distro package is the one agterm runs with), else the vendored prefix of scripts/fetch-wpe.sh
+# WPE_API_VERSION (the distro package is the one ngterm runs with), else the vendored prefix of scripts/fetch-wpe.sh
 # goes first on PKG_CONFIG_PATH when it is complete, ahead of an older system one; with neither, the WPE -sys crates
 # fail naming `wpe-webkit-2.0`.
 # Cargo does not see that choice change: after installing or removing either, run
-# `cargo clean -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys`.
+# `cargo clean -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys`.
 #
 # Host-only: the vendored prefix is built for this machine, and a custom PKG_CONFIG tells the pkg-config crate that
 # cross builds are understood, so a cross build is refused instead of linking host libraries.

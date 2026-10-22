@@ -1361,7 +1361,7 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
     return ycbcr_to_RGB * y_cb_cr;
 }
 
-// --- external surfaces (agterm-rs patch) --- //
+// --- external surfaces (ngterm patch) --- //
 // Frames produced outside GPUI on Linux: one texture of premultiplied texels (an imported dmabuf or uploaded CPU
 // pixels), whose alpha is padding when `opaque` is set. Bindings 4-6 keep clear of the surfaces' 0-3 in group 1.
 

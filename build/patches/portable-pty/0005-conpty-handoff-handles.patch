@@ -1,4 +1,4 @@
-agterm's session server hands its live ConPTY sessions to a newer server without ending them (the update handoff):
+ngterm's session server hands its live ConPTY sessions to a newer server without ending them (the update handoff):
 the new process receives, by DuplicateHandle, the input pipe's write end, the output pipe's read end and the three
 handles behind the HPCON (kernelbase's { hSignal, hPtyReference, hConPtyProcess }), and resizes the console through
 an HPCON rebuilt from them (docs/spikes/20261018-session-server.md, Windows: ConPTY handoff). portable-pty exposes
@@ -10,7 +10,7 @@ none of them. `ConPtyMasterPty` gains:
 - `from_handoff`, a master over handed-over handles. Its rebuilt HPCON is owned here and never reaches
   ClosePseudoConsole, whose release is specific to the HPCON kernelbase allocated: dropping it closes the three
   handles, which ends the console host once no other process holds them.
-agterm's own patch; remove when portable-pty or ConPTY offers a documented way to move a session between processes.
+ngterm's own patch; remove when portable-pty or ConPTY offers a documented way to move a session between processes.
 
 diff -ruN a/src/win/conpty.rs b/src/win/conpty.rs
 --- a/src/win/conpty.rs

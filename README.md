@@ -1,14 +1,14 @@
-# agterm-rs
+# ngterm
 
-agterm in Rust: a GPUI terminal over Ghostty's libghostty-vt, driven by `ngtermctl` over a control socket. macOS,
-Linux and Windows are equal targets. Today the app is built and tested on Linux; the terminal core, the pane core and
-the live-session server under it (libghostty-vt, `agterm-pty`, `agterm-term`, `agterm-session` and the crates
-[CI](#ci) lists) build and test on all three ([macOS and Windows](#macos-and-windows)). Everything else below is the
-Linux build unless it names another OS.
+ngterm: [agterm](https://github.com/umputun/agterm) in Rust, a GPUI terminal over Ghostty's libghostty-vt, driven by
+`ngtermctl` over a control socket. macOS, Linux and Windows are equal targets. Today the app is built and tested on
+Linux; the terminal core, the pane core and the live-session server under it (libghostty-vt, `ngterm-pty`,
+`ngterm-term`, `ngterm-session` and the crates [CI](#ci) lists) build and test on all three
+([macOS and Windows](#macos-and-windows)). Everything else below is the Linux build unless it names another OS.
 
 - The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
   `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
-  (keymap, hooks, agterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
+  (keymap, hooks, ngterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
   `io.github.melonamin.agterm`, `~/.local/share/agterm`, `~/.config/agterm`), so the two run side by side without
   sharing windows, settings, config or Live sessions. To carry the fork's state and config over, quit it and copy both
   directories to the new ones before the first launch. Live sessions do not carry over: the fork's are zmx daemons
@@ -19,6 +19,10 @@ Linux build unless it names another OS.
   One instance runs per application id: the first owns the id's name on the session bus and serves `GApplication`'s
   D-Bus protocol there (through `zbus`), and a later launch of this build forwards its activation to it and exits
   before touching the state.
+- The binaries are `ngterm`, `ngtermctl` and `ngterm-session`, the crates `ngterm-*`, and every variable the app sets
+  or reads is `NGTERM_*` (a pane's `NGTERM_SESSION_ID`, `NGTERM_SOCKET`, `NGTERM_PANE_ID`, the attach contract's
+  `NGTERM_LIVE_*`; upstream's and the fork's are `AGTERM_*`). A reinstall of the agent-status hooks or the skill over
+  one made before the build took these names moves it onto them.
 - The CLI is `ngtermctl` (upstream's and the fork's is `agtermctl`), and the Help menu's installers use this build's
   names too: Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (the fork's
   `~/.local/bin/agtermctl` is left alone, and it resolves the fork's socket), and Install Agent Skill… installs the
@@ -27,6 +31,8 @@ Linux build unless it names another OS.
 - One extension beyond upstream: Live sessions in bash, fish and PowerShell login shells too (upstream: zsh only),
   under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
   (`resources/shell-integration/pwsh`), since Ghostty has none.
+- No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
+  Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row).
 - One behavior taken from the GTK fork instead of upstream: restore is lazy. A launch (or a window reopened from its
   file) spawns only each window's selected session; every other restored session starts its shell, re-runs its
   command or attaches to its live session once it is first shown (selected, zoomed, in the dashboard) or a command
@@ -43,7 +49,7 @@ Linux build unless it names another OS.
 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).
 - Zig 0.16.0 for libghostty-vt (`LIBGHOSTTY_VT_ZIG_VERSION` in `build/pins.env`). `scripts/build-ghostty-vt.sh`
-  takes `AGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH` or from mise, else it downloads the pinned ziglang.org archive
+  takes `NGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH` or from mise, else it downloads the pinned ziglang.org archive
   of the host's OS and arch and checks its sha256. A Mac or a Windows machine needs a little more
   ([macOS and Windows](#macos-and-windows)).
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.
@@ -56,17 +62,17 @@ Linux build unless it names another OS.
   instance).
 - For the app's tests: Xvfb's `xvfb-run` and dbus' `dbus-run-session`, so they get a display and a session bus of
   their own instead of the desktop's.
-- For the app's process tests (`crates/agterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
+- For the app's process tests (`crates/ngterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
-  `AGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
-  (`SKIPPED:`, shown with `--nocapture`) unless `AGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it
+  `NGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
+  (`SKIPPED:`, shown with `--nocapture`) unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it
   instead. The single-instance checks against a GTK build of agterm (the Linux fork) take its binary from
   `AGTERM_GTK_BIN` and skip without one, required or not. The nested-niri activation check (niri inside a headless
-  weston) is `#[ignore]`d, since CI has no niri: `cargo test -p agterm-gpui --test instance -- --ignored`. The external texture
+  weston) is `#[ignore]`d, since CI has no niri: `cargo test -p ngterm-gpui --test instance -- --ignored`. The external texture
   test (`--test external_texture`, dmabufs drawn by GPUI's headless renderer) runs on lavapipe and on the first render
   node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (a kernel built with
   `CONFIG_UDMABUF=y`, never a module; systemd's udev rules give the device to the `kvm` group; skipped without, failed
-  under `AGTERM_REQUIRE_DISPLAY_TESTS`), its hardware case GBM and EGL.
+  under `NGTERM_REQUIRE_DISPLAY_TESTS`), its hardware case GBM and EGL.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
@@ -92,13 +98,13 @@ sudo pacman -S --needed wpewebkit bubblewrap meson ninja wayland wayland-protoco
   pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish
 ```
 
-Run-time dependencies of every `agterm` binary:
+Run-time dependencies of every `ngterm` binary:
 
 - a Vulkan driver (GPUI renders through wgpu), Wayland or X11;
-- WPE WebKit, linked under `agterm-gpui`'s default `html` feature (HTML overlays). Without the feature
+- WPE WebKit, linked under `ngterm-gpui`'s default `html` feature (HTML overlays). Without the feature
   (`--no-default-features`) the app refuses every page. On Ubuntu 23.10+ see
   [WebKit sandbox on Ubuntu (AppArmor)](#webkit-sandbox-on-ubuntu-apparmor);
-- for Live sessions, `agterm-session`, the live-session server the workspace builds, staged next to the binaries with
+- for Live sessions, `ngterm-session`, the live-session server the workspace builds, staged next to the binaries with
   its build id. libghostty-vt is linked statically; the quick terminal's layer-shell panel is GPUI's own Wayland
   surface, a window where the compositor offers no layer-shell.
 
@@ -107,25 +113,25 @@ Run-time dependencies of every `agterm` binary:
 WebKit runs the web process of every HTML overlay inside a bubblewrap sandbox, which needs an unprivileged user
 namespace. Ubuntu 23.10 and later (`kernel.apparmor_restrict_unprivileged_userns=1`) grant one only to a program whose
 AppArmor profile allows `userns`, as the profiles Ubuntu ships for its own WebKit apps (epiphany, devhelp) do.
-Without one, `bwrap` fails (`setting up uid map: Permission denied`) and WebKit would abort the whole app, so agterm
+Without one, `bwrap` fails (`setting up uid map: Permission denied`) and WebKit would abort the whole app, so ngterm
 refuses every HTML page instead and names this fix in the error. The sandbox stays on either way.
 
-The fix is agterm's profile, [packaging/linux/apparmor/agterm](packaging/linux/apparmor/agterm): Ubuntu's shape,
+The fix is ngterm's profile, [packaging/linux/apparmor/ngterm](packaging/linux/apparmor/ngterm): Ubuntu's shape,
 unconfined plus `userns`, attached to a binary by its real path (the `bwrap` it starts inherits it):
 
 ```sh
-scripts/install-apparmor-profile.sh /path/to/bin/agterm   # writes /etc/apparmor.d/agterm (sudo) and loads it
+scripts/install-apparmor-profile.sh /path/to/bin/ngterm   # writes /etc/apparmor.d/ngterm (sudo) and loads it
 scripts/install-apparmor-profile.sh --uninstall           # unloads and removes it
 scripts/install-apparmor-profile.sh --print [BINARY]      # shows the profile, changes nothing
 ```
 
-Without a path it covers the conformance stage's `target/conformance-stage/bin/agterm`. A moved binary needs the profile installed again for its new path. On
+Without a path it covers the conformance stage's `target/conformance-stage/bin/ngterm`. A moved binary needs the profile installed again for its new path. On
 a host without AppArmor, or one that does not restrict user namespaces, the script installs nothing.
 
 ## Native dependencies
 
 The native dependencies are fetched, prepared or built outside cargo, each into its own vendored prefix
-`${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/`. The key hashes the build's pins in `build/pins.env` and
+`${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/<name>-<key>/`. The key hashes the build's pins in `build/pins.env` and
 its patches in `build/patches/`, so a complete prefix is reused as is and a pin of one build never rebuilds another.
 
 ```sh
@@ -137,13 +143,13 @@ scripts/fetch-lavapipe.sh      # Mesa's lavapipe for headless GPUI runs: the sys
 scripts/build-weston.sh        # weston 15 for headless GPUI runs where the system's is older (Ubuntu 26.04: 14)
 ```
 
-The app's headless instances (the conformance suite's, `agterm-gpui`'s window tests') render on Mesa's software
+The app's headless instances (the conformance suite's, `ngterm-gpui`'s window tests') render on Mesa's software
 Vulkan driver lavapipe only, never on the machine's GPU. The render-path harnesses also render offscreen on a hardware
-render node, each GPU in a child process of its own: `agterm-gpui`'s `external_texture` and `html_overlay` tests (on
-lavapipe and on the first render node a Mesa Vulkan driver runs) and `agterm-wpe`'s engine tests (on the first DRM
+render node, each GPU in a child process of its own: `ngterm-gpui`'s `external_texture` and `html_overlay` tests (on
+lavapipe and on the first render node a Mesa Vulkan driver runs) and `ngterm-wpe`'s engine tests (on the first DRM
 render node and in shared memory, [WPE WebKit](#wpe-webkit)).
 `scripts/fetch-lavapipe.sh` prints its ICD
-manifest: `AGTERM_LAVAPIPE_ICD` when set, else the distribution's (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
+manifest: `NGTERM_LAVAPIPE_ICD` when set, else the distribution's (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch
 `vulkan-swrast`), else it verifies the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`) and
 unpacks it into the vendored prefix, refusing a host whose libLLVM or glibc it cannot load (`--print-icd` finds without
 fetching); a manifest whose driver is missing is never used. Both the suite and the process tests ask it
@@ -154,14 +160,14 @@ libdisplay-info it needs as subprojects) into the vendored prefix; `run-rust-lin
 the weston on PATH has no `--fake-seat`, and the process tests take the first weston on PATH that has it (put the
 prefix's `bin/` first, as CI does).
 
-Each script also takes `--print-prefix` and `--verify`. No cargo build reaches the network: `agterm-ghostty-vt-sys`'s
+Each script also takes `--print-prefix` and `--verify`. No cargo build reaches the network: `ngterm-ghostty-vt-sys`'s
 build script runs `zig build -Demit-lib-vt` over the libghostty-vt prefix's tree for cargo's target (as herdr's does),
 with the pinned zig the prefix's stamp names, installing and caching under its `OUT_DIR` and sharing Zig's global
 cache in the vendor root (`zig-cache-<version>`), and fails with "run scripts/build-ghostty-vt.sh" when the prefix is
-missing; `agterm-gpui` fails with "run scripts/fetch-fonts.sh". A fresh `OUT_DIR` (a new target dir or profile) builds
+missing; `ngterm-gpui` fails with "run scripts/fetch-fonts.sh". A fresh `OUT_DIR` (a new target dir or profile) builds
 the library again, a few minutes.
 libghostty-vt builds the same way on macOS and Windows ([macOS and Windows](#macos-and-windows)).
-`AGTERM_GHOSTTY_VT_PREFIX` names a prepared prefix and skips the script on any OS.
+`NGTERM_GHOSTTY_VT_PREFIX` names a prepared prefix and skips the script on any OS.
 The patches `scripts/build-ghostty-vt.sh` applies to the pinned source (`build/patches/ghostty-vt/`, in name order,
 with no fuzz) are recorded in [that directory's README](build/patches/ghostty-vt/README.md): one exposes data the
 library stores as C API the app needs, the others change its logic for a fix or a parity behavior Rust cannot reach
@@ -171,17 +177,17 @@ all and re-runs every verification, and drops a patch only once the pinned sourc
 ghostty main, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
 statically; staging takes the prefix's `share/` (the resources) only. `.cargo/config.toml` makes `scripts/pkg-config.sh`
 the pkg-config of every cargo build (it picks the WPE WebKit, below).
-`scripts/gen-ghostty-vt-bindings.sh` regenerates the bindings of `agterm-ghostty-vt-sys` (with bindgen's layout
+`scripts/gen-ghostty-vt-bindings.sh` regenerates the bindings of `ngterm-ghostty-vt-sys` (with bindgen's layout
 assertions; `--check` compares a regeneration with the checked-in file) after a `LIBGHOSTTY_VT_REV`
-or ghostty-vt patch change, `scripts/gen-ghostty-config-keys.sh` agterm-core's ghostty config key table after a
-`LIBGHOSTTY_VT_REV` bump, `scripts/gen-wpe-bindings.sh` the gir crates `agterm-wpe-sys`, `agterm-wpe-platform-sys` and
-`agterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump.
+or ghostty-vt patch change, `scripts/gen-ghostty-config-keys.sh` ngterm-core's ghostty config key table after a
+`LIBGHOSTTY_VT_REV` bump, `scripts/gen-wpe-bindings.sh` the gir crates `ngterm-wpe-sys`, `ngterm-wpe-platform-sys` and
+`ngterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump.
 
 The GPUI frontend's terminal embeds the fonts Ghostty embeds, from the package deps of the Ghostty at
 `LIBGHOSTTY_VT_REV` (`FONTS_*` in `build/pins.env`, each archive's sha256 pinned): JetBrains Mono 2.304 (its static
 faces; SIL Open Font License 1.1), the face when `font-family` is unset, and Symbols Nerd Font Mono 3.4.0 (MIT), every
 family's symbol fallback. Their licenses are in the prefix's `share/doc/fonts/`; a package of the binary ships them. The terminal's procedural sprites (box drawing, blocks, powerline, braille, legacy computing) are a port of
-Ghostty's sprite font through qwertty-term (both MIT); `crates/agterm-gpui/tests/golden/` holds Ghostty's sprite test
+Ghostty's sprite font through qwertty-term (both MIT); `crates/ngterm-gpui/tests/golden/` holds Ghostty's sprite test
 images with Ghostty's license.
 
 Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and
@@ -189,7 +195,7 @@ Some GPUI dependencies are patched in the tree rather than built: `vendor/calloo
 the coverage masks the terminal's sprites paint with, the native key behind each key event, the HTML clipboard offer,
 xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
 `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does; `vendor-gpui.sh --diff`
-turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `agterm-pty`:
+turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `ngterm-pty`:
 ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child
 created in its job, a ConPTY session's handles exported and imported for the session server's update handoff) is
 the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
@@ -197,15 +203,15 @@ the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
 ### macOS and Windows
 
 What builds there today is the crates the `cross-platform.yml` workflow runs ([CI](#ci)): libghostty-vt and its
-wrapper, `agterm-pty`, `agterm-term`, `agterm-session`, `agterm-proto`, `agterm-host` and `agterm-core`. The app,
-`agterm-ctl` and `agterm-app` build on Linux only, and `agterm-server` compiles for macOS but is not run there
+wrapper, `ngterm-pty`, `ngterm-term`, `ngterm-session`, `ngterm-proto`, `ngterm-host` and `ngterm-core`. The app,
+`ngterm-ctl` and `ngterm-app` build on Linux only, and `ngterm-server` compiles for macOS but is not run there
 ([CI](#ci) says what each waits for). The order is Linux's: the pinned Zig (fetched by the script when none is
 found), the script, then cargo:
 
 ```sh
 scripts/build-ghostty-vt.sh    # stock bash 3.2 on macOS, Git Bash on Windows
-cargo test -p agterm-session -p agterm-proto -p agterm-host -p agterm-core -p agterm-ghostty-vt-sys \
-  -p agterm-ghostty-vt -p agterm-pty -p agterm-term
+cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys \
+  -p ngterm-ghostty-vt -p ngterm-pty -p ngterm-term
 ```
 
 A Mac, a Windows machine or a VM of either needs, besides Rust from rustup (`rust-toolchain.toml`):
@@ -216,7 +222,7 @@ A Mac, a Windows machine or a VM of either needs, besides Rust from rustup (`rus
 - Windows: Visual Studio Build Tools with the C++ workload (MSVC and the Windows SDK): rustc's `*-pc-windows-msvc`
   targets link through it, and Zig builds libghostty-vt for `windows-msvc` only against it. Git for Windows: its Git
   Bash runs the script and brings curl, tar, patch, `sha256sum`, `unzip` (Zig's archive), `tic`/`infocmp` and
-  `cygpath`. PowerShell 7 (`pwsh`): `agterm-session`'s PowerShell session tests require it on Windows and run
+  `cygpath`. PowerShell 7 (`pwsh`): `ngterm-session`'s PowerShell session tests require it on Windows and run
   elsewhere wherever one is installed.
 
 The script picks the pinned Zig of the host's OS and arch (`LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>`). On Windows the sys
@@ -225,7 +231,7 @@ locations (never `bash` from `PATH`, which can be WSL's), takes the MSYS path it
 links `ghostty-vt-static` through MSVC; on macOS it links the static archive from a directory of its own, built for
 the deployment target rustc links for. `tic` on macOS and Windows writes the terminfo in its hashed layout
 (`share/terminfo/78/`), which every reader takes beside `x/`; the terminfo source (`share/terminfo/ghostty.terminfo`)
-is staged everywhere. Targets no machine runs natively are cross-built with `cargo build -p agterm-ghostty-vt-sys
+is staged everywhere. Targets no machine runs natively are cross-built with `cargo build -p ngterm-ghostty-vt-sys
 --target …`, as CI does: aarch64 Linux and x86_64 macOS from Linux, aarch64 Windows from Windows (Zig finds no MSVC
 headers from Linux).
 
@@ -239,7 +245,7 @@ The GPUI frontend's HTML overlays run WPE WebKit offscreen (WPEPlatform API). It
 `gir` from the `.gir` files of the pinned package (`WPE_*` and `GIR_*` in `build/pins.env`, WPE WebKit 2.54.1) and
 need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through pkg-config (`wpe-webkit-2.0`):
 
-- Arch, and every packaged agterm: the distribution's `wpewebkit` (`sudo pacman -S wpewebkit`). A distribution build
+- Arch, and every packaged ngterm: the distribution's `wpewebkit` (`sudo pacman -S wpewebkit`). A distribution build
   has its helper processes' path compiled in (`/usr/lib/wpe-webkit-2.0`), so the app depends on that package; a system
   `wpe-webkit-2.0` of the bound API wins over anything vendored.
 - No root, Arch-compatible userland (glibc 2.44+ and the package's libraries): `scripts/fetch-wpe.sh` verifies the
@@ -248,11 +254,11 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's `lib/` on top),
   since nothing relocates it. That overlay is a user namespace with `PR_SET_NO_NEW_PRIVS`, inherited by everything
   started in it (no `sudo` or setuid program, root's files shown as `nobody`'s), so the app never enters it: the
-  engine runs in a worker process under it (`agterm_wpe::worker`: the app's own executable re-run, driven over a
-  socket; every `main` that may start an engine calls `agterm_wpe::worker::serve_if_asked` first), and the app, its
-  terminals, their live sessions and everything they start keep the user's privileges (`cargo test -p agterm-gpui --test
-  privileges`). `agterm-wpe`'s engine tests (`cargo test -p agterm-wpe`) run every case through a worker and again in
-  process inside the overlay (`agterm_wpe::launcher::command`). Pick the distribution package whenever you can: with
+  engine runs in a worker process under it (`ngterm_wpe::worker`: the app's own executable re-run, driven over a
+  socket; every `main` that may start an engine calls `ngterm_wpe::worker::serve_if_asked` first), and the app, its
+  terminals, their live sessions and everything they start keep the user's privileges (`cargo test -p ngterm-gpui --test
+  privileges`). `ngterm-wpe`'s engine tests (`cargo test -p ngterm-wpe`) run every case through a worker and again in
+  process inside the overlay (`ngterm_wpe::launcher::command`). Pick the distribution package whenever you can: with
   it the engine runs in the app's own process.
 - Ubuntu packages no `wpewebkit` at all (none since 22.04's 2.36, 26.04 included), and 24.04 cannot load the Arch
   package (glibc 2.39): Ubuntu builds the workspace without what links WPE (`WORKSPACE_WITHOUT_WPE` in
@@ -265,46 +271,46 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   frontend with its HTML overlays (clippy, unit tests, the headless page harness on lavapipe); the `conformance` jobs
   run in the same container.
 
-`agterm-wpe` is the host over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
+`ngterm-wpe` is the host over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
 `WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
 out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses: stores, scripts and the
 bridge, policies, schemes, the clipboard, `<select>` popups, the context menu's hit test and input methods; in this
 process or in a worker (`Host::start_worker` asks for one with the system's package too, as the engine tests do). Its
 engine tests render headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and
-in shared memory, each frame mode on each backend in a child process of its own. The GPUI side (`agterm-gpui`'s `html_overlay`) has a
-headless harness of its own (`cargo test -p agterm-gpui --test html_overlay`): the real engine on the GPU GPUI's
+in shared memory, each frame mode on each backend in a child process of its own. The GPUI side (`ngterm-gpui`'s `html_overlay`) has a
+headless harness of its own (`cargo test -p ngterm-gpui --test html_overlay`): the real engine on the GPU GPUI's
 headless renderer opened, its frames read back through the external texture element, on lavapipe (SHM) and on a Mesa
 render node (dmabufs).
 
 Cargo does not notice the provider changing: after installing or removing either, run
-`cargo clean -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys`.
+`cargo clean -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys`.
 
 ## Build and run
 
 ```sh
 cargo build --workspace --release      # without WPE WebKit: "${WORKSPACE_WITHOUT_WPE[@]}" and "${GPUI_WITHOUT_HTML[@]}"
-scripts/stage.sh /tmp/agterm-stage     # bin/{agterm,ngtermctl,agterm-session}, share/{ghostty,terminfo,ngterm}
-scripts/run-gpui-dev.sh [--release] [--state DIR] [-- AGTERM_ARGS...]   # an isolated dev instance
+scripts/stage.sh /tmp/ngterm-stage     # bin/{ngterm,ngtermctl,ngterm-session}, share/{ghostty,terminfo,ngterm}
+scripts/run-gpui-dev.sh [--release] [--state DIR] [-- NGTERM_ARGS...]   # an isolated dev instance
 ```
 
 `stage.sh` (into a new or empty directory; `--profile debug` for a debug build) assembles the layout the suite, the
 dev script and an install run from.
-`run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`) builds and stages the app into a fresh `/tmp/agterm-dev-*` root and
+`run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`) builds and stages the app into a fresh `/tmp/ngterm-dev-*` root and
 launches an isolated instance: a unique
-`AGTERM_APP_ID`, its own `AGTERM_STATE_DIR` and `AGTERM_CONTROL_SOCKET`, and `AGTERM_*`/`ZMX_*` inherited from a live
-agterm session dropped (all but `AGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line that drives the
-instance.
+`NGTERM_APP_ID`, its own `NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*`/`ZMX_*` inherited
+from a live terminal session dropped (all but `NGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line
+that drives the instance.
 
-The build uses the installed build's app id, state dir and socket: while an installed agterm runs, launch a checkout's
+The build uses the installed build's app id, state dir and socket: while an installed ngterm runs, launch a checkout's
 build only through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance over the session bus (the
 D-Bus name above), or, with no bus between them, shares its `windows.json`.
 
-`AGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `agterm.log` in the state dir.
+`NGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `ngterm.log` in the state dir.
 
 ## Live sessions
 
 Under the restore mode `live` (Settings, or `ngtermctl restore mode`) each main and split pane runs its program in a
-live session that outlives the app, held by the session server `agterm-session` (`crates/agterm-session`, taken from
+live session that outlives the app, held by the session server `ngterm-session` (`crates/ngterm-session`, taken from
 [herdr](https://github.com/herdrdev/herdr)'s background session server at `HERDR_REV` in `build/pins.env`). Plain
 panes keep a PTY of their own, and an instance with live sessions off starts no server.
 
@@ -314,8 +320,8 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   server listens on a named pipe named after that directory, owner-only and closed to remote clients, and a client
   refuses a pipe whose server runs as another user. A private state dir gives a private namespace, and with it a
   private server.
-- Started on demand: the first attach that finds no server (a live pane's, or `agterm-session attach`'s) runs
-  `agterm-session server <namespace>` detached from itself and waits for it to answer; clients that race to start one
+- Started on demand: the first attach that finds no server (a live pane's, or `ngterm-session attach`'s) runs
+  `ngterm-session server <namespace>` detached from itself and waits for it to answer; clients that race to start one
   end up on the same server. Detached per OS: a session of its own on Linux; on macOS also made responsible for
   itself, so it and its sessions keep their own privacy permissions rather than the app's; on Windows a detached
   process outside every job of the launcher's, run from a private copy of the binary in the namespace directory, so
@@ -323,15 +329,19 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
 - Stopped by itself: never while a session lives, and a few seconds after it holds no session and no client.
   Sessions end with their programs, or through `ngtermctl live kill` and `live reset`.
 - The app's live panes attach in process through the server's client library: the session's snapshot, then its raw
-  output, into the pane's own libghostty-vt terminal. `agterm-session attach` is the attach contract's terminal
-  client (the `AGTERM_LIVE_*` variables), which the remote path and a terminal outside the app run;
-  `ngtermctl clipboard set` writes through `agterm-session print`. `agterm-session --help` lists the rest (`list`,
+  output, into the pane's own libghostty-vt terminal. `ngterm-session attach` is the attach contract's terminal
+  client (the `NGTERM_LIVE_*` variables), which the remote path and a terminal outside the app run;
+  `ngtermctl clipboard set` writes through `ngterm-session print`. `ngterm-session --help` lists the rest (`list`,
   `kill`, `screen`, `type`, `version`).
 - The update handoff: a launch that finds a server of another build than the staged one (its id in
   `share/ngterm/session-BUILD`) asks it to hand every session over to the staged binary. The programs keep running
   with their terminals: the PTYs pass to the new server (descriptors on Linux and macOS; on Windows the ConPTY handles,
   only on the Windows builds the handoff was proven on). A failed handoff rolls back, the sessions stay with the old
   server, and the app offers the Live sessions reset.
+- Across the rename: a server from before the build took the name ngterm runs as `agterm-session`, its sessions named
+  `agterm-<id>`; the handoff to `ngterm-session` renames them `ngterm-<id>`, so the panes find them. Their programs
+  keep the environment they started with (`AGTERM_*`), so agent status in a shell started before the update resumes
+  in its next shell. A one-time migration (`ngterm_core::live::LEGACY_NAME_PREFIX`).
 
 ## Test
 
@@ -345,7 +355,7 @@ scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sourc
 scripts/vendor-gpui.sh --check
 scripts/vendor-portable-pty.sh --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo clippy -p agterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
+cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
@@ -356,13 +366,13 @@ A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`,
 the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh --check` (it needs `bindgen-cli`).
 
 - The app's window tests need a display and a session bus; under `xvfb-run` and `dbus-run-session` they get their
-  own and never touch the desktop's. The process tests (`crates/agterm-gpui/tests`) start their own private weston,
+  own and never touch the desktop's. The process tests (`crates/ngterm-gpui/tests`) start their own private weston,
   Xvfb and bus besides, from an environment built from scratch, and render on lavapipe
   (`tests/support/lavapipe.rs`).
 - The selftests, and the pytest runs some of them start, import the harness the venv's editable install points at: a
   venv installed from another checkout (a worktree sharing the main checkout's) needs this checkout's `conformance/`
   first on `PYTHONPATH` (`run-rust-linux.sh` puts it there itself).
-- `--workspace` includes the WPE crates (`agterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
+- `--workspace` includes the WPE crates (`ngterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
   which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` and then
   `"${GPUI_WITHOUT_HTML[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
 - `run-rust-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
@@ -383,10 +393,10 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix: bash, fish
   and zsh), each with `--must-pass live-any-shell`, the zsh one with `--must-pass live-sessions` too; the bash one runs
   the app's process tests with the overlays on first.
-- `cross-platform.yml`: the crates that build on all three OSes (`agterm-session`, `agterm-proto`, `agterm-host`,
-  `agterm-core`, `agterm-ghostty-vt-sys`, `agterm-ghostty-vt`, `agterm-pty` and `agterm-term` so far; `agterm-server`
-  compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `agterm-ctl` builds
-  on Linux only over `close_range` and `/proc/locks`; both wait for their remaining forms, and `agterm-app` for the
+- `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
+  `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty` and `ngterm-term` so far; `ngterm-server`
+  compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `ngterm-ctl` builds
+  on Linux only over `close_range` and `/proc/locks`; both wait for their remaining forms, and `ngterm-app` for the
   Windows forms of its Unix-only hook runner, log file, remote presentation process and agent integrations'
   installers, which write with `std::os::unix` file modes and symlinks), on Ubuntu, macOS and
   Windows runners: the libghostty-vt prefix with each runner's pinned Zig (cached with Zig's global cache), format,
@@ -401,12 +411,12 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
 - `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over
-  upstream's, agterm's own themes.
+  upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.
-- `packaging/linux/apparmor/`: agterm's AppArmor profile (WebKit's sandbox on Ubuntu).
-- `resources/`: the agent-status hooks and agent skill the app installs (the skill's source stays at
-  `resources/skills/agterm`, upstream's name; it installs as `ngterm`), and ngterm's PowerShell integration
+- `packaging/linux/apparmor/`: ngterm's AppArmor profile (WebKit's sandbox on Ubuntu).
+- `resources/`: the agent-status hooks and agent skill the app installs (the skill at `resources/skills/ngterm`,
+  upstream's `plugins/agterm/skills/agterm` plus `build/patches/skill-ngterm`), and ngterm's PowerShell integration
   (`shell-integration/pwsh`), which live sessions load.
 - `docs/plans/`: implementation plans.

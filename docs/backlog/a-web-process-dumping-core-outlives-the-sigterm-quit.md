@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-gpui/tests/quit.rs:463
+where: crates/ngterm-gpui/tests/quit.rs:463
 added: 2026-10-21
 ---
 # A web process dumping core outlives the SIGTERM quit

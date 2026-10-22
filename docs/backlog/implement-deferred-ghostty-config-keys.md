@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-core/src/ghostty_config/model.rs:540
+where: crates/ngterm-core/src/ghostty_config/model.rs:540
 added: 2026-10-17
 ---
 # implement the deferred Ghostty config keys the GTK build honored

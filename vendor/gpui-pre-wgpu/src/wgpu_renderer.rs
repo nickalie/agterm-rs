@@ -134,7 +134,7 @@ struct WgpuPipelines {
     poly_sprites: wgpu::RenderPipeline,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
-    /// External surfaces (agterm-rs patch): dmabufs and CPU pixels.
+    /// External surfaces (ngterm patch): dmabufs and CPU pixels.
     #[cfg(target_os = "linux")]
     external_surfaces: wgpu::RenderPipeline,
 }
@@ -1499,7 +1499,7 @@ impl WgpuRendererCore {
             .inspect_err(|_| {
                 // Queue writes are staged before encoding; flush them even if the frame fails.
                 self.resources.queue.submit(std::iter::empty());
-                // External surfaces (agterm-rs patch): the frame's copies were not submitted.
+                // External surfaces (ngterm patch): the frame's copies were not submitted.
                 #[cfg(target_os = "linux")]
                 self.resources.external_surfaces.abort_frame();
             })
@@ -1641,7 +1641,7 @@ impl WgpuRendererCore {
                             &mut pass,
                         )?;
                     }
-                    // External surfaces on Linux (agterm-rs patch); other surfaces
+                    // External surfaces on Linux (ngterm patch); other surfaces
                     // are macOS-only for video playback.
                     #[cfg(target_os = "linux")]
                     PrimitiveBatch::Surfaces(range) => {
@@ -1661,7 +1661,7 @@ impl WgpuRendererCore {
             }
         }
 
-        // External surfaces (agterm-rs patch): their dmabuf copies go first, and the submission signals the
+        // External surfaces (ngterm patch): their dmabuf copies go first, and the submission signals the
         // completion timeline when it copies or first draws a frame.
         #[cfg(target_os = "linux")]
         let (copies, completion) = {

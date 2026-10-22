@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the pinned weston (WESTON_* of build/pins.env) into the vendored prefix
-# ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/weston-<key>/, for hosts whose weston predates 15.0: the GPUI build needs
+# ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/weston-<key>/, for hosts whose weston predates 15.0: the GPUI build needs
 # a `wl_seat`, which headless weston offers only with `--fake-seat`, new in 15.0 (Ubuntu 24.04 ships 13). The key
 # hashes the WESTON_ pins and the host arch, so a complete prefix is reused as is. A system weston that takes
 # --fake-seat needs none of this.

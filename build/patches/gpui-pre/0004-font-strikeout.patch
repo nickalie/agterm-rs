@@ -1,7 +1,7 @@
 A face's strikeout metrics (GPUI patch for docs/plans/20261014-gpui-frontend.md Task 33): `TextSystem::font_strikeout`
 returns the strikeout's position and thickness as the font's OS/2 table declares them (`yStrikeoutPosition`,
 `yStrikeoutSize`), in font units, through a new `PlatformTextSystem::font_strikeout` whose default reads nothing, so
-the platforms this series does not patch keep building. agterm's terminal draws its strikethrough from them, as
+the platforms this series does not patch keep building. ngterm's terminal draws its strikethrough from them, as
 Ghostty does, where it estimated before. An upstream candidate (Zed): read-only, no behavior change.
 scripts/vendor-gpui.sh applies this after 0003.
 

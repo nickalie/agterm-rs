@@ -1,4 +1,4 @@
-//! External surfaces on Linux (an agterm-rs patch): frames produced outside GPUI that the renderer draws through
+//! External surfaces on Linux (an ngterm patch): frames produced outside GPUI that the renderer draws through
 //! [`crate::Window::paint_external_surface`], the Linux counterpart of macOS's `paint_surface`.
 //!
 //! A frame is either a dmabuf ([`DmaBufFrame`]), which the renderer imports into its own device (no CPU copy: the GPU

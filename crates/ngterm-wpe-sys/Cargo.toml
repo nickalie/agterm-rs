@@ -1,0 +1,59 @@
+[package]
+name = "ngterm-wpe-sys"
+description = "Raw gir bindings to WPE WebKit (WPEWebKit-2.0)"
+build = "build.rs"
+
+[package.version]
+workspace = true
+
+[package.edition]
+workspace = true
+
+[package.rust-version]
+workspace = true
+
+[package.publish]
+workspace = true
+
+[package.license]
+workspace = true
+
+[package.metadata.system-deps.wpe_webkit_2_0]
+name = "wpe-webkit-2.0"
+version = "2.54"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--generate-link-to-definition"]
+all-features = true
+
+[dependencies]
+libc = "0.2"
+
+[dependencies.glib-sys]
+workspace = true
+
+[dependencies.gobject-sys]
+workspace = true
+
+[dependencies.gio-sys]
+workspace = true
+
+[dependencies.soup-sys]
+workspace = true
+
+[dependencies.wpe-javascriptcore-sys]
+package = "ngterm-wpe-javascriptcore-sys"
+path = "../ngterm-wpe-javascriptcore-sys"
+
+[dependencies.wpe-platform-sys]
+package = "ngterm-wpe-platform-sys"
+path = "../ngterm-wpe-platform-sys"
+
+[build-dependencies]
+system-deps = "9"
+
+[dev-dependencies]
+shell-words = "1.0.0"
+tempfile = "3"
+
+[features]

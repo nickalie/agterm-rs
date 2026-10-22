@@ -33,11 +33,11 @@ case "${1:-}" in
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/agterm-calloop-XXXXXX")"
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-calloop-XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
 archive="$scratch/calloop-$CALLOOP_VERSION.crate"
-curl -sSfL -A agterm-rs-dev -o "$archive" "https://static.crates.io/crates/calloop/calloop-$CALLOOP_VERSION.crate"
+curl -sSfL -A ngterm-dev -o "$archive" "https://static.crates.io/crates/calloop/calloop-$CALLOOP_VERSION.crate"
 sum="$(sha256sum "$archive" | cut -d' ' -f1)"
 [[ "$sum" == "$CALLOOP_SHA256" ]] || die "calloop $CALLOOP_VERSION: sha256 $sum, expected $CALLOOP_SHA256"
 mkdir "$scratch/src"

@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-session/src/server/pane.rs:949
+where: crates/ngterm-session/src/server/pane.rs:949
 added: 2026-10-21
 ---
 # A Windows resize repaints over text `print` wrote into a session

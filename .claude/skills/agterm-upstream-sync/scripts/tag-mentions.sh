@@ -12,7 +12,7 @@
 #              that assert `reference`, the rest of the file `keep`)
 #   pins       build/pins.env comments naming upstream's pins: rewritten by hand from pins-delta.sh's report
 #   resources  integrations/mod.rs: names the release resources/ was copied from; bump once sync-resources.sh ran
-#   claim      what the Rust build *claims* to implement: PARITY_LEVEL in agterm-proto, the tests and docs that
+#   claim      what the Rust build *claims* to implement: PARITY_LEVEL in ngterm-proto, the tests and docs that
 #              mirror it. Bumped in the plan's last task, after the port, never in
 #              the mechanical bump: parityLevel unlocks `since(V)` tests and states a parity not yet reached
 #   cite       a citation of what upstream said at that release (fork-bugs.md): re-check it against the new
@@ -36,12 +36,12 @@ classify() {
     README.md|CLAUDE.md|conformance/README.md|.github/workflows/spike-macos.yml) echo bump ;;
     conformance/agterm_conformance/impls/swift_macos.py) echo reference ;;
     build/pins.env) echo pins ;;
-    crates/agterm-app/src/integrations/mod.rs) echo resources ;;
-    crates/agterm-proto/src/version.rs|crates/agterm-core/src/dispatch.rs|crates/agterm-server/tests/server.rs) echo claim ;;
+    crates/ngterm-app/src/integrations/mod.rs) echo resources ;;
+    crates/ngterm-proto/src/version.rs|crates/ngterm-core/src/dispatch.rs|crates/ngterm-server/tests/server.rs) echo claim ;;
     conformance/agterm_conformance/impls/rust.py|conformance/docs/rust-build.md) echo claim ;;
     conformance/docs/fork-bugs.md) echo cite ;;
     conformance/docs/spike-macos.md|conformance/agterm_conformance/impls/swift_linux.py) echo keep ;;
-    conformance/selftests/*|conformance/tools/*.py|crates/agterm-gpui/src/quick/tests.rs) echo keep ;;
+    conformance/selftests/*|conformance/tools/*.py|crates/ngterm-gpui/src/quick/tests.rs) echo keep ;;
     *) echo review ;;
   esac
 }

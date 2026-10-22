@@ -6,9 +6,10 @@ translates every vocabulary-dependent value a test or the harness sends or reads
 own, and the Rust build's renames the group to `live` (conformance/docs/rust-build.md > The `live` group).
 
 The live sessions' host differs too: the Swift references run upstream's zmx, a daemon per session under `ZMX_*`
-variables in `/tmp/<name>-zmx-<hash>`; the Rust build runs one session server per instance (`agterm-session`) under
-its attach contract's `AGTERM_LIVE_*` variables in `/tmp/ngterm-live-<hash>`. Each vocabulary carries its host's
-environment names, socket directory, leading client and leftover processes.
+variables in `/tmp/<name>-zmx-<hash>`, named `agterm-<pane>`; the Rust build runs one session server per instance
+(`ngterm-session`) under its attach contract's `NGTERM_LIVE_*` variables in `/tmp/ngterm-live-<hash>`, its sessions
+named `ngterm-<pane>`. Each vocabulary carries its host's environment names, socket directory, daemon names, leading
+client and leftover processes.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from agterm_conformance.zmx_client import PtyProcess
 
 # How long the Rust build's session server outlives its last client and session (`IDLE_GRACE`,
-# crates/agterm-session/src/server/lifecycle.rs): the leftover check gives it that long to exit by itself.
+# crates/ngterm-session/src/server/lifecycle.rs): the leftover check gives it that long to exit by itself.
 SERVER_IDLE_GRACE = 3.0
 
 # Upstream's name for the group, as the shared tests spell it.
@@ -54,7 +55,7 @@ def upstream_socket_directory(state_dir: str | os.PathLike[str], name: str = "ag
 
 
 def live_socket_directory(state_dir: str | os.PathLike[str], name: str = "ngterm") -> str:
-    """`agterm_core::live::socket_directory` on Unix: upstream's hash under `/tmp/<name>-live-`, the Rust build's
+    """`ngterm_core::live::socket_directory` on Unix: upstream's hash under `/tmp/<name>-live-`, the Rust build's
     namespace of its session server."""
     return f"/tmp/{name}-live-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
 
@@ -91,6 +92,8 @@ class Vocabulary:
     directory_variable: str
     # Their common prefix, which a test strips to stand outside any live pane.
     variable_prefix: str
+    # The prefix of the daemon name the app gives a pane's live session (`<prefix><pane identity>`).
+    daemon_prefix: str
     # Upstream error and output texts (`str.format` templates) to this implementation's; one not listed is unchanged.
     texts: Mapping[str, str] = field(default_factory=dict)
     # `socket_directory(state_dir, app_dir_name)`: the instance's namespace, named by the adapter's `app_dir_name`.
@@ -139,6 +142,8 @@ UPSTREAM = Vocabulary(
     session_variable="ZMX_SESSION",
     directory_variable="ZMX_DIR",
     variable_prefix="ZMX_",
+    # `ZmxSupport.namePrefix`
+    daemon_prefix="agterm-",
 )
 
 # The upstream texts the Rust build words in the live-session vocabulary, each as the shared tests template it; the
@@ -161,19 +166,26 @@ LIVE_TEXTS: Mapping[str, str] = {
     ),
 }
 
+# The upstream texts that name the app, in the Rust build's own name (crates/ngterm-ctl/src/output.rs).
+NAME_TEXTS: Mapping[str, str] = {
+    "restart agterm to apply the configured mode": "restart ngterm to apply the configured mode",
+}
+
 LIVE = Vocabulary(
     name="live",
     group="live",
     result_key="live",
     backed_key="backedByLive",
-    ui_test_opt_in="AGTERM_UITEST_ENABLE_LIVE",
-    # The session server's attach contract (crates/agterm-session/src/cli.rs).
-    session_variable="AGTERM_LIVE_SESSION",
-    directory_variable="AGTERM_LIVE_DIR",
-    variable_prefix="AGTERM_LIVE_",
-    texts=LIVE_TEXTS,
+    ui_test_opt_in="NGTERM_UITEST_ENABLE_LIVE",
+    # The session server's attach contract (crates/ngterm-session/src/cli.rs).
+    session_variable="NGTERM_LIVE_SESSION",
+    directory_variable="NGTERM_LIVE_DIR",
+    variable_prefix="NGTERM_LIVE_",
+    # `ngterm_core::live::daemon_name`
+    daemon_prefix="ngterm-",
+    texts={**LIVE_TEXTS, **NAME_TEXTS},
     socket_directory=live_socket_directory,
     leading_client=_live_leading_client,
-    server="agterm-session",
+    server="ngterm-session",
     server_idle=SERVER_IDLE_GRACE,
 )

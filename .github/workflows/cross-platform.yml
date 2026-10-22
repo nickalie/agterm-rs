@@ -2,16 +2,16 @@
 # tests of each crate in PACKAGES. Each task that makes a crate cross-platform adds it to PACKAGES and its generator
 # checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
 # allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE)
-# is checked on Linux only, in rust-linux.yml. agterm-server (AF_UNIX and `flock`) and agterm-ctl (an AF_UNIX
-# client, tested against the server) are meant to be cross-platform and are not in PACKAGES yet. agterm-server
+# is checked on Linux only, in rust-linux.yml. ngterm-server (AF_UNIX and `flock`) and ngterm-ctl (an AF_UNIX
+# client, tested against the server) are meant to be cross-platform and are not in PACKAGES yet. ngterm-server
 # compiles for macOS too (`cargo check --target`), though no runner here builds or tests it there yet, and its
-# `std::os::unix` sockets keep it off Windows; agterm-ctl builds on Linux only (`close_range`, `/proc/locks`). They
-# join PACKAGES once the server has its Windows form and the CLI its macOS and Windows forms. agterm-app stays out
-# too: its process table is agterm-session's (tested here on all three), but its hook runner (a `poll` pump over
+# `std::os::unix` sockets keep it off Windows; ngterm-ctl builds on Linux only (`close_range`, `/proc/locks`). They
+# join PACKAGES once the server has its Windows form and the CLI its macOS and Windows forms. ngterm-app stays out
+# too: its process table is ngterm-session's (tested here on all three), but its hook runner (a `poll` pump over
 # non-blocking pipes), its log file (`O_NOFOLLOW`), its remote presentation process (`fcntl`, `kill`) and the agent
 # integrations' installers (`std::os::unix` file modes and symlinks) are Unix-only.
 #
-# libghostty-vt (agterm-ghostty-vt-sys, its wrapper agterm-ghostty-vt) builds here from the prefix
+# libghostty-vt (ngterm-ghostty-vt-sys, its wrapper ngterm-ghostty-vt) builds here from the prefix
 # scripts/build-ghostty-vt.sh prepares with the pinned Zig of each runner's OS and arch (Git Bash on Windows, stock
 # bash 3.2 on macOS); the sys crate's build script runs `zig build` over it, offline. The vendor cache keeps the
 # prefix, the pinned Zig and Zig's global cache (the C runtime and compiler_rt builds); the library itself is rebuilt
@@ -39,8 +39,8 @@ env:
   CARGO_TERM_COLOR: always
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
-    -p agterm-session -p agterm-proto -p agterm-host -p agterm-core -p agterm-ghostty-vt-sys -p agterm-ghostty-vt
-    -p agterm-pty -p agterm-term
+    -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys -p ngterm-ghostty-vt
+    -p ngterm-pty -p ngterm-term
 
 defaults:
   run:
@@ -72,7 +72,7 @@ jobs:
       # (its pins and patches, native.sh holding its layout).
       - uses: actions/cache@v6
         with:
-          path: ~/.cache/agterm-rs/vendor
+          path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
@@ -96,5 +96,5 @@ jobs:
         run: |
           for target in ${{ matrix.cross }}; do
             rustup target add "$target"
-            cargo build --locked -p agterm-ghostty-vt-sys --target "$target"
+            cargo build --locked -p ngterm-ghostty-vt-sys --target "$target"
           done

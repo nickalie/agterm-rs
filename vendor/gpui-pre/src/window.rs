@@ -5222,7 +5222,7 @@ impl Window {
     }
 
     /// Paint a frame produced outside GPUI (a dmabuf or CPU pixels, [`crate::ExternalSurface`]) into the scene for
-    /// the next frame at the current z-index, clipped to the current content mask (agterm-rs patch).
+    /// the next frame at the current z-index, clipped to the current content mask (ngterm patch).
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     #[cfg(target_os = "linux")]

@@ -37,8 +37,8 @@ def icd_dirs(tmp_path: Path) -> Path:
 
 
 def fetch(checkout: Path, icd_dirs: Path, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
-    base = {name: value for name, value in os.environ.items() if not name.startswith(("AGTERM_", "ZMX_"))}
-    base.update(AGTERM_VENDOR=str(checkout.parent / "vendor"), AGTERM_VULKAN_ICD_DIRS=str(icd_dirs), **env)
+    base = {name: value for name, value in os.environ.items() if not name.startswith(("NGTERM_", "AGTERM_", "ZMX_"))}
+    base.update(NGTERM_VENDOR=str(checkout.parent / "vendor"), NGTERM_VULKAN_ICD_DIRS=str(icd_dirs), **env)
     return subprocess.run(
         ["bash", str(checkout / SCRIPT), *args], env=base, capture_output=True, text=True, timeout=60, check=False
     )
@@ -104,20 +104,20 @@ def test_the_override_wins(checkout: Path, icd_dirs: Path, make_icd) -> None:
     system_lavapipe(icd_dirs)
     mine = make_icd()
     for args in (["--print-icd"], []):
-        found = fetch(checkout, icd_dirs, *args, AGTERM_LAVAPIPE_ICD=str(mine))
+        found = fetch(checkout, icd_dirs, *args, NGTERM_LAVAPIPE_ICD=str(mine))
         assert found.returncode == 0 and found.stdout == f"{mine}\n", found.stderr
 
 
 def test_an_override_naming_nothing_is_an_error(checkout: Path, icd_dirs: Path, tmp_path: Path) -> None:
     system_lavapipe(icd_dirs)
-    found = fetch(checkout, icd_dirs, AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json"))
-    assert found.returncode == 1 and "AGTERM_LAVAPIPE_ICD names no ICD manifest" in found.stderr
+    found = fetch(checkout, icd_dirs, NGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json"))
+    assert found.returncode == 1 and "NGTERM_LAVAPIPE_ICD names no ICD manifest" in found.stderr
 
 
 def test_an_override_whose_driver_is_missing_is_an_error(checkout: Path, icd_dirs: Path, tmp_path: Path) -> None:
     system_lavapipe(icd_dirs)
     mine = manifest(tmp_path / "mine.json", str(tmp_path / "absent" / "libvulkan_lvp.so"))
-    found = fetch(checkout, icd_dirs, "--print-icd", AGTERM_LAVAPIPE_ICD=str(mine))
+    found = fetch(checkout, icd_dirs, "--print-icd", NGTERM_LAVAPIPE_ICD=str(mine))
     assert found.returncode == 1 and "names a driver that is not there" in found.stderr
 
 
@@ -162,7 +162,7 @@ def test_without_lavapipe_print_icd_names_every_source(checkout: Path, icd_dirs:
     (icd_dirs / "nvidia_icd.json").write_text("{}")
     found = fetch(checkout, icd_dirs, "--print-icd")
     assert found.returncode == 1 and found.stdout == ""
-    for source in ("mesa-vulkan-drivers", "vulkan-swrast", "scripts/fetch-lavapipe.sh", "AGTERM_LAVAPIPE_ICD"):
+    for source in ("mesa-vulkan-drivers", "vulkan-swrast", "scripts/fetch-lavapipe.sh", "NGTERM_LAVAPIPE_ICD"):
         assert source in found.stderr
     assert fetch(checkout, icd_dirs, "--verify").returncode == 1
     assert not (checkout.parent / "vendor").exists()  # --print-icd and --verify fetch nothing

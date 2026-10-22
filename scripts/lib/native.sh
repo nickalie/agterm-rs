@@ -2,18 +2,18 @@
 # fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, pkg-config.sh, stage.sh, lib/dev-instance.sh).
 # Sourced, not run.
 #
-# Each native dependency lives in its own vendored prefix, ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/<name>-<key>/,
+# Each native dependency lives in its own vendored prefix, ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/<name>-<key>/,
 # where <key> hashes that dependency's pins and patches only. libghostty-vt's prefix holds a patched source tree, not
-# a library: agterm-ghostty-vt-sys asks `build-ghostty-vt.sh --print-prefix` where the prefix is, fails when it is
+# a library: ngterm-ghostty-vt-sys asks `build-ghostty-vt.sh --print-prefix` where the prefix is, fails when it is
 # missing, and runs `zig build` over that tree itself, offline (the prefix carries the Zig packages). WPE WebKit is a
 # binary package unpacked (fetch-wpe.sh) where the system has none, and reaches cargo through pkg-config.sh. A
-# relative AGTERM_VENDOR is taken against the repository root, so every caller (and cargo, which runs from a crate
+# relative NGTERM_VENDOR is taken against the repository root, so every caller (and cargo, which runs from a crate
 # directory) sees one path.
 #
 # Portable shell: this file and build-ghostty-vt.sh run under Linux's bash, stock macOS's bash 3.2 and Git Bash on
 # Windows (MSYS2), so they use no bash-4 constructs (`${var^^}`, `mapfile`, associative arrays) and pick each tool
 # per OS (sha256_of, find_zig's archive format). On Windows every path the scripts handle is MSYS's (`/c/...`): a Windows-form
-# AGTERM_VENDOR is converted on the way in, and native_path converts a path on the way out to a native program.
+# NGTERM_VENDOR is converted on the way in, and native_path converts a path on the way out to a native program.
 
 die() {
   echo "$*" >&2
@@ -42,7 +42,7 @@ native_path() {
 
 NATIVE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PINS="$NATIVE_ROOT/build/pins.env"
-VENDOR_ROOT="${AGTERM_VENDOR:-$HOME/.cache/agterm-rs/vendor}"
+VENDOR_ROOT="${NGTERM_VENDOR:-$HOME/.cache/ngterm/vendor}"
 # a Windows-form path (`C:\...`, `C:/...`: what cargo and the tests pass on Windows) in MSYS's form
 if [[ "$VENDOR_ROOT" == [A-Za-z]:[\\/]* ]] && command -v cygpath >/dev/null; then
   VENDOR_ROOT="$(cygpath -u "$VENDOR_ROOT")"
@@ -51,14 +51,14 @@ fi
 # shellcheck source=../../build/pins.env
 source "$PINS"
 
-# The workspace minus everything that links WPE WebKit (the -sys crates, the agterm-wpe host over them, and the GPUI
+# The workspace minus everything that links WPE WebKit (the -sys crates, the ngterm-wpe host over them, and the GPUI
 # frontend, whose default `html` feature runs its HTML overlays on it), as cargo arguments, so a machine without WPE
 # WebKit (Ubuntu packages none) still builds and tests the rest; GPUI_WITHOUT_HTML adds the GPUI frontend back without
 # the feature (the core then refuses every page). The app with its pages, and its conformance, need a WPE WebKit
 # (README > WPE WebKit): run-rust-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
-WORKSPACE_WITHOUT_WPE=(--workspace --exclude agterm-wpe --exclude agterm-wpe-sys --exclude agterm-wpe-platform-sys
-  --exclude agterm-wpe-javascriptcore-sys --exclude agterm-gpui)
-GPUI_WITHOUT_HTML=(-p agterm-gpui --no-default-features)
+WORKSPACE_WITHOUT_WPE=(--workspace --exclude ngterm-wpe --exclude ngterm-wpe-sys --exclude ngterm-wpe-platform-sys
+  --exclude ngterm-wpe-javascriptcore-sys --exclude ngterm-gpui)
+GPUI_WITHOUT_HTML=(-p ngterm-gpui --no-default-features)
 
 # The sha256 of stdin: coreutils' sha256sum (Linux, Git Bash), else shasum (stock macOS).
 sha256_of() {
@@ -133,7 +133,7 @@ prefix_key() {
 }
 
 # libghostty-vt's key hashes the LIBGHOSTTY_VT_ pins, build/patches/ghostty-vt/ and the prefix's layout: 2 is the
-# patched source tree agterm-ghostty-vt-sys/build.rs builds (the prebuilt library before it had no layout line).
+# patched source tree ngterm-ghostty-vt-sys/build.rs builds (the prebuilt library before it had no layout line).
 GHOSTTY_VT_PREFIX_LAYOUT=2
 ghostty_vt_prefix() {
   echo "$VENDOR_ROOT/ghostty-vt-$(prefix_key --layout "$GHOSTTY_VT_PREFIX_LAYOUT" LIBGHOSTTY_VT \
@@ -225,7 +225,7 @@ fonts_prefix() {
   echo "$VENDOR_ROOT/fonts-$(prefix_key FONTS /nonexistent)"
 }
 
-# The faces agterm-gpui embeds, under the prefix's share/fonts/ (its build script reads the same list).
+# The faces ngterm-gpui embeds, under the prefix's share/fonts/ (its build script reads the same list).
 FONT_FILES=(JetBrainsMono-Regular.ttf JetBrainsMono-Bold.ttf JetBrainsMono-Italic.ttf JetBrainsMono-BoldItalic.ttf
   SymbolsNerdFontMono-Regular.ttf)
 
@@ -353,7 +353,7 @@ verify_ghostty_resources() {
   themes="$ghostty/themes"
   terminfo="$share/terminfo"
   for file in "$ghostty/shell-integration/bash/ghostty.bash" "$ghostty/shell-integration/zsh/ghostty-integration" \
-    "$themes/.agterm-resource-manifest" "$terminfo/ghostty.terminfo"; do
+    "$themes/.ngterm-resource-manifest" "$terminfo/ghostty.terminfo"; do
     [[ -s "$file" ]] || { echo "missing or empty Ghostty resource: $file" >&2; return 1; }
   done
   if command -v tic >/dev/null; then
@@ -363,11 +363,11 @@ verify_ghostty_resources() {
       return 1
     }
   fi
-  pin_lines LIBGHOSTTY_VT | cmp -s - "$themes/.agterm-resource-manifest" || {
+  pin_lines LIBGHOSTTY_VT | cmp -s - "$themes/.ngterm-resource-manifest" || {
     echo "Ghostty resource provenance does not match the LIBGHOSTTY_VT_ pins in $PINS" >&2
     return 1
   }
-  theme_count="$(find "$themes" -maxdepth 1 -type f ! -name '.agterm-resource-manifest' | wc -l)"
+  theme_count="$(find "$themes" -maxdepth 1 -type f ! -name '.ngterm-resource-manifest' | wc -l)"
   if ((theme_count != LIBGHOSTTY_VT_THEME_COUNT)); then
     echo "Ghostty theme catalog has $theme_count files; expected $LIBGHOSTTY_VT_THEME_COUNT" >&2
     return 1

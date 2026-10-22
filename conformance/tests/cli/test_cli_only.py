@@ -1,8 +1,9 @@
 """The two `agtermctl` subcommands that never open the socket: `clipboard set` and `terminfo install`.
 
-Both run through `cli.local`, without `--socket` (they refuse it) and in the instance's env, whose
-`AGTERM_STATE_DIR` is under the temp root. `clipboard set` writes nothing outside a Live pane, and inside one the
-instance's terminals drop the OSC 52 write (`clipboard-write = deny`), so the desktop clipboard is never touched.
+Both run through `cli.local`, without `--socket` (they refuse it) and in the instance's env, whose state directory
+variable (`AGTERM_STATE_DIR`, the Rust build's `NGTERM_STATE_DIR`) is under the temp root. `clipboard set` writes
+nothing outside a Live pane, and inside one the instance's terminals drop the OSC 52 write (`clipboard-write = deny`),
+so the desktop clipboard is never touched.
 `terminfo install` talks to a stand-in `ssh` on PATH that runs the remote command against the isolated HOME."""
 
 import base64
@@ -53,7 +54,7 @@ def test_clipboard_set_refuses_outside_a_live_pane(cli):
     not_live = cli.vocabulary.text(NOT_LIVE)
     _failed(cli.local("clipboard", "set", "hello", input=""), not_live)
     _failed(cli.local("clipboard", "set", input="hello"), not_live)
-    # A session variable naming a session agterm would never have named is not printed into.
+    # A session variable naming a session the app would never have named is not printed into.
     env = _env(cli, "someone-elses-session", cli.instance.live_dir)
     _failed(cli.local("clipboard", "set", "hello", env=env, input=""), not_live)
 

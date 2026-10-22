@@ -3,7 +3,7 @@
 # fish. scripts/stage.sh stages it in ngterm's own resources, as share/ngterm/shell-integration/pwsh/ngterm.ps1.
 #
 # A live pane's PowerShell loads it from `-NoExit -Command`, after its profiles, as a script block
-# (crates/agterm-core/src/live/shell_integration.rs), so it wraps the profile's prompt instead of replacing it:
+# (crates/ngterm-core/src/live/shell_integration.rs), so it wraps the profile's prompt instead of replacing it:
 #
 # - OSC 133 marks: A where the prompt starts (ahead of what the profile's prompt writes to the host), B where its
 #   input starts, C when a command line is accepted (through PSReadLine, when it is loaded), D with the last command's

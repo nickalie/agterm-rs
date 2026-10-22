@@ -136,21 +136,30 @@ def test_markers_pass_strict(pytester: pytest.Pytester) -> None:
 
 
 def test_scrub_environ_prefixes() -> None:
-    environ = {"AGTERM_SOCKET": "/s", "ZMX_DIR": "/z", "AGTERMISH": "1", "MY_AGTERM_X": "1", "PATH": "/bin"}
-    assert scrub_environ(environ) == ["AGTERM_SOCKET", "ZMX_DIR"]
-    assert environ == {"AGTERMISH": "1", "MY_AGTERM_X": "1", "PATH": "/bin"}
+    environ = {
+        "AGTERM_SOCKET": "/s",
+        "NGTERM_SOCKET": "/n",
+        "ZMX_DIR": "/z",
+        "AGTERMISH": "1",
+        "MY_AGTERM_X": "1",
+        "NGTERMISH": "1",
+        "PATH": "/bin",
+    }
+    assert scrub_environ(environ) == ["AGTERM_SOCKET", "NGTERM_SOCKET", "ZMX_DIR"]
+    assert environ == {"AGTERMISH": "1", "MY_AGTERM_X": "1", "NGTERMISH": "1", "PATH": "/bin"}
 
 
 def test_env_scrubbed_at_plugin_load(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGTERM_SOCKET", "/live/agterm.sock")
     monkeypatch.setenv("AGTERM_SESSION_ID", "live-session")
+    monkeypatch.setenv("NGTERM_SESSION_ID", "live-session")
     monkeypatch.setenv("ZMX_DIR", "/live/zmx")
     monkeypatch.setenv("AGTERMISH", "kept")
     pytester.makepyfile(
         """
         import os, subprocess, sys
 
-        LIVE = {"AGTERM_SOCKET", "AGTERM_SESSION_ID", "ZMX_DIR"}
+        LIVE = {"AGTERM_SOCKET", "AGTERM_SESSION_ID", "NGTERM_SESSION_ID", "ZMX_DIR"}
 
         def test_env():
             assert LIVE.isdisjoint(os.environ)
@@ -164,7 +173,7 @@ def test_env_scrubbed_at_plugin_load(pytester: pytest.Pytester, monkeypatch: pyt
     )
     result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
-    result.stdout.fnmatch_lines(["scrubbed from env: AGTERM_SESSION_ID, AGTERM_SOCKET, ZMX_DIR"])
+    result.stdout.fnmatch_lines(["scrubbed from env: AGTERM_SESSION_ID, AGTERM_SOCKET, NGTERM_SESSION_ID, ZMX_DIR"])
 
 
 MUST_PASS_TESTS = """

@@ -53,9 +53,9 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
     if "remote" in result:
         return remote_tree(result["remote"])
     if vocabulary.result_key in result:
-        return zmx(result[vocabulary.result_key])
+        return zmx(result[vocabulary.result_key], vocabulary)
     if "restore" in result:
-        return restore_status(result["restore"])
+        return restore_status(result["restore"], vocabulary)
     if "app" in result:
         app = result["app"]
         return f"{app['version']} ({app['commit']})" if app.get("commit") else app["version"]
@@ -80,13 +80,13 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
     return "ok"
 
 
-def restore_status(status: Mapping[str, Any]) -> str:
+def restore_status(status: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM) -> str:
     lines = [
         f"configured: {status['configured']} (next launch)",
         f"this launch: requested {status['requestedAtLaunch']}, active {status['active']}",
     ]
     if status.get("restartRequired"):
-        lines.append("restart agterm to apply the configured mode")
+        lines.append(vocabulary.text("restart agterm to apply the configured mode"))
     if status.get("unavailableReason") is not None:
         lines.append(f"live unavailable: {status['unavailableReason']}")
     return "\n".join(lines)
@@ -111,8 +111,8 @@ def remote_tree(remote: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def zmx(inventory: Mapping[str, Any]) -> str:
-    lines = [restore_status(inventory["restore"])]
+def zmx(inventory: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM) -> str:
+    lines = [restore_status(inventory["restore"], vocabulary)]
     if not inventory["inventoryComplete"]:
         lines.append("inventory incomplete: some pane is unaccounted for, so nothing can be pruned")
     if not inventory["entries"]:

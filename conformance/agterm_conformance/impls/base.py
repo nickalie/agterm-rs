@@ -34,7 +34,7 @@ from agterm_conformance.client import (
     Response,
     check_under_root,
 )
-from agterm_conformance.plugin import SCRUB_PREFIXES
+from agterm_conformance.plugin import RUST_PREFIX, SCRUB_PREFIXES, UPSTREAM_PREFIX
 from agterm_conformance.vocabulary import (
     LIVE,
     UPSTREAM,
@@ -44,7 +44,8 @@ from agterm_conformance.vocabulary import (
 # Both references refuse to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104
 # `/tmp`, not `$TMPDIR`: a macOS runner's `/var/folders/...` temp dir eats most of the socket cap.
-# `CONFORMANCE_TMP` (not `AGTERM_`-prefixed, which the plugin scrubs) gives run-reference-linux.sh its own parent.
+# `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-reference-linux.sh its own
+# parent.
 TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
 # The startup variables a Live pane's shell integration hands on to the login shell (zsh's ZDOTDIR, bash's ENV and
@@ -58,7 +59,7 @@ SESSION_HOST = "agterm-session-host"
 # session server (the Rust build's) names its own leftovers instead (`find_leftovers`).
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
 # What a session server leaves in its namespace directory once it stopped: the lock file it held (kept on purpose,
-# crates/agterm-session/src/endpoint/unix.rs) and, should it have stopped unclean, its socket.
+# crates/ngterm-session/src/endpoint/unix.rs) and, should it have stopped unclean, its socket.
 SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
 # With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
 # (conformance/docs/spike-macos.md).
@@ -101,8 +102,8 @@ EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
 # The Rust build's GPUI frontend renders through wgpu on Vulkan, with GL beside it, and in this harness on
 # Mesa's lavapipe and llvmpipe only, never on the machine's GPU driver: the Vulkan loader gets lavapipe's ICD manifest
 # as its one driver (run-rust-linux.sh resolves it through scripts/fetch-lavapipe.sh into this variable, which is not
-# AGTERM_-prefixed so the plugin keeps it), GL is forced onto llvmpipe, and every inherited loader or driver selection
-# is dropped. No lavapipe fails the launch; there is no fallback.
+# AGTERM_- or NGTERM_-prefixed so the plugin keeps it), GL is forced onto llvmpipe, and every inherited loader or
+# driver selection is dropped. No lavapipe fails the launch; there is no fallback.
 LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
 LAVAPIPE_LIBRARY_PREFIX = "libvulkan_lvp"
 # Inherited selections that would steer the loader, GL or wgpu onto another device or add layers to the process.
@@ -143,10 +144,10 @@ POLL_INTERVAL = 0.05
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
     "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the "
-    "Rust build's one session server per instance, agterm-session)",
+    "Rust build's one session server per instance, ngterm-session)",
     "live-any-shell": "Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its "
     "shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is "
-    "one of them and agterm-session is staged",
+    "one of them and ngterm-session is staged",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "select-takes-frontmost": "`window.select`/`window.go` make their window `active` without waiting on window focus",
@@ -235,15 +236,17 @@ _app_ids_in_use: set[str] = set()
 _app_ids_lock = threading.Lock()
 
 
-def check_app_id(app_id: str | None) -> str:
-    """Missing, default or malformed ids reach the user's running instance or abort GApplication."""
+def check_app_id(app_id: str | None, prefix: str = UPSTREAM_PREFIX) -> str:
+    """Missing, default or malformed ids reach the user's running instance or abort GApplication. `prefix` names the
+    implementation's variables (`Adapter.env_prefix`), so the refusal names the one it reads."""
+    variable = f"{prefix}APP_ID"
     if not app_id:
-        raise LaunchRefused("AGTERM_APP_ID is required: without it the launch is forwarded to the running app")
+        raise LaunchRefused(f"{variable} is required: without it the launch is forwarded to the running app")
     if app_id in (DEFAULT_APP_ID, FORK_APP_ID):
-        raise LaunchRefused(f"AGTERM_APP_ID {app_id} is the installed app's id")
+        raise LaunchRefused(f"{variable} {app_id} is the installed app's id")
     elements = app_id.split(".")
     if len(app_id) > 255 or len(elements) < 2 or not all(_APP_ID_ELEMENT.fullmatch(e) for e in elements):
-        raise LaunchRefused(f"AGTERM_APP_ID {app_id!r} is not a valid GApplication id")
+        raise LaunchRefused(f"{variable} {app_id!r} is not a valid GApplication id")
     return app_id
 
 
@@ -251,23 +254,29 @@ def unique_app_id() -> str:
     return f"{DEFAULT_APP_ID}.conformance.i{uuid.uuid4().hex[:12]}"
 
 
-# Harness-owned variables; everything else under AGTERM_*/ZMX_* is inherited and refused.
-OWN_VARIABLES = frozenset(
-    {
-        "AGTERM_STATE_DIR",
-        "AGTERM_CONTROL_SOCKET",
-        "AGTERM_APP_ID",
-        "AGTERM_RESOURCE_ROOT",
-        "AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE",
-        # Each vocabulary's UI-test opt-in, set only for the references that read one (swift_macos.py).
-        UPSTREAM.ui_test_opt_in,
-        LIVE.ui_test_opt_in,
-        "AGTERM_UITEST_SHOW_WELCOME",
-        # The Rust build's log filter, set only by tools/ghostty_probe.py and tools/chrome_probe.py; an inherited one
-        # is still scrubbed.
-        "AGTERM_LOG",
-    }
+# The harness-owned variables, after the implementation's prefix (`Adapter.env_prefix`: upstream's and the fork's
+# `AGTERM_`, the Rust build's `NGTERM_`); everything else under a scrubbed prefix is inherited and refused.
+OWN_VARIABLE_NAMES = (
+    "STATE_DIR",
+    "CONTROL_SOCKET",
+    "APP_ID",
+    "RESOURCE_ROOT",
+    "UITEST_FORCE_SIDEBAR_VISIBLE",
+    "UITEST_SHOW_WELCOME",
+    # The Rust build's log filter, set only by tools/ghostty_probe.py and tools/chrome_probe.py; an inherited one is
+    # still scrubbed.
+    "LOG",
 )
+
+
+def own_variables(prefix: str) -> frozenset[str]:
+    """The harness-owned variables of an implementation whose variables start with `prefix`, with each vocabulary's
+    UI-test opt-in (set only for the references that read one, swift_macos.py)."""
+    return frozenset({*(prefix + name for name in OWN_VARIABLE_NAMES), UPSTREAM.ui_test_opt_in, LIVE.ui_test_opt_in})
+
+
+# Every implementation's harness-owned variables.
+OWN_VARIABLES = own_variables(UPSTREAM_PREFIX) | own_variables(RUST_PREFIX)
 
 
 def display_mode(environ: Mapping[str, str] | None = None) -> str:
@@ -315,11 +324,15 @@ def check_launch_env(
     needs_app_id: bool,
     needs_runtime_dir: bool = False,
     headless: bool = False,
+    prefix: str = UPSTREAM_PREFIX,
 ) -> None:
+    """`prefix` is the implementation's (`Adapter.env_prefix`): its harness-owned variables are the only ones under a
+    scrubbed prefix the launch may carry, another implementation's included."""
+    own = own_variables(prefix)
     for name in sorted(env):
-        if name.startswith(SCRUB_PREFIXES) and name not in OWN_VARIABLES:
-            raise LaunchRefused(f"{name} would leak into the instance: only harness-set AGTERM_* are allowed")
-    rooted = ["AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME", *XDG_HOMES]
+        if name.startswith(SCRUB_PREFIXES) and name not in own:
+            raise LaunchRefused(f"{name} would leak into the instance: only harness-set {prefix}* are allowed")
+    rooted = [f"{prefix}STATE_DIR", f"{prefix}CONTROL_SOCKET", "HOME", *XDG_HOMES]
     rooted += ["XDG_RUNTIME_DIR"] if needs_runtime_dir else []
     if headless:
         if "DISPLAY" in env:
@@ -341,11 +354,11 @@ def check_launch_env(
             check_under_root(env[name], root)
         except ClientError as error:
             raise LaunchRefused(f"{name}: {error}") from None
-    socket_bytes = len(os.fsencode(env["AGTERM_CONTROL_SOCKET"]))
+    socket_bytes = len(os.fsencode(env[f"{prefix}CONTROL_SOCKET"]))
     if socket_bytes >= SOCKET_PATH_CAP:
         raise LaunchRefused(f"socket path is {socket_bytes} bytes, cap {SOCKET_PATH_CAP - 1}: the app would not bind")
     if needs_app_id:
-        check_app_id(env.get("AGTERM_APP_ID"))
+        check_app_id(env.get(f"{prefix}APP_ID"), prefix)
 
 
 @dataclass
@@ -363,6 +376,8 @@ class Instance:
     version: dict[str, Any] = field(default_factory=dict)
     # What the implementation calls the live-session group (agterm_conformance.vocabulary).
     vocabulary: Vocabulary = UPSTREAM
+    # The prefix of the implementation's own variables (`Adapter.env_prefix`).
+    env_prefix: str = UPSTREAM_PREFIX
     # The instance's own headless weston and session bus; a relaunch keeps both.
     compositor: subprocess.Popen[bytes] | None = None
     session_bus: subprocess.Popen[bytes] | None = None
@@ -382,6 +397,10 @@ class Instance:
     def log_tail(self, lines: int = 20) -> str:
         return _tail(self.log, lines)
 
+    def variable(self, name: str) -> str:
+        """The implementation's name for its variable `name` (`STATE_DIR`: `AGTERM_STATE_DIR`, `NGTERM_STATE_DIR`)."""
+        return self.env_prefix + name
+
 
 class Adapter:
     """One implementation under test. Subclasses supply the executable and platform env."""
@@ -393,6 +412,9 @@ class Adapter:
     app_dir_name: ClassVar[str] = "agterm"
     # The implementation's CLI: the executable beside its binary and the name its usage lines and help print.
     ctl_name: ClassVar[str] = "agtermctl"
+    # The prefix of the implementation's own variables, the ones the harness sets (`STATE_DIR`, `CONTROL_SOCKET`,
+    # `APP_ID`, ...) and the ones its panes carry: upstream's and the fork's `AGTERM_`, the Rust build's `NGTERM_`.
+    env_prefix: ClassVar[str] = UPSTREAM_PREFIX
     needs_app_id: ClassVar[bool] = False
     # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
     needs_runtime_dir: ClassVar[bool] = False
@@ -406,6 +428,11 @@ class Adapter:
         # Absolute now: the child starts in the isolated HOME, where a relative path would not resolve.
         self.bin = _absolute(bin)
         self._ctl = _absolute(ctl)
+
+    @classmethod
+    def variable(cls, name: str) -> str:
+        """The implementation's name for its variable `name` (`STATE_DIR`: `AGTERM_STATE_DIR`, `NGTERM_STATE_DIR`)."""
+        return cls.env_prefix + name
 
     # -- what the implementation claims
 
@@ -483,11 +510,11 @@ class Adapter:
             PATH=MINIMAL_PATH,
             SHELL="/bin/sh",
             BROWSER="true",
-            AGTERM_STATE_DIR=os.fspath(state),
-            AGTERM_CONTROL_SOCKET=os.fspath(state / f"{self.app_dir_name}.sock"),
         )
+        env[self.variable("STATE_DIR")] = os.fspath(state)
+        env[self.variable("CONTROL_SOCKET")] = os.fspath(state / f"{self.app_dir_name}.sock")
         if self.needs_app_id:
-            env["AGTERM_APP_ID"] = app_id or unique_app_id()
+            env[self.variable("APP_ID")] = app_id or unique_app_id()
         if self.needs_runtime_dir:
             isolated_runtime_env(env, os.fspath(root / RUNTIME_DIR_NAME), os.environ, self.headless)
             # An inherited portal opt-in would route launches through the user's session, past the mimeapps no-op.
@@ -518,11 +545,10 @@ class Adapter:
             env = self.build_env(root, app_id)
             if first_run:
                 self.first_run_env(env)
-            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless)
-            app_id = env.get("AGTERM_APP_ID")
-            _prepare_tree(
-                root, Path(env["HOME"]), Path(env["AGTERM_STATE_DIR"]), self.ghostty_config(), settings, first_run
-            )
+            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix)
+            app_id = env.get(self.variable("APP_ID"))
+            state_dir = env[self.variable("STATE_DIR")]
+            _prepare_tree(root, Path(env["HOME"]), Path(state_dir), self.ghostty_config(), settings, first_run)
             command = self.instance_executable(root)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
@@ -547,14 +573,15 @@ class Adapter:
         instance = Instance(
             process=process,
             root=root,
-            state_dir=Path(env["AGTERM_STATE_DIR"]),
+            state_dir=Path(state_dir),
             home=Path(env["HOME"]),
-            socket=Path(env["AGTERM_CONTROL_SOCKET"]),
+            socket=Path(env[self.variable("CONTROL_SOCKET")]),
             env=env,
             log=log,
             app_id=app_id,
-            live_dir=self.vocabulary.socket_directory(env["AGTERM_STATE_DIR"], self.app_dir_name),
+            live_dir=self.vocabulary.socket_directory(state_dir, self.app_dir_name),
             vocabulary=self.vocabulary,
+            env_prefix=self.env_prefix,
             compositor=compositor,
             session_bus=session_bus,
         )
@@ -578,7 +605,12 @@ class Adapter:
             if problem is not None:
                 raise StopError(problem)
             check_launch_env(
-                instance.env, instance.root, self.needs_app_id, self.needs_runtime_dir, instance.compositor is not None
+                instance.env,
+                instance.root,
+                self.needs_app_id,
+                self.needs_runtime_dir,
+                instance.compositor is not None,
+                instance.env_prefix,
             )
             if instance.app_id is not None:
                 _claim_app_id(instance.app_id)
@@ -603,6 +635,7 @@ class Adapter:
             app_id=instance.app_id,
             live_dir=instance.live_dir,
             vocabulary=instance.vocabulary,
+            env_prefix=instance.env_prefix,
             compositor=instance.compositor,
             session_bus=instance.session_bus,
         )
@@ -975,7 +1008,7 @@ def write_noop_launchers(config_home: Path, data_home: Path) -> None:
 def _claim_app_id(app_id: str) -> None:
     with _app_ids_lock:
         if app_id in _app_ids_in_use:
-            raise LaunchRefused(f"AGTERM_APP_ID {app_id} is already used by a running instance")
+            raise LaunchRefused(f"the app id {app_id} is already used by a running instance")
         _app_ids_in_use.add(app_id)
 
 
@@ -1192,7 +1225,7 @@ def _core_hint(pid: int) -> str:
 def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tuple[int, str, str]]:
     """(pid, name, command) of this instance's live-session processes: under a vocabulary with a session server, that
     server (`<server> server <live_dir>`) and every process carrying the socket directory in the directory variable
-    (`AGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else zmx / agterm-session-host processes
+    (`NGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else zmx / agterm-session-host processes
     carrying it (`ZMX_DIR`)."""
     marker = f"{vocabulary.directory_variable}={live_dir}"
     if vocabulary.server is not None:
@@ -1210,7 +1243,7 @@ def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tup
 
 def serves_namespace(words: Iterable[str], live_dir: str, server: str) -> bool:
     """`<server> server <live_dir>`, the argv a session server of that namespace runs with (its environment carries
-    no `AGTERM_*`: the spawn drops them)."""
+    no `NGTERM_*`: the spawn drops them)."""
     words = list(words)
     return len(words) >= 3 and os.path.basename(words[0]) == server and words[1:3] == ["server", live_dir]
 

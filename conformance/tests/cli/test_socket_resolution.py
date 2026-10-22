@@ -1,5 +1,5 @@
-"""Where `agtermctl` looks for the socket: `--socket`, then `<AGTERM_STATE_DIR>/<name>.sock`, then the platform
-default. Every run here resolves to a path under the instance's temp root.
+"""Where `agtermctl` looks for the socket: `--socket`, then `<AGTERM_STATE_DIR>/<name>.sock` (the Rust build's
+`NGTERM_STATE_DIR`), then the platform default. Every run here resolves to a path under the instance's temp root.
 
 The default branch runs only with HOME and the XDG/CFFIXED home variables pointed into the temp root, and only once
 the default those variables resolve to is checked to lie under the root; otherwise it skips. What answers there is
@@ -21,7 +21,7 @@ SENTINEL = {"app": {"version": "0.0.0-resolution-probe"}}
 
 def _env(cli, **changes):
     """The instance's env without the variables that would decide the socket; `changes` add some back."""
-    env = {name: value for name, value in cli.instance.env.items() if not name.startswith("AGTERM_")}
+    env = {name: value for name, value in cli.instance.env.items() if not name.startswith(cli.instance.env_prefix)}
     for name, value in changes.items():
         if value is None:
             env.pop(name, None)
@@ -45,7 +45,7 @@ def empty_state(cli):
 @pytest.mark.covers("cli:version", "behavior:cli.socket-resolution")
 def test_state_dir_names_the_socket(cli, ctl):
     version = assert_version_result(ctl.request("version"))
-    env = _env(cli, AGTERM_STATE_DIR=os.fspath(cli.instance.state_dir))
+    env = _env(cli, **{cli.instance.variable("STATE_DIR"): os.fspath(cli.instance.state_dir)})
     result = cli.local("version", "--json", env=env)
     assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": version})
 
@@ -53,7 +53,7 @@ def test_state_dir_names_the_socket(cli, ctl):
 @pytest.mark.covers("cli:version", "behavior:cli.socket-resolution")
 def test_socket_option_wins_over_the_state_dir(cli, ctl, empty_state, adapter):
     version = assert_version_result(ctl.request("version"))
-    env = _env(cli, AGTERM_STATE_DIR=os.fspath(empty_state))
+    env = _env(cli, **{cli.instance.variable("STATE_DIR"): os.fspath(empty_state)})
     result = cli.local("version", "--json", "--socket", os.fspath(cli.instance.socket), env=env)
     assert (result.returncode, json.loads(result.stdout)) == (0, {"ok": True, "result": version})
     _unreachable(cli.local("version", env=env), empty_state / f"{adapter.app_dir_name}.sock")
@@ -61,17 +61,24 @@ def test_socket_option_wins_over_the_state_dir(cli, ctl, empty_state, adapter):
 
 @pytest.mark.covers("behavior:cli.socket-resolution")
 def test_agterm_socket_variable_is_not_read(cli, empty_state, adapter):
-    # A pane's AGTERM_SOCKET (and the app's own AGTERM_CONTROL_SOCKET) names the live instance's socket; the CLI
-    # resolves from AGTERM_STATE_DIR alone, so neither can route a command anywhere.
+    # A pane's AGTERM_SOCKET (and the app's own AGTERM_CONTROL_SOCKET; the Rust build's NGTERM_*) names the live
+    # instance's socket; the CLI resolves from the state directory variable alone, so neither can route a command
+    # anywhere.
     socket_path = os.fspath(cli.instance.socket)
+    variable = cli.instance.variable
     env = _env(
-        cli, AGTERM_STATE_DIR=os.fspath(empty_state), AGTERM_SOCKET=socket_path, AGTERM_CONTROL_SOCKET=socket_path
+        cli,
+        **{
+            variable("STATE_DIR"): os.fspath(empty_state),
+            variable("SOCKET"): socket_path,
+            variable("CONTROL_SOCKET"): socket_path,
+        },
     )
     _unreachable(cli.local("version", env=env), empty_state / f"{adapter.app_dir_name}.sock")
 
 
 def _default_socket(env, name):
-    """The platform default the CLI resolves without AGTERM_STATE_DIR, or None when unknown here:
+    """The platform default the CLI resolves without the state directory variable, or None when unknown here:
     `<base>/<name>/<name>.sock`, the name being the implementation's (`agterm` upstream and in the fork, `ngterm` in
     the Rust build).
 

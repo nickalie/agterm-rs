@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Vendor portable-pty (agterm-pty's PTY and child: openpty on Unix, ConPTY on Windows) into vendor/portable-pty with
+# Vendor portable-pty (ngterm-pty's PTY and child: openpty on Unix, ConPTY on Windows) into vendor/portable-pty with
 # build/patches/portable-pty applied, for the workspace's [patch.crates-io]. Every patch is a Windows one; each file's
 # leading description says why it exists, where it came from and when it can go:
 #   0001 the ConPTY functions of the already loaded kernel32 only, never a bare conpty.dll through the DLL search path
-#        (herdr's 0001 reduced: herdr also loads a hash-checked app-local conpty.dll, which agterm does not ship)
+#        (herdr's 0001 reduced: herdr also loads a hash-checked app-local conpty.dll, which ngterm does not ship)
 #   0002 malformed Windows environments rejected (herdr's 0003)
 #   0003 directories skipped when resolving a program on PATH (herdr's 0004)
 #   0004 a child spawned straight into a job object (PROC_THREAD_ATTRIBUTE_JOB_LIST), so no descendant escapes it
@@ -49,11 +49,11 @@ case "${1:-}" in
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/agterm-portable-pty-XXXXXX")"
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-portable-pty-XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
 archive="$scratch/portable-pty-$PORTABLE_PTY_VERSION.crate"
-curl -sSfL -A agterm-rs-dev -o "$archive" \
+curl -sSfL -A ngterm-dev -o "$archive" \
   "https://static.crates.io/crates/portable-pty/portable-pty-$PORTABLE_PTY_VERSION.crate"
 sum="$(sha256sum "$archive" | cut -d' ' -f1)"
 [[ "$sum" == "$PORTABLE_PTY_SHA256" ]] ||

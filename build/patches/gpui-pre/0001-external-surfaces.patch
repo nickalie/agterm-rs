@@ -12,7 +12,7 @@ diff -ruN a/src/external_surface.rs b/src/external_surface.rs
 --- a/src/external_surface.rs
 +++ b/src/external_surface.rs
 @@ -0,0 +1,290 @@
-+//! External surfaces on Linux (an agterm-rs patch): frames produced outside GPUI that the renderer draws through
++//! External surfaces on Linux (an ngterm patch): frames produced outside GPUI that the renderer draws through
 +//! [`crate::Window::paint_external_surface`], the Linux counterpart of macOS's `paint_surface`.
 +//!
 +//! A frame is either a dmabuf ([`DmaBufFrame`]), which the renderer imports into its own device (no CPU copy: the GPU
@@ -330,7 +330,7 @@ diff -ruN a/src/scene.rs b/src/scene.rs
      pub content_mask: ContentMask<ScaledPixels>,
      #[cfg(any(target_os = "macos", target_os = "ios"))]
      pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
-+    /// The frame a Linux renderer draws (agterm-rs patch: external surfaces).
++    /// The frame a Linux renderer draws (ngterm patch: external surfaces).
 +    #[cfg(target_os = "linux")]
 +    pub source: crate::ExternalSurface,
  }
@@ -344,7 +344,7 @@ diff -ruN a/src/window.rs b/src/window.rs
      }
  
 +    /// Paint a frame produced outside GPUI (a dmabuf or CPU pixels, [`crate::ExternalSurface`]) into the scene for
-+    /// the next frame at the current z-index, clipped to the current content mask (agterm-rs patch).
++    /// the next frame at the current z-index, clipped to the current content mask (ngterm patch).
 +    ///
 +    /// This method should only be called as part of the paint phase of element drawing.
 +    #[cfg(target_os = "linux")]

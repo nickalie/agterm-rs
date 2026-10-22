@@ -1,4 +1,4 @@
-agterm-rs: keep the cursor hyperlink across page replacement (herdr's libghostty-vt patch 0008, rebased onto
+ngterm: keep the cursor hyperlink across page replacement (herdr's libghostty-vt patch 0008, rebased onto
 LIBGHOSTTY_VT_REV)
 
 From herdr (https://github.com/herdrdev/herdr, HERDR_REV 143bf5f, Apache-2.0):

@@ -1,4 +1,4 @@
-//! An HTML representation of a clipboard write (an agterm-rs patch): GPUI's `ClipboardItem` carries text and images
+//! An HTML representation of a clipboard write (an ngterm patch): GPUI's `ClipboardItem` carries text and images
 //! only, while a terminal copies a selection as `text/html` too (Ghostty's `copy_to_clipboard:html` and `:mixed`).
 //!
 //! [`with_clipboard_html`] installs the HTML for the clipboard writes its closure makes on this thread (the platform's

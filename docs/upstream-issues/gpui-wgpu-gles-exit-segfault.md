@@ -44,8 +44,8 @@ so no TLS destructor runs (`std::process::exit` does not help: glibc's `exit` ru
 ## Notes for whoever posts it
 
 - Source of the stack: `docs/spikes/20261014-wpe-dmabuf.md`, quirk 12 (Task 2 spike, real niri session, NVIDIA).
-- Not reproduced on Mesa in Task 12: a windowed agterm-gpui on a private headless weston quit with status 0 with the
+- Not reproduced on Mesa in Task 12: a windowed ngterm-gpui on a private headless weston quit with status 0 with the
   plain `std::process::exit`, both when wgpu picked Mesa's Intel GL adapter and when it picked lavapipe (Vulkan).
   The crash may need NVIDIA's EGL; reproduce on such a machine before posting.
-- agterm-gpui keeps the `_exit` workaround (`crates/agterm-gpui/src/main.rs`, `exit_now`) until a fixed GPUI is
+- ngterm-gpui keeps the `_exit` workaround (`crates/ngterm-gpui/src/main.rs`, `exit_now`) until a fixed GPUI is
   vendored; then drop it and check the exit status on NVIDIA.

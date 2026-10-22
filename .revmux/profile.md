@@ -1,4 +1,4 @@
-# agterm-rs (ngterm) — review profile
+# ngterm (ngterm) — review profile
 
 Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformance/README.md`,
 `conformance/docs/rust-build.md`. Where this file and those disagree, they win.
@@ -7,14 +7,14 @@ Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformanc
 
 - ngterm: a Rust port of upstream macOS agterm (`umputun/agterm` v0.36.0), a terminal for running coding agents
   in sessions/workspaces/windows, driven by the `ngtermctl` CLI over a control socket.
-- One frontend, GPUI (`agterm-gpui`), rendering libghostty-vt itself. Toolkit-neutral logic lives in
-  `agterm-core` (model, dispatcher, palette, keymap, persistence) and `agterm-term` (pane core over a PTY).
+- One frontend, GPUI (`ngterm-gpui`), rendering libghostty-vt itself. Toolkit-neutral logic lives in
+  `ngterm-core` (model, dispatcher, palette, keymap, persistence) and `ngterm-term` (pane core over a PTY).
 - macOS, Linux and Windows are equal targets; today the frontend builds and is tested on Linux only.
 
 ## What a real failure looks like
 
 - **critical**: loss or corruption of on-disk state (`windows.json`, settings, keymap, hooks), killing or
-  orphaning a user's live sessions (zmx), a dev/test run touching the user's running agterm (its socket, bus,
+  orphaning a user's live sessions (zmx), a dev/test run touching the user's running ngterm (its socket, bus,
   display, state dir or session namespace), a crash on a path users reach.
 - **major**: a deviation from upstream's wire protocol, command semantics, error strings, `ngtermctl` output or
   on-disk formats; a ratchet id in `conformance/rust-passing.txt` going red; a platform-specific mechanism with no
@@ -24,9 +24,9 @@ Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformanc
 
 ## Blast radius
 
-- Agents and users run this inside their live terminal; a wrong default socket, env leak (`AGTERM_*`, `ZMX_*`)
+- Agents and users run this inside their live terminal; a wrong default socket, env leak (`NGTERM_*`, `ZMX_*`)
   or a reap by process name hits real work.
-- `agterm-core` changes reach every frontend and the control protocol; the frontend's UI changes reach only GPUI.
+- `ngterm-core` changes reach every frontend and the control protocol; the frontend's UI changes reach only GPUI.
 
 ## Reporting bar
 

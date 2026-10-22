@@ -994,7 +994,7 @@ impl Clipboard {
         self.inner.write(data, selection, wait)
     }
 
-    /// `message`, with an HTML representation offered as `text/html` beside it or instead of it (agterm-rs:
+    /// `message`, with an HTML representation offered as `text/html` beside it or instead of it (ngterm:
     /// `with_clipboard_html`).
     pub(crate) fn set_text_with_html(
         &self,

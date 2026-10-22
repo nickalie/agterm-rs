@@ -3,6 +3,7 @@ from collections.abc import Iterator
 
 import pytest
 from agterm_conformance import cli_format
+from agterm_conformance.vocabulary import LIVE
 
 SID = "0771818B-B246-46C8-9F9E-7279CA4DE6A4"
 WID = "22FCC0D1-40EC-49AC-8CB8-D91BDD12B80B"
@@ -183,6 +184,8 @@ def test_restore_status_lines():
         "restart agterm to apply the configured mode",
         "live unavailable: shell is fish",
     ]
+    # the Rust build names itself
+    assert cli_format.restore_status(changed, LIVE).splitlines()[2] == "restart ngterm to apply the configured mode"
 
 
 def test_zmx_rows_carry_owner_and_state():

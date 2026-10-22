@@ -4,13 +4,13 @@
 #   sync-resources.sh [--upstream DIR] [--check] [--patches DIR] OLD_TAG NEW_TAG
 #
 # Each copy gets upstream's own diff, applied with `git apply --directory`, so the Linux glue a copy carries (the
-# Codex adapter's python3/jq reader in agterm-codex-status.sh, the Linux chords in ghostty-defaults.conf) survives
+# Codex adapter's python3/jq reader in ngterm-codex-status.sh, the Linux chords in ghostty-defaults.conf) survives
 # wherever upstream did not touch the same lines. Nothing is applied partially: a diff that does not apply cleanly
 # is left out whole, saved under --patches DIR (default: a temp dir, printed), and reported as `conflict` for a plan
 # task to merge by hand. --check applies nothing.
 #
 # A copy listed in PATCHED is instead upstream's NEW tree with the repository's own patches reapplied in order (the
-# bundled skill's `live` names, build/patches/skill-agterm), so it carries nothing else: a patch that no longer
+# bundled skill's `live` names, build/patches/skill-ngterm), so it carries nothing else: a patch that no longer
 # applies is a `conflict` naming it, to be refreshed by hand. `--check TAG TAG` (the pinned tag twice) verifies that
 # such a copy still equals the pinned upstream tree plus its patches: `unchanged` when it does, `would-apply` when not.
 #
@@ -33,22 +33,21 @@ while [[ $# -gt 0 ]]; do
 done
 [[ $# -eq 2 ]] || { echo "usage: sync-resources.sh [--upstream DIR] [--check] [--patches DIR] OLD_TAG NEW_TAG" >&2; exit 1; }
 old="$1" new="$2"
-patches="${patches:-$(mktemp -d "${TMPDIR:-/tmp}/agterm-sync-patches.XXXXXX")}"
+patches="${patches:-$(mktemp -d "${TMPDIR:-/tmp}/ngterm-sync-patches.XXXXXX")}"
 mkdir -p "$patches"
 
 # upstream directory | pathspec inside it | the repository's copy
 MAPPINGS=(
   "agterm/Resources/agent-status|.|resources/agent-status"
-  "plugins/agterm/skills/agterm|.|resources/skills/agterm"
-  "agterm/Resources/hud|.|crates/agterm-gpui/resources/hud"
-  "agterm/Resources/custom-themes|.|build/themes"
-  "agterm/Resources|ghostty-defaults.conf|crates/agterm-core/src/ghostty_config"
+  "plugins/agterm/skills/agterm|.|resources/skills/ngterm"
+  "agterm/Resources/hud|.|crates/ngterm-gpui/resources/hud"
+  "agterm/Resources|ghostty-defaults.conf|crates/ngterm-core/src/ghostty_config"
   ".|LICENSE|resources/LICENSE.upstream"
 )
 
 # the repository's copy | its patch directory: the copy is upstream's NEW tree plus these patches, in name order
 PATCHED=(
-  "resources/skills/agterm|build/patches/skill-agterm"
+  "resources/skills/ngterm|build/patches/skill-ngterm"
 )
 
 # The patch directory of `copy` when PATCHED lists it; nothing otherwise.
@@ -63,7 +62,7 @@ patch_dir() {
 # Rebuilds `copy` as upstream NEW's `source` tree plus the patches in `dir`, or reports why it cannot.
 sync_patched() {
   local source="$1" copy="$2" dir="$3" work tree patch
-  work="$(mktemp -d "${TMPDIR:-/tmp}/agterm-sync-patched.XXXXXX")"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-sync-patched.XXXXXX")"
   git -C "$upstream" archive "$new" -- "$source" | tar -x -C "$work"
   tree="$work/$source"
   for patch in "$root/$dir"/*.patch; do

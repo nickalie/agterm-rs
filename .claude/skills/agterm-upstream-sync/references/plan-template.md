@@ -13,7 +13,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ## Overview
 
-- Bring agterm-rs from upstream `umputun/agterm` <old tag> to <new tag> (<N> commits, releases <list>). The
+- Bring ngterm from upstream `umputun/agterm` <old tag> to <new tag> (<N> commits, releases <list>). The
   mechanical part is done on branch `upstream-sync-<new tag>` (commit `<sha>`): catalog and ui-ids regenerated,
   upstream's pins <moved: what | unchanged>, vendored copies <synced | conflicts: which>, parity-target mentions bumped.
 - This plan ports the behavior: <one line per task group>.
@@ -33,7 +33,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - Already in the Rust build (no task): <feature — evidence: file / ratchet id>, or "nothing".
 - Not run on this host: <the ratchet's `not run on this host` ids and why (no zsh login shell)>, or "none".
 - Upstream's pins (none is a pin here): ZMX_REV and zmx-patches <unchanged | a -> b and the changed patches, a task
-  ports them into agterm-session>; GHOSTTY_REV <unchanged | a -> b, a task reviews it against LIBGHOSTTY_VT_REV>.
+  ports them into ngterm-session>; GHOSTTY_REV <unchanged | a -> b, a task reviews it against LIBGHOSTTY_VT_REV>.
 
 ## Safety rules
 
@@ -43,8 +43,8 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 - Each task follows CLAUDE.md > "Porting a command group": read upstream's implementation, its Swift tests (exact
   strings, edge cases, field order), `site/commands.html` and the matching `.claude/rules/*.md`; implement in
-  `agterm-core` against the `agterm-host` fakes with unit tests asserting upstream's full error string; wire the
-  app side (`agterm-gpui`); add the `agtermctl` part from `agtermctlKit`; claim a capability only once its commands implement it.
+  `ngterm-core` against the `ngterm-host` fakes with unit tests asserting upstream's full error string; wire the
+  app side (`ngterm-gpui`); add the `agtermctl` part from `agtermctlKit`; claim a capability only once its commands implement it.
 - New conformance tests follow conformance/README.md > Reference discipline: a test is accepted only when green on
   its references. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
   marks "green on reference-macos" as a manual check for the user, and runs `run-reference-linux.sh` locally when
@@ -59,7 +59,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ## Testing Strategy
 
-- unit: `cargo test --workspace` on the `agterm-host` fakes; the app's tests under `xvfb-run`.
+- unit: `cargo test --workspace` on the `ngterm-host` fakes; the app's tests under `xvfb-run`.
 - conformance: `run-rust-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux.
 
 ## Progress Tracking
@@ -101,8 +101,8 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ### Task <N>: Claim <new tag> parity and update the docs
 
-- [ ] bump `PARITY_LEVEL` in `crates/agterm-proto/src/version.rs` and its mirrors (`tag-mentions.sh <old>` class
-      `claim`: the version.rs test, `agterm-core/src/dispatch.rs` and `agterm-server/tests/server.rs` expectations,
+- [ ] bump `PARITY_LEVEL` in `crates/ngterm-proto/src/version.rs` and its mirrors (`tag-mentions.sh <old>` class
+      `claim`: the version.rs test, `ngterm-core/src/dispatch.rs` and `ngterm-server/tests/server.rs` expectations,
       `conformance/agterm_conformance/impls/rust.py`, `conformance/docs/rust-build.md`), only once every task above is
       done
 - [ ] `conformance/docs/fork-bugs.md` citations re-checked against <new tag> (bump the tag only where the cited
@@ -114,8 +114,8 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ## Writing the tasks
 
-- Order: protocol first when the release adds wire names, because `agterm-proto/tests/catalog.rs` and
-  `agterm-ctl`'s `the_command_tree_is_the_catalogs_cli` compare the code with the regenerated catalog: until the
+- Order: protocol first when the release adds wire names, because `ngterm-proto/tests/catalog.rs` and
+  `ngterm-ctl`'s `the_command_tree_is_the_catalogs_cli` compare the code with the regenerated catalog: until the
   new names exist those cargo tests are red for every later task. The first task adds every new `Command`
   variant, field, event and CLI subcommand skeleton (answering the same refusal the dispatcher gives any command it
   does not yet implement), so each later task starts from a green `cargo test`; when those tests are already green

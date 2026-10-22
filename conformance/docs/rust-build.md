@@ -28,9 +28,9 @@ Its result is the references' `app` block plus a `conformance` block only the Ru
 
 The harness execs the binary with:
 
-- `HOME`, `XDG_{CONFIG,DATA,STATE,CACHE}_HOME`, `AGTERM_STATE_DIR` and `AGTERM_CONTROL_SOCKET` under a fresh
-  `/tmp/agt-*` root; the build binds the control socket at `AGTERM_CONTROL_SOCKET` (under 104 bytes);
-- on Linux, a unique `AGTERM_APP_ID` it must use as its application id, a private `XDG_RUNTIME_DIR`, and
+- `HOME`, `XDG_{CONFIG,DATA,STATE,CACHE}_HOME`, `NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET` under a fresh
+  `/tmp/agt-*` root; the build binds the control socket at `NGTERM_CONTROL_SOCKET` (under 104 bytes);
+- on Linux, a unique `NGTERM_APP_ID` it must use as its application id, a private `XDG_RUNTIME_DIR`, and
   `WAYLAND_DISPLAY`/`DBUS_SESSION_BUS_ADDRESS` naming the instance's own headless weston and bus;
 - `SHELL=/bin/sh`, `PATH=/usr/bin:/bin`, and `<state>/config/ghostty.conf` holding `command = /bin/sh`,
   `copy-on-select = false` and `clipboard-write = deny`;
@@ -51,8 +51,8 @@ upstream's and the fork's zmx sockets in `/tmp/agterm-zmx-<hash>` (`upstream_soc
 `agterm_conformance/vocabulary.py`), the Rust build's session server in `/tmp/ngterm-live-<hash>`
 (`live_socket_directory`); the adapter's vocabulary names it, prefixed with the adapter's `app_dir_name` (the
 instance's `live_dir`). Every zmx or session-host process of a reference carries `ZMX_DIR=<that dir>`; the Rust
-build's one server per instance runs as `agterm-session server <that dir>`, and its sessions' programs and their
-attach clients carry `AGTERM_LIVE_DIR=<that dir>`. One left running after the stop fails it (the server gets its idle
+build's one server per instance runs as `ngterm-session server <that dir>`, and its sessions' programs and their
+attach clients carry `NGTERM_LIVE_DIR=<that dir>`. One left running after the stop fails it (the server gets its idle
 grace to stop by itself once its sessions are reaped).
 The CLI (`agtermctl` for the Swift builds, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
 else from beside `--bin`.
@@ -67,8 +67,8 @@ Rust-only extensions below.
 | capability | swift-macos | swift-linux | meaning |
 |---|---|---|---|
 | `posix-shell` | yes | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
-| `live-sessions` | host | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, agterm-session) |
-| `live-any-shell` |  |  | Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and agterm-session is staged |
+| `live-sessions` | host | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, ngterm-session) |
+| `live-any-shell` |  |  | Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
 | `window-geometry` | yes |  | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes |  | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `select-takes-frontmost` | yes |  | `window.select`/`window.go` make their window `active` without waiting on window focus |
@@ -104,8 +104,8 @@ claims:
   effect;
 - `quick-validates-input`, `modal-blocks-covers`, `pick-names-pending-ask`, `overlay-size-validated`,
   `sidebar-min-width`, `theme-slots-by-sync`, `config-reload-counts`: upstream's validation and read-back;
-- `keymap-menu`: the app menu (`agterm-gpui`'s `app_menu.rs`) carries the actions' live accelerators;
-- `live-sessions`: by host, where the login shell is zsh and `agterm-session` is staged;
+- `keymap-menu`: the app menu (`ngterm-gpui`'s `app_menu.rs`) carries the actions' live accelerators;
+- `live-sessions`: by host, where the login shell is zsh and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash, fish and PowerShell login shells too, the one Rust-only
   extension (below): claimed together with `live-sessions` for a zsh login shell, alone for the others.
 
@@ -140,14 +140,14 @@ The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over thr
 `--must-pass live-any-shell`: bash, fish and zsh. The zsh leg, the one host where the build claims `live-sessions`,
 also runs with `--must-pass live-sessions`, as reference-macos.
 No leg runs a PowerShell login shell, so the suite does not hold PowerShell's part of the claim: below it,
-`.github/workflows/cross-platform.yml` runs `agterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the
+`.github/workflows/cross-platform.yml` runs `ngterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the
 integration's marks and working directory, the foreground read, a replay) on Linux, macOS and Windows, and
-`agterm-core`'s replay round trip through a real `pwsh` where one is installed.
+`ngterm-core`'s replay round trip through a real `pwsh` where one is installed.
 
 ## The `live` group
 
 The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no
-`zmx` in its code, its control protocol or its CLI, and the session server (`agterm-session`) in place of zmx itself. An upstream
+`zmx` in its code, its control protocol or its CLI, and the session server (`ngterm-session`) in place of zmx itself. An upstream
 Mac and this build can therefore no longer view each other's sessions (`live.tree HOST` runs `ngtermctl live tree` on
 the far side, an attached row's stream `ngtermctl live present`), and neither can this build and a Rust build from
 before the rename.
@@ -158,7 +158,7 @@ before the rename.
 | `agtermctl zmx <subcommand>` | `ngtermctl live <subcommand>` |
 | `result.zmx` (the inventory) | `result.live` |
 | `tree.session.backedByZmx`, `surfaces[].backedByZmx` | `backedByLive` |
-| `AGTERM_UITEST_ENABLE_ZMX` | `AGTERM_UITEST_ENABLE_LIVE` |
+| `AGTERM_UITEST_ENABLE_ZMX` | `NGTERM_UITEST_ENABLE_LIVE` |
 
 Every other field, every semantic and every error string that names no zmx is upstream's. The strings that named zmx:
 
@@ -182,16 +182,16 @@ Every other field, every semantic and every error string that names no zmx is up
 
 The help texts of `ngtermctl live` and `restore mode` speak of live-session daemons and the session host the same way.
 
-The session server (`agterm-session`) takes zmx's place with names of its own, which no control-protocol field or
-error string carries: `bin/agterm-session` and `share/ngterm/session-BUILD` in the stage (upstream's bundled zmx and
-its build stamp), `AGTERM_SESSION_PATH` (upstream's `AGTERM_ZMX_PATH`), the `session-build.json` record in the state
+The session server (`ngterm-session`) takes zmx's place with names of its own, which no control-protocol field or
+error string carries: `bin/ngterm-session` and `share/ngterm/session-BUILD` in the stage (upstream's bundled zmx and
+its build stamp), `NGTERM_SESSION_PATH` (upstream's `AGTERM_ZMX_PATH`), the `session-build.json` record in the state
 dir (`zmx-build.json`), the namespace `/tmp/ngterm-live-<hash>` (`/tmp/agterm-zmx-<hash>`), its attach contract's
-`agterm-session attach` line and `AGTERM_LIVE_*` variables (zmx's `ZMX_*`), and the role title `ngterm-live-role;`
+`ngterm-session attach` line and `NGTERM_LIVE_*` variables (zmx's `ZMX_*`), and the role title `ngterm-live-role;`
 (the patched zmx's `zmx-role;`). ngterm's own panes attach to their sessions in process through the server's client
 library, so no attach client runs under the app (upstream's live panes run `zmx attach` in their PTYs); the remote
-path and a terminal outside the app run the attach line. `clipboard set` prints through `agterm-session print`, so its texts are the table's
+path and a terminal outside the app run the attach line. `clipboard set` prints through `ngterm-session print`, so its texts are the table's
 above with the print's own complaint after `the live-session print exited N: ` (the session gone, or no server:
-`agterm-session print: no live session named NAME`) where upstream shows zmx's.
+`ngterm-session print: no live session named NAME`) where upstream shows zmx's.
 
 The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift references
 answer to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
@@ -202,9 +202,9 @@ and the shared tests read every such value through `ctl.vocabulary`, `cli.vocabu
 refuses an upstream text that names zmx and that it does not list, and `selftests/test_vocabulary.py` checks each
 listed text against the Rust sources.
 
-The bundled agent skill (`resources/skills/agterm`, installed as `ngterm`) is upstream's with
-`build/patches/skill-agterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
-contract's `AGTERM_LIVE_*`):
+The bundled agent skill (`resources/skills/ngterm`) is upstream's with
+`build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
+contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 
@@ -230,34 +230,33 @@ The script exits with the ratchet's status, or 1 when an instance root was left 
 ## GPUI build
 
 The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which removed the GTK frontend: the binary
-is `agterm-gpui`'s `agterm`, and `rust-passing.txt` holds it (the GPUI build's own ratchet, kept beside the GTK one
+is `ngterm-gpui`'s `ngterm`, and `rust-passing.txt` holds it (the GPUI build's own ratchet, kept beside the GTK one
 until the switch, was folded into it).
 
 Build. The native inputs come first, each into its vendored prefix (README > Native dependencies):
-`scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `agterm-ghostty-vt-sys`'s build script builds
+`scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `ngterm-ghostty-vt-sys`'s build script builds
 with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`) and `scripts/fetch-fonts.sh` (the fonts the
-terminal embeds); the live sessions' server, `agterm-session`, is a workspace binary. `run-rust-linux.sh` then builds
-the release workspace without what links WPE WebKit and `agterm-gpui` with its default `html` feature, so the staged
+terminal embeds); the live sessions' server, `ngterm-session`, is a workspace binary. `run-rust-linux.sh` then builds
+the release workspace without what links WPE WebKit and `ngterm-gpui` with its default `html` feature, so the staged
 app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR`
 runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
-`bin/agterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's and the fork's CLI is `agtermctl`,
-and the CLI tests expect the adapter's name in usage lines) and `bin/agterm-session` with
+`bin/ngterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's and the fork's CLI is `agtermctl`,
+and the CLI tests expect the adapter's name in usage lines) and `bin/ngterm-session` with
 `share/ngterm/session-BUILD` (the staged server's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and
-`share/ghostty` (themes, shell integration) from the libghostty-vt prefix, agterm's own themes beside Ghostty's, and
-the agent integrations' payloads under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`,
+`share/ghostty` (themes, shell integration) from the libghostty-vt prefix, and the agent integrations' payloads under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`,
 that would be the fork's state dir). There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK,
 libghostty or layer-shell is linked at all.
 
 Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lavapipe, from
-`scripts/fetch-lavapipe.sh`: `AGTERM_LAVAPIPE_ICD` when set; the distribution's package where one is installed
+`scripts/fetch-lavapipe.sh`: `NGTERM_LAVAPIPE_ICD` when set; the distribution's package where one is installed
 (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch `vulkan-swrast`; the CI's source); else, on a rootless host with an
 Arch-compatible userland, the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`), checked against
-its sha256 and unpacked into `${AGTERM_VENDOR}/lavapipe-<key>/`, refused where its libraries (libLLVM, glibc) do not
+its sha256 and unpacked into `${NGTERM_VENDOR}/lavapipe-<key>/`, refused where its libraries (libLLVM, glibc) do not
 resolve. `run-rust-linux.sh` exits 2 without one and hands its manifest to the harness, which makes it the only Vulkan
 driver of every launch (Launch contract above). No lavapipe is an error, never a fallback to a hardware driver.
-`agterm-gpui`'s process tests take the same manifest from the same script (`tests/support/lavapipe.rs`).
+`ngterm-gpui`'s process tests take the same manifest from the same script (`tests/support/lavapipe.rs`).
 
 Seat. GPUI needs a `wl_seat`, which a headless weston offers only with `--fake-seat` (weston 15.0 and later):
 `run-rust-linux.sh` takes the system's weston when it has the flag, else the one `scripts/build-weston.sh` built into

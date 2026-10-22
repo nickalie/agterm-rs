@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Regenerate the checked-in WPE WebKit -sys crates with gtk-rs `gir` (sys mode), one crate per GObject namespace:
-#   crates/agterm-wpe-javascriptcore-sys  WPEJavaScriptCore-2.0 (JSCValue and friends of the script bridge)
-#   crates/agterm-wpe-platform-sys        WPEPlatform-2.0 (display, view, buffers, events, keymap)
-#   crates/agterm-wpe-sys                 WPEWebKit-2.0 (web view, network session, user content, policies)
+#   crates/ngterm-wpe-javascriptcore-sys  WPEJavaScriptCore-2.0 (JSCValue and friends of the script bridge)
+#   crates/ngterm-wpe-platform-sys        WPEPlatform-2.0 (display, view, buffers, events, keymap)
+#   crates/ngterm-wpe-sys                 WPEWebKit-2.0 (web view, network session, user content, policies)
 # Each crate's Gir.toml is the input checked in beside its output. Run after a WPE_ or GIR_ pin bump of
 # build/pins.env, then review the diff: a pin bump is a change of its own.
 #
 # The inputs are all pinned and verified, so the output is reproducible: gir (built once into the vendored prefix
-# ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/gir-<key>/ from its source archive and build/patches/gir/), the GLib,
+# ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/gir-<key>/ from its source archive and build/patches/gir/), the GLib,
 # GObject and Gio .gir files of gtk-rs/gir-files, the Soup-3.0.gir of soup3-rs and the WPE .gir files of the pinned
 # WPE WebKit package, whatever WPE the system has. Those are read from the vendored prefix when scripts/fetch-wpe.sh
 # filled it, else extracted from the verified package alone: the .gir XML is the same on every host, so generating
@@ -23,7 +23,7 @@ set -euo pipefail
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
 
-CRATES=(agterm-wpe-javascriptcore-sys agterm-wpe-platform-sys agterm-wpe-sys)
+CRATES=(ngterm-wpe-javascriptcore-sys ngterm-wpe-platform-sys ngterm-wpe-sys)
 # the namespaces of the pinned package the crates are generated from; gir reads the rest through their includes
 WPE_GIRS=(WPEJavaScriptCore-2.0 WPEPlatform-2.0 WPEWebKit-2.0)
 

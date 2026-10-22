@@ -43,8 +43,8 @@ if [[ "$display" == headless ]]; then
     done
 fi
 
-# A shell inside a live agterm session exports its socket and session; the plugin scrubs these too.
-while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(AGTERM_|ZMX_)' || true)
+# A shell inside a live ngterm or agterm session exports its socket and session; the plugin scrubs these too.
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' || true)
 
 layers=()
 for layer in protocol cli behaviors; do

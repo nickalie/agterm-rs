@@ -1,0 +1,43 @@
+[package]
+name = "ngterm-core"
+description = "ngterm's platform-neutral core: state, command dispatch, paths"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+ngterm-proto.workspace = true
+ngterm-host.workspace = true
+bitflags.workspace = true
+pulldown-cmark.workspace = true
+serde.workspace = true
+strum.workspace = true
+# the remote tree's ssh output capture: unlinked files nothing blocks reading
+tempfile.workspace = true
+# `raw_value`: a lossy optional takes its value as raw JSON text, so even a number past `f64`'s range drops alone.
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+tracing.workspace = true
+unicase.workspace = true
+unicode-normalization.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# the HUD body's owner-only owner and DACL (owner_only.rs), Windows' counterpart of its 0700/0600 modes
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+ngterm-host = { workspace = true, features = ["fakes"] }
+# the config diagnostics' goldens lay their files out in a fresh directory (ghostty_config/counts_tests.rs)
+tempfile.workspace = true
+
+[lints]
+workspace = true

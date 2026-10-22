@@ -4,11 +4,12 @@ from types import SimpleNamespace
 import pytest
 from agterm_conformance.live_client import leading_client
 from agterm_conformance.wait import wait_until
-from agterm_conformance.zmx_client import GONE_GUARD, PtyProcess
+from agterm_conformance.live_client import GONE_GUARD
+from agterm_conformance.zmx_client import PtyProcess
 
 
 def _script(tmp_path: Path, body: str) -> Path:
-    path = tmp_path / "agterm-session"
+    path = tmp_path / "ngterm-session"
     path.write_text("#!/bin/sh\n" + body)
     path.chmod(0o755)
     return path
@@ -30,14 +31,14 @@ def test_leading_client_attaches_under_the_attach_contract_claiming_the_lead(
     fake = _script(
         tmp_path,
         'printf "%s|" "$@"; echo\n'
-        'echo "env $AGTERM_LIVE_DIR $AGTERM_LIVE_MANAGED_CLAIM $AGTERM_LIVE_NO_DETACH_KEY '
-        '[${AGTERM_LIVE_SESSION-unset}] [${AGTERM_LIVE_SESSION_PREFIX-unset}]"\n'
-        'echo "nonce ${#AGTERM_LIVE_MANAGED} home $HOME zmx ${ZMX_DIR-unset}"\n'
+        'echo "env $NGTERM_LIVE_DIR $NGTERM_LIVE_MANAGED_CLAIM $NGTERM_LIVE_NO_DETACH_KEY '
+        '[${NGTERM_LIVE_SESSION-unset}] [${NGTERM_LIVE_SESSION_PREFIX-unset}]"\n'
+        'echo "nonce ${#NGTERM_LIVE_MANAGED} home $HOME zmx ${ZMX_DIR-unset}"\n'
         "exec cat\n",
     )
     endpoint = {"executable": str(fake), "socketDirectory": instance.live_dir}
-    with leading_client(instance, endpoint, "agterm-abc") as client:
-        _printed(client, f"attach|agterm-abc|/bin/sh|-c|{GONE_GUARD}|")
+    with leading_client(instance, endpoint, "ngterm-abc") as client:
+        _printed(client, f"attach|ngterm-abc|/bin/sh|-c|{GONE_GUARD}|")
         _printed(client, f"env {instance.live_dir} 1 1 [] []")
         _printed(client, f"nonce 32 home {instance.home} zmx unset")
 
@@ -45,10 +46,10 @@ def test_leading_client_attaches_under_the_attach_contract_claiming_the_lead(
 def test_leading_client_refuses_another_instances_namespace(instance: SimpleNamespace) -> None:
     with pytest.raises(ValueError, match="not this instance's"):
         leading_client(
-            instance, {"executable": "/bin/true", "socketDirectory": "/tmp/ngterm-live-other"}, "agterm-abc"
+            instance, {"executable": "/bin/true", "socketDirectory": "/tmp/ngterm-live-other"}, "ngterm-abc"
         )
 
 
 def test_leading_client_refuses_a_relative_executable(instance: SimpleNamespace) -> None:
     with pytest.raises(ValueError, match="not absolute"):
-        leading_client(instance, {"executable": "agterm-session", "socketDirectory": instance.live_dir}, "agterm-abc")
+        leading_client(instance, {"executable": "ngterm-session", "socketDirectory": instance.live_dir}, "ngterm-abc")

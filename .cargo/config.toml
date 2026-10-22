@@ -3,7 +3,7 @@
 # the bound API. An exported PKG_CONFIG wins over this one.
 #
 # macOS builds link for macOS 13.0, the floor libghostty-vt builds for (Ghostty's own, `MACOS_FLOOR` in
-# crates/agterm-ghostty-vt-sys/zig_build.rs): rustc's default (11.0 on aarch64) would link an archive built for a
+# crates/ngterm-ghostty-vt-sys/zig_build.rs): rustc's default (11.0 on aarch64) would link an archive built for a
 # newer macOS than the binary claims. Other targets ignore it. An exported MACOSX_DEPLOYMENT_TARGET wins, and below
 # the floor the libghostty-vt build refuses it.
 [env]

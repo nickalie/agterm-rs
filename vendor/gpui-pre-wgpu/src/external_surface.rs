@@ -1,4 +1,4 @@
-//! External surfaces on Linux (an agterm-rs patch): draws `gpui::ExternalSurface` frames — dmabufs a producer
+//! External surfaces on Linux (an ngterm patch): draws `gpui::ExternalSurface` frames — dmabufs a producer
 //! rendered on this GPU, and CPU pixels uploaded by damaged rectangle into a texture kept per surface — and opens the
 //! Vulkan device so that it can import dmabufs.
 //!

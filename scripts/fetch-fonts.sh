@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unpack the fonts Ghostty embeds (FONTS_* of build/pins.env: JetBrains Mono 2.304 and Symbols Nerd Font 3.4.0, the
 # package deps of the Ghostty at LIBGHOSTTY_VT_REV) into the vendored prefix
-# ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/fonts-<key>/, for agterm-gpui to embed: its build script asks
+# ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/fonts-<key>/, for ngterm-gpui to embed: its build script asks
 # `--print-prefix` and fails with a pointer here when the prefix is incomplete. The key hashes the FONTS_ pins only.
 # Nothing is built: each archive is verified against its pinned sha256 and the faces are copied out.
 #
@@ -10,7 +10,7 @@
 # Open Font License and Nerd Fonts' MIT license) and share/ngterm/fonts-PINS (the FONTS_ pin lines it came from).
 #
 # Usage: scripts/fetch-fonts.sh                 unpack the prefix unless it is complete, then print its path
-#        scripts/fetch-fonts.sh --print-prefix  print the prefix path only (agterm-gpui's build script)
+#        scripts/fetch-fonts.sh --print-prefix  print the prefix path only (ngterm-gpui's build script)
 #        scripts/fetch-fonts.sh --verify        exit 0 when the prefix is complete, 1 otherwise
 set -euo pipefail
 
@@ -52,7 +52,7 @@ trap 'rm -rf "$WORK" "$STAGE"' EXIT
 fetch() {
   local name="$1" url="$2" sha="$3"
   echo "fetching $url..." >&2
-  curl -fsSL -A agterm-rs-dev -o "$WORK/$name.tar.gz" "$url"
+  curl -fsSL -A ngterm-dev -o "$WORK/$name.tar.gz" "$url"
   echo "$sha  $WORK/$name.tar.gz" | sha256sum --check --quiet >&2 || die "$url: sha256 mismatch"
   mkdir "$WORK/$name"
   # the archives carry macOS extended attributes GNU tar warns about

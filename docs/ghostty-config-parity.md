@@ -7,20 +7,20 @@ This is a living list: when a key gets implemented, take its row out (and the ba
 
 ## What "ignored" means
 
-The GPUI build parses Ghostty's config itself (`crates/agterm-core/src/ghostty_config/`). Every key Ghostty knows at
+The GPUI build parses Ghostty's config itself (`crates/ngterm-core/src/ghostty_config/`). Every key Ghostty knows at
 `LIBGHOSTTY_VT_REV` is accepted, and its value is checked as libghostty checks it, so `config.reload` counts the same
 diagnostics. The typed model (`GhosttyConfig`, `model.rs`) carries only a subset of the keys. The keys below reach the
 "ghostty config key not supported; ignored" arms of `GhosttyConfig::apply` (logged at debug level) and change nothing.
-A user who sets one gets Ghostty's default behavior, or agterm's own behavior where agterm owns the feature.
+A user who sets one gets Ghostty's default behavior, or ngterm's own behavior where ngterm owns the feature.
 
 148 keys are in that state. The list comes from the key table itself: each key in `known_keys()` was applied to a
 default `GhosttyConfig`, and the keys the model refused were collected. Three more keys miss the model but are read
 elsewhere, so they are not listed: `keybind` (`binds.rs`), `config-file` (the loader's includes) and `command`
-(`agterm-gpui` `session_host.rs`, a pane's default program).
+(`ngterm-gpui` `session_host.rs`, a pane's default program).
 
 ## How the GTK build was judged
 
-The removed GTK build (last at `f3c0f93`, `crates/agterm-gtk`, `crates/agterm-ghostty`) embedded the full libghostty
+The removed GTK build (last at `f3c0f93`, `crates/agterm-gtk`, `crates/ngterm-ghostty`) embedded the full libghostty
 at Ghostty `683d8db` through its embedded apprt (`apprt/embedded.zig`). It did not use Ghostty's own GTK app runtime.
 A key's consumer in Ghostty's source at `683d8db` therefore decides whether the GTK build honored it:
 
@@ -30,9 +30,9 @@ A key's consumer in Ghostty's source at `683d8db` therefore decides whether the 
 - **GTK apprt** (`apprt/gtk/...`) or Ghostty's macOS app: Ghostty's own app runtimes, which the GTK build did not run.
   The key had no effect there, unless `agterm-gtk` read it itself. It read only `font-size`, `background`,
   `foreground`, `palette`, `cursor-opacity`, `cursor-style-blink`, `mouse-hide-while-typing`,
-  `shell-integration-features` and `title` (`agterm-ghostty` `config::keys`), and none of them is listed here.
+  `shell-integration-features` and `title` (`ngterm-ghostty` `config::keys`), and none of them is listed here.
 - **an apprt action from core** (`command_finished`, `mouse_over_link`, `initial_size`, `toggle_fullscreen`,
-  `needs_confirm_quit`): it counted only where the GTK build handled that action. `agterm-ghostty`'s `Action` enum
+  `needs_confirm_quit`): it counted only where the GTK build handled that action. `ngterm-ghostty`'s `Action` enum
   handled `Render`, `SetTitle`, `Pwd`, `CellSize`, `DesktopNotification`, `ShowChildExited`, the search actions,
   `ConfigChange`, `MouseShape`, `MouseVisibility`, `OpenUrl`, `ColorChange` and `RingBell`. Every other action
   arrived as `Other` and was dropped.
@@ -45,7 +45,7 @@ this build, not to Linux.
 |---|---:|---|
 | honored by the GTK build | 49 | deferred work (the backlog item) |
 | macOS only | 31 | no Linux meaning; revisit with a macOS port |
-| Ghostty app-runtime keys the GTK build did not honor | 64 | not a parity gap; agterm owns the UI they shape |
+| Ghostty app-runtime keys the GTK build did not honor | 64 | not a parity gap; ngterm owns the UI they shape |
 | not in the GTK build's Ghostty (new at the pin) | 3 | not a parity gap |
 | CLI only | 1 | no effect in a config file, in Ghostty too |
 
@@ -149,13 +149,13 @@ upstream macOS agterm gets the libghostty-gated ones (`macos-option-as-alt`, `fo
 | `font-thicken-strength` | how much thicker | as `font-thicken` |
 | `window-colorspace` | sRGB or Display P3 | `renderer/generic.zig` (`use_display_p3`, Metal); "only supported on macOS" |
 | `window-vsync` | draw on the display link | `renderer/generic.zig` `syncDisplayLink` (CoreVideo); "only supported currently on macOS" |
-| `background-blur` | blur behind a translucent background | `renderer/generic.zig` (`comptime builtin.os.tag == .macos`), `apprt/embedded.zig` (`ghostty_set_window_background_blur`). On Linux both builds blur from agterm's own Settings (`background_blur`) |
+| `background-blur` | blur behind a translucent background | `renderer/generic.zig` (`comptime builtin.os.tag == .macos`), `apprt/embedded.zig` (`ghostty_set_window_background_blur`). On Linux both builds blur from ngterm's own Settings (`background_blur`) |
 | `auto-update` | check for updates | macOS app (Sparkle) |
 | `auto-update-channel` | stable or tip updates | macOS app |
 | `undo-timeout` | how long a closed window can be undone | macOS app ("Linux doesn't support undo operations") |
 | `window-position-x` | the first window's x | macOS app ("only supported on macOS") |
 | `window-position-y` | the first window's y | macOS app |
-| `window-save-state` | restore windows at launch | macOS app; agterm restores its own state (`windows.json`) |
+| `window-save-state` | restore windows at launch | macOS app; ngterm restores its own state (`windows.json`) |
 | `window-step-resize` | resize in cell steps | macOS app |
 | `quick-terminal-animation-duration` | the quick terminal's slide animation | macOS app ("only implemented on macOS") |
 | `quick-terminal-space-behavior` | the quick terminal across Spaces | macOS app |
@@ -163,7 +163,7 @@ upstream macOS agterm gets the libghostty-gated ones (`macos-option-as-alt`, `fo
 ## 3. Ghostty app-runtime keys the GTK build did not honor (64)
 
 Ghostty's own GTK app runtime (or both of its runtimes) reads these keys. The GTK build ran the embedded runtime, and
-`agterm-gtk` did not read them, so setting them changed nothing there either. Several of them shape UI that agterm
+`agterm-gtk` did not read them, so setting them changed nothing there either. Several of them shape UI that ngterm
 draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal, palette, notifications.
 
 | key | Ghostty meaning | evidence (Ghostty `683d8db`) |
@@ -173,14 +173,14 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `gtk-opengl-debug` | GTK's OpenGL debug log | `apprt/gtk/class/application.zig` |
 | `gtk-quick-terminal-layer` | layer-shell layer of the quick terminal | Ghostty GTK runtime (Wayland) |
 | `gtk-quick-terminal-namespace` | layer-shell namespace of the quick terminal | Ghostty GTK runtime (Wayland) |
-| `gtk-single-instance` | Ghostty's single-instance mode | `apprt/gtk/class/application.zig`; agterm has its own single instance |
+| `gtk-single-instance` | Ghostty's single-instance mode | `apprt/gtk/class/application.zig`; ngterm has its own single instance |
 | `gtk-tabs-location` | the tab bar's side | `apprt/gtk/class/window.zig` |
 | `gtk-titlebar` | draw the GTK titlebar | `apprt/gtk/class/window.zig` |
 | `gtk-titlebar-hide-when-maximized` | hide it when maximized | `apprt/gtk/class/window.zig` |
 | `gtk-titlebar-style` | native or tabs titlebar | `apprt/gtk/class/window.zig` |
 | `gtk-toolbar-style` | flat, raised or raised-border toolbar | `apprt/gtk/class/window.zig` |
 | `gtk-wide-tabs` | wide tabs | `apprt/gtk/class/window.zig` |
-| `class` | the GTK application id | `apprt/gtk/class/application.zig`; agterm keeps the app id `com.nickalie.ngterm` |
+| `class` | the GTK application id | `apprt/gtk/class/application.zig`; ngterm keeps the app id `com.nickalie.ngterm` |
 | `x11-instance-name` | the X11 WM_CLASS instance | Ghostty GTK runtime |
 | `language` | the UI language | `apprt/gtk/class/application.zig` |
 | `async-backend` | the event loop backend (epoll, io_uring) | `apprt/gtk/class/application.zig` |
@@ -192,7 +192,7 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `bell-features` | what the bell does (system sound, audio file, attention, title, border) | `apprt/gtk/class/{application,surface,window}.zig`; the GTK build handled `RingBell` its own way |
 | `bell-audio-path` | the bell's audio file | `apprt/gtk/class/application.zig` |
 | `bell-audio-volume` | the bell's volume | `apprt/gtk/class/application.zig` |
-| `progress-style` | show OSC 9;4 progress as a bar | `apprt/gtk/class/surface.zig`; agterm draws its own progress |
+| `progress-style` | show OSC 9;4 progress as a bar | `apprt/gtk/class/surface.zig`; ngterm draws its own progress |
 | `resize-overlay` | show the grid size while resizing | `apprt/gtk/class/surface.zig` |
 | `resize-overlay-position` | where it shows | `apprt/gtk/class/surface.zig` |
 | `resize-overlay-duration` | how long it shows | `apprt/gtk/class/surface.zig` |
@@ -205,8 +205,8 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `split-inherit-working-directory` | a new split starts in its parent's directory | `apprt/surface.zig` `newConfig`; the GTK build passed every pane's directory itself |
 | `tab-inherit-working-directory` | a new tab starts in its parent's directory | as above |
 | `window-inherit-working-directory` | a new window starts in its parent's directory | as above |
-| `window-inherit-font-size` | a new surface takes its parent's font size | `apprt/embedded.zig` with a parent surface; the GTK build created none (session zoom is agterm's) |
-| `window-decoration` | client, server or no decorations | `apprt/gtk/class/window.zig`; agterm draws its own chrome |
+| `window-inherit-font-size` | a new surface takes its parent's font size | `apprt/embedded.zig` with a parent surface; the GTK build created none (session zoom is ngterm's) |
+| `window-decoration` | client, server or no decorations | `apprt/gtk/class/window.zig`; ngterm draws its own chrome |
 | `window-theme` | the window's light/dark theme | `apprt/gtk/class/{application,window}.zig` |
 | `window-title-font-family` | the titlebar font | `apprt/gtk/class/application.zig` |
 | `window-titlebar-background` | the titlebar background (`window-theme = ghostty`) | `apprt/gtk/class/application.zig` |
@@ -218,16 +218,16 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `window-height` | the first window's height in cells | as `window-width` |
 | `maximize` | start maximized | `apprt/gtk/class/window.zig` |
 | `fullscreen` | start fullscreen | `Surface.zig` → `toggle_fullscreen` action (dropped), `apprt/gtk/class/window.zig` |
-| `initial-window` | open a window at launch | `apprt/gtk/class/application.zig`; agterm restores its windows |
-| `quit-after-last-window-closed` | quit when the last window closes | `apprt/gtk/class/application.zig`; agterm owns its lifecycle |
+| `initial-window` | open a window at launch | `apprt/gtk/class/application.zig`; ngterm restores its windows |
+| `quit-after-last-window-closed` | quit when the last window closes | `apprt/gtk/class/application.zig`; ngterm owns its lifecycle |
 | `quit-after-last-window-closed-delay` | wait before quitting | as above |
-| `quick-terminal-position` | the quick terminal's edge | Ghostty app runtimes; agterm's quick terminal has its own placement |
+| `quick-terminal-position` | the quick terminal's edge | Ghostty app runtimes; ngterm's quick terminal has its own placement |
 | `quick-terminal-size` | its size | Ghostty app runtimes |
 | `quick-terminal-screen` | its monitor | Ghostty app runtimes |
 | `quick-terminal-autohide` | hide it on focus loss | `apprt/gtk/class/window.zig` |
 | `quick-terminal-keyboard-interactivity` | its layer-shell keyboard mode | Ghostty GTK runtime (Wayland) |
-| `command-palette-entry` | entries of Ghostty's command palette | Ghostty app runtimes; agterm has its own palette |
-| `confirm-close-surface` | confirm closing a surface whose process runs | `Surface.zig` → `needs_confirm_quit` and the close callback's flag; the GTK build used neither (agterm's own quit rule, `QuitReason::needs_confirmation`) |
+| `command-palette-entry` | entries of Ghostty's command palette | Ghostty app runtimes; ngterm has its own palette |
+| `confirm-close-surface` | confirm closing a surface whose process runs | `Surface.zig` → `needs_confirm_quit` and the close callback's flag; the GTK build used neither (ngterm's own quit rule, `QuitReason::needs_confirmation`) |
 | `notify-on-command-finish` | notify when a long command finishes | `Surface.zig` → `command_finished` action, which the GTK build dropped |
 | `notify-on-command-finish-action` | bell and/or notification | as above |
 | `notify-on-command-finish-after` | the minimum command duration | as above |

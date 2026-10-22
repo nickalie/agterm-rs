@@ -86,7 +86,7 @@ def test_the_dominant_color_ignores_a_little_text() -> None:
 
 
 def test_the_wash_matches_the_core() -> None:
-    # agterm_core::chrome's tests: (21, 121, 241) under a 0.30 wash
+    # ngterm_core::chrome's tests: (21, 121, 241) under a 0.30 wash
     assert chrome_probe.washed((21, 121, 241), False, 0.30) == (15, 85, 169)
     assert chrome_probe.washed((21, 121, 241), True, 0.30) == (91, 161, 245)
 
@@ -120,7 +120,7 @@ def test_a_region_of_mixed_colors_is_refused() -> None:
 
 
 def test_the_probe_defaults_to_the_runners_stage() -> None:
-    assert chrome_probe.DEFAULT_BIN.parts[-3:] == ("conformance-stage", "bin", "agterm")
+    assert chrome_probe.DEFAULT_BIN.parts[-3:] == ("conformance-stage", "bin", "ngterm")
 
 
 def test_lavapipe_comes_from_the_variable_then_the_script(tmp_path: Path) -> None:
@@ -139,13 +139,13 @@ def test_lavapipe_comes_from_the_variable_then_the_script(tmp_path: Path) -> Non
 def test_a_probe_without_lavapipe_stops_before_launching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(chrome_probe.LAVAPIPE_ICD_VARIABLE, raising=False)
     monkeypatch.setattr(chrome_probe.find_lavapipe, "__defaults__", (tmp_path / "absent",))
-    report = chrome_probe.probe(tmp_path / "bin" / "agterm", 1.0, None)
+    report = chrome_probe.probe(tmp_path / "bin" / "ngterm", 1.0, None)
     assert report["ok"] is False and "frontend" not in report
     assert report["error"].startswith("lavapipe: ")
 
 
 def test_a_probe_without_a_build_reports_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(chrome_probe.LAVAPIPE_ICD_VARIABLE, str(tmp_path / "lvp_icd.json"))
-    report = chrome_probe.probe(tmp_path / "bin" / "agterm", 1.0, None)
-    assert report == {"bin": str(tmp_path / "bin" / "agterm"), "checks": {}, "ok": False,
-                      "error": f"no agterm at {tmp_path / 'bin' / 'agterm'}"}
+    report = chrome_probe.probe(tmp_path / "bin" / "ngterm", 1.0, None)
+    assert report == {"bin": str(tmp_path / "bin" / "ngterm"), "checks": {}, "ok": False,
+                      "error": f"no ngterm at {tmp_path / 'bin' / 'ngterm'}"}

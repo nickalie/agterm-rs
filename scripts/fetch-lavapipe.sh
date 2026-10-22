@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Find Mesa's lavapipe (software Vulkan) for the GPUI build's headless runs and print its ICD manifest, the file
-# VK_DRIVER_FILES names. The GPUI build renders through Vulkan; in the conformance harness and agterm-gpui's process
+# VK_DRIVER_FILES names. The GPUI build renders through Vulkan; in the conformance harness and ngterm-gpui's process
 # tests it must render on lavapipe and on nothing else, never on the machine's GPU driver, so there is no fallback: no
 # lavapipe is an error naming this script.
 #
 # Where it comes from, first match wins:
-#   1. AGTERM_LAVAPIPE_ICD, an ICD manifest given by hand (it must exist);
+#   1. NGTERM_LAVAPIPE_ICD, an ICD manifest given by hand (it must exist);
 #   2. the distribution's package, the documented source wherever one is installable (Ubuntu/Debian/Fedora
 #      `mesa-vulkan-drivers`, Arch `vulkan-swrast`; CI installs Ubuntu's): `lvp_icd.<arch>.json` or `lvp_icd.json` in
-#      the Vulkan loader's ICD directories (AGTERM_VULKAN_ICD_DIRS, colon-separated, replaces the list, for tests);
+#      the Vulkan loader's ICD directories (NGTERM_VULKAN_ICD_DIRS, colon-separated, replaces the list, for tests);
 #   3. a rootless machine with an Arch-compatible userland: the pinned Arch `vulkan-swrast` package
 #      (LAVAPIPE_ARCH_PACKAGE_URL of build/pins.env), verified against its pinned sha256 and unpacked into the vendored
-#      prefix ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/lavapipe-<key>/ (no root), with an ICD manifest naming the
+#      prefix ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/lavapipe-<key>/ (no root), with an ICD manifest naming the
 #      driver by absolute path. The key hashes the LAVAPIPE_ pins and the host arch only. The driver links the host's
 #      libLLVM and glibc: the unpack refuses a host where any of its libraries does not resolve.
 #
@@ -27,7 +27,7 @@ source "$(dirname "$0")/lib/native.sh"
 
 PREFIX="$(lavapipe_prefix)"
 HINT="install the distribution's lavapipe (Ubuntu/Debian/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast), run"
-HINT+=" scripts/fetch-lavapipe.sh, or set AGTERM_LAVAPIPE_ICD; the GPUI build never renders on a hardware driver here"
+HINT+=" scripts/fetch-lavapipe.sh, or set NGTERM_LAVAPIPE_ICD; the GPUI build never renders on a hardware driver here"
 
 # Whether the driver an ICD manifest names is there, by the Vulkan loader's rules: an absolute library_path as is, one
 # with a slash relative to the manifest's directory, a bare name on the library search path. A manifest without its
@@ -56,7 +56,7 @@ icd_library_exists() {
 system_icd() {
   local dirs dir candidate
   local default=/etc/vulkan/icd.d:/usr/local/share/vulkan/icd.d:/usr/share/vulkan/icd.d
-  IFS=: read -r -a dirs <<<"${AGTERM_VULKAN_ICD_DIRS-$default}"
+  IFS=: read -r -a dirs <<<"${NGTERM_VULKAN_ICD_DIRS-$default}"
   for dir in "${dirs[@]}"; do
     [[ -n "$dir" ]] || continue
     for candidate in "$dir/lvp_icd.$(uname -m).json" "$dir/lvp_icd.json"; do
@@ -82,11 +82,11 @@ vendored_icd() {
 
 # The ICD from the override or the system, else the vendored one; status 1 when there is none yet.
 find_icd() {
-  if [[ -n "${AGTERM_LAVAPIPE_ICD:-}" ]]; then
-    [[ -s "$AGTERM_LAVAPIPE_ICD" ]] || die "AGTERM_LAVAPIPE_ICD names no ICD manifest: $AGTERM_LAVAPIPE_ICD"
-    icd_library_exists "$AGTERM_LAVAPIPE_ICD" \
-      || die "AGTERM_LAVAPIPE_ICD=$AGTERM_LAVAPIPE_ICD names a driver that is not there"
-    echo "$AGTERM_LAVAPIPE_ICD"
+  if [[ -n "${NGTERM_LAVAPIPE_ICD:-}" ]]; then
+    [[ -s "$NGTERM_LAVAPIPE_ICD" ]] || die "NGTERM_LAVAPIPE_ICD names no ICD manifest: $NGTERM_LAVAPIPE_ICD"
+    icd_library_exists "$NGTERM_LAVAPIPE_ICD" \
+      || die "NGTERM_LAVAPIPE_ICD=$NGTERM_LAVAPIPE_ICD names a driver that is not there"
+    echo "$NGTERM_LAVAPIPE_ICD"
     return 0
   fi
   system_icd || vendored_icd

@@ -28,7 +28,7 @@ status: active
 
 patch: `build/patches/ghostty-vt/0001-kitty-placement-namespace-and-parent.patch`
 
-agterm issue: none; Task 34 of the GPUI frontend plan (Unicode placeholders and relative placements drawn as
+ngterm issue: none; Task 34 of the GPUI frontend plan (Unicode placeholders and relative placements drawn as
 Ghostty's renderer draws them)
 
 upstream discussion: not opened
@@ -46,7 +46,7 @@ files:
 reason: The C API reports a placement's id without its namespace and a relative placement (`P=`/`Q=`) without its
 parent, so an embedder cannot resolve a placeholder's target or a chain rooted at a virtual placement the way
 Ghostty's renderer does (`placeholderTarget`, `pending_relative`). The patch reads out what storage holds, additively,
-with no logic of its own; `agterm-term` and `agterm-gpui` resolve chains, targets and positions in Rust.
+with no logic of its own; `ngterm-term` and `ngterm-gpui` resolve chains, targets and positions in Rust.
 
 remove when: the pinned C API reports the placement key's namespace and a relative placement's parent key and offsets,
 and the wrapper reads them from there.
@@ -54,7 +54,7 @@ and the wrapper reads them from there.
 verification:
 
 ```sh
-cargo test -p agterm-ghostty-vt kitty
+cargo test -p ngterm-ghostty-vt kitty
 (cd "$tree" && "$zig" build test-lib-vt --cache-dir "$(mktemp -d)" -Dtest-filter='placement_get')
 scripts/gen-ghostty-vt-bindings.sh --check
 ```
@@ -90,9 +90,9 @@ without it (Task 10's Windows build passes one when the host has no detectable S
 module exports hidden weak `calloc`/`free` stubs; on a hosted target built with SIMD off (libc then unlinked), the
 stubs in the static archive override the embedding executable's libc allocator, and every zeroed allocation fails.
 The stubs are now exported for freestanding targets only. Native builds without a `--libc` file and the SIMD builds
-agterm makes are unchanged.
+ngterm makes are unchanged.
 
-The build `agterm-ghostty-vt-sys` makes on Linux cannot observe this patch: it has SIMD on, which links libc
+The build `ngterm-ghostty-vt-sys` makes on Linux cannot observe this patch: it has SIMD on, which links libc
 (`src/build/GhosttyZig.zig`), so the unpatched source exports no stubs either, and it passes no `--libc` file. Neither
 the wrapper's tests nor an `nm` of that archive fail without the patch. Its checks build what it changes: a
 `windows-msvc` build that names its SDK with a `--libc` file (the translator half), and a hosted build of the prepared
@@ -114,8 +114,8 @@ out="$(mktemp -d)" version="$(sed -n 's/^version-string=//p' "$tree/../share/ngt
 nm "$out/prefix/lib/libghostty-vt.a" | grep -E ' [TtWwVv] (calloc|free)$'   # prints nothing
 ```
 
-The wrapper's `cargo test -p agterm-ghostty-vt --test patches wuffs` checks only that the Wuffs build the patch
-touches still swizzles in agterm's build; it passes without the patch.
+The wrapper's `cargo test -p ngterm-ghostty-vt --test patches wuffs` checks only that the Wuffs build the patch
+touches still swizzles in ngterm's build; it passes without the patch.
 
 ## 0003 keep the cursor hyperlink across page replacement
 
@@ -153,7 +153,7 @@ change, and the checks below pass without this patch.
 verification:
 
 ```sh
-cargo test -p agterm-ghostty-vt --test patches hyperlink   # SIGSEGV without the patch
+cargo test -p ngterm-ghostty-vt --test patches hyperlink   # SIGSEGV without the patch
 (cd "$tree" && "$zig" build test-lib-vt --cache-dir "$(mktemp -d)" \
   -Dtest-filter='cursorAbsolute across a full page keeps the hyperlink')
 (cd "$tree" && "$zig" build test-lib-vt --cache-dir "$(mktemp -d)" \
@@ -187,7 +187,7 @@ reason: The formatter wrote cells a program skipped with a cursor move as spaces
 a re-attach's snapshot a gap after a colored run came back painted. A cell with no text now closes the open style
 before it is buffered as a blank; cells the program wrote, spaces included, keep their style, and plain output is
 unchanged. No formatter option controls this at the pin, and the session server's snapshot is the formatter's VT
-output, so Rust cannot fix it from outside. Every styled formatter output takes it, agterm's own `copy_to_clipboard`
+output, so Rust cannot fix it from outside. Every styled formatter output takes it, ngterm's own `copy_to_clipboard`
 and `write_*_file` in VT or HTML too: their gap now reads as the screen shows it.
 
 remove when: the pinned formatter writes skipped cells unstyled (or an option asks for it and the snapshot sets it),
@@ -196,24 +196,24 @@ and the checks below pass without this patch.
 verification:
 
 ```sh
-cargo test -p agterm-ghostty-vt --test patches skipped_cells
+cargo test -p ngterm-ghostty-vt --test patches skipped_cells
 ```
 
 ## herdr patches not carried
 
-Reviewed against the pin and against what agterm uses (herdr's `vendor/libghostty-vt.patches.md` at `HERDR_REV`):
+Reviewed against the pin and against what ngterm uses (herdr's `vendor/libghostty-vt.patches.md` at `HERDR_REV`):
 
 - **0002 expose modifyOtherKeys mode through terminal data**: herdr runs inside another terminal and must ask that
-  outer terminal for printable key releases while an inner program has modifyOtherKeys 2 on. agterm is the outermost
+  outer terminal for printable key releases while an inner program has modifyOtherKeys 2 on. ngterm is the outermost
   terminal: its key encoder reads the mode from the terminal itself (`ghostty_key_encoder_setopt_from_terminal`), so
   nothing needs the scalar.
 - **0005 bounded word selection for wrapped link activation**: herdr's Ctrl+click resolves a wrapped token beyond the
-  viewport through a new selection API. agterm finds links in Rust with Ghostty's own matcher over the frame's rows
-  (`agterm-gpui` `terminal/links.rs`), as Ghostty does, and needs no library API for it.
+  viewport through a new selection API. ngterm finds links in Rust with Ghostty's own matcher over the frame's rows
+  (`ngterm-gpui` `terminal/links.rs`), as Ghostty does, and needs no library API for it.
 - **0006 clear screen while preserving the cursor line**: a new C function for herdr's own "clear pane" feature.
-  agterm's `clear_screen` follows Ghostty's `Termio.clearScreen` and is written in Rust as VT sequences at a ground
-  point (`agterm-term` `actions.rs`).
+  ngterm's `clear_screen` follows Ghostty's `Termio.clearScreen` and is written in Rust as VT sequences at a ground
+  point (`ngterm-term` `actions.rs`).
 - **0007 experimental encoded PNG and immutable source retention**: a default-off experiment for forwarding Kitty PNG
-  uploads through a multiplexer without decoding. agterm decodes and draws images itself (the frontend's PNG decoder
+  uploads through a multiplexer without decoding. ngterm decodes and draws images itself (the frontend's PNG decoder
   through `sys.h`), and the session server's VT runs with image media off (plan Task 16), so nothing would retain or
   forward the encoded bytes.

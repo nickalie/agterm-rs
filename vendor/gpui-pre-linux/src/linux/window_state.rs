@@ -1,4 +1,4 @@
-//! A window's state as the window manager reports it (an agterm-rs patch): GPUI tracks an X11 window's
+//! A window's state as the window manager reports it (an ngterm patch): GPUI tracks an X11 window's
 //! `_NET_WM_STATE` for itself but gives no read-back of its minimized state, which `window.list` needs, and while the
 //! window is minimized it reads it as not maximized, though the window manager keeps it maximized, and the frame saved
 //! for its next launch needs that. The X11 client notes both each time it reads the window's `_NET_WM_STATE` (at

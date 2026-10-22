@@ -80,6 +80,8 @@ def test_every_location_a_launch_env_names_is_under_the_root(
         "AT_SPI_BUS_ADDRESS": "unix:path=/run/user/7/at-spi/bus",
         "AGTERM_SOCKET": "/home/user/.local/share/agterm/agterm.sock",
         "AGTERM_STATE_DIR": "/home/user/.local/share/agterm",
+        "NGTERM_SOCKET": "/home/user/.local/share/ngterm/ngterm.sock",
+        "NGTERM_STATE_DIR": "/home/user/.local/share/ngterm",
         "ZMX_DIR": "/tmp/agterm-zmx-live",
         **{xdg: f"/home/user/{xdg.lower()}" for xdg in XDG_HOMES},
     }.items():
@@ -88,9 +90,10 @@ def test_every_location_a_launch_env_names_is_under_the_root(
     root = tmp_path / "root"
     env = adapter.build_env(root)
     linux = adapter.needs_runtime_dir
-    check_launch_env(env, root, adapter.needs_app_id, linux, headless=linux)
+    check_launch_env(env, root, adapter.needs_app_id, linux, headless=linux, prefix=adapter.env_prefix)
 
-    located = ["AGTERM_STATE_DIR", "AGTERM_CONTROL_SOCKET", "HOME", *XDG_HOMES, "CFFIXED_USER_HOME"]
+    state = adapter.variable("STATE_DIR")
+    located = [state, adapter.variable("CONTROL_SOCKET"), "HOME", *XDG_HOMES, "CFFIXED_USER_HOME"]
     located += ["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"] if linux else []
     for variable in located:
         if variable in env:
@@ -98,6 +101,7 @@ def test_every_location_a_launch_env_names_is_under_the_root(
     if linux:
         assert Path(env["DBUS_SESSION_BUS_ADDRESS"].removeprefix("unix:path=")).is_relative_to(root)
         assert not {"DISPLAY", "AT_SPI_BUS_ADDRESS"} & env.keys()
-    assert not {"AGTERM_SOCKET", "ZMX_DIR"} & env.keys()
-    # The app derives its zmx socket directory from the state dir: per root, never the live one.
-    assert upstream_socket_directory(env["AGTERM_STATE_DIR"]) != upstream_socket_directory("/home/user/.local/share/agterm")
+    assert not {"AGTERM_SOCKET", "NGTERM_SOCKET", "ZMX_DIR"} & env.keys()
+    assert env[state] == str(root / "state")
+    # The app derives its live-session socket directory from the state dir: per root, never the live one.
+    assert upstream_socket_directory(env[state]) != upstream_socket_directory("/home/user/.local/share/agterm")

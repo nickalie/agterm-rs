@@ -1,10 +1,10 @@
 cmd.exe takes the text after `/C` as shell syntax, but portable-pty quotes every argv item with ArgvQuote, which
 escapes embedded quotes as `\"` (a form cmd.exe does not read) and so changes how the command text parses.
-`CommandBuilder::raw_arg` appends text to the Windows command line verbatim, after the quoted arguments; agterm runs
-a pane's command line as `cmd.exe /D /S /C "<line>"` through it (agterm-pty's `Command::raw_args`).
+`CommandBuilder::raw_arg` appends text to the Windows command line verbatim, after the quoted arguments; ngterm runs
+a pane's command line as `cmd.exe /D /S /C "<line>"` through it (ngterm-pty's `Command::raw_args`).
 
 From herdr (https://github.com/herdrdev/herdr, Apache-2.0) vendor/patches/portable-pty/0002-windows-raw-command-tail.patch,
-rebased onto portable-pty 0.9.0 with agterm's 0001-0005. herdr issue #1041. Remove when portable-pty exposes a raw
+rebased onto portable-pty 0.9.0 with ngterm's 0001-0005. herdr issue #1041. Remove when portable-pty exposes a raw
 Windows command-line tail. Its test: `raw_arg_appends_unescaped_windows_command_tail`.
 
 diff -ruN a/src/cmdbuilder.rs b/src/cmdbuilder.rs

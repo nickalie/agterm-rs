@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vendor the GPUI crates agterm patches (docs/plans/20261014-gpui-frontend.md, Technical Details > GPUI patches) into
+# Vendor the GPUI crates ngterm patches (docs/plans/20261014-gpui-frontend.md, Technical Details > GPUI patches) into
 # vendor/<crate> with build/patches/<crate> applied, for the workspace's [patch.crates-io]:
 #   gpui-pre       the `ExternalSurface` payload of `PaintSurface` on Linux and `Window::paint_external_surface`, the
 #                  dmabuf import capabilities of the GPU GPUI renders with (0001); `TextSystem::font_metrics`, a face's
@@ -60,14 +60,14 @@ case "${1:-}" in
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/agterm-gpui-XXXXXX")"
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-gpui-XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
 # The verified, pruned crates.io source of $1, unpatched, in $scratch/pristine/$1.
 pristine() {
   local crate="$1" archive sum
   archive="$scratch/$crate-$GPUI_VERSION.crate"
-  curl -sSfL -A agterm-rs-dev -o "$archive" "https://static.crates.io/crates/$crate/$crate-$GPUI_VERSION.crate"
+  curl -sSfL -A ngterm-dev -o "$archive" "https://static.crates.io/crates/$crate/$crate-$GPUI_VERSION.crate"
   sum="$(sha256sum "$archive" | cut -d' ' -f1)"
   [[ "$sum" == "${SHA256[$crate]}" ]] || die "$crate $GPUI_VERSION: sha256 $sum, expected ${SHA256[$crate]}"
   mkdir -p "$scratch/unpack" "$scratch/pristine"

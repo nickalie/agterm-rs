@@ -10,8 +10,8 @@ arguments of its own must still start and serve, as upstream's does.
 
 The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
 finds (nothing is fetched here), else the launch fails naming the script. --bin defaults to the stage run-rust-linux.sh
-builds (target/conformance-stage/bin/agterm). The app logs its terminal surface at debug level under the target
-`agterm::surface` (AGTERM_LOG); this reads the instance's log. Prints a JSON report; exits 0 when the first frame was
+builds (target/conformance-stage/bin/ngterm). The app logs its terminal surface at debug level under the target
+`ngterm::surface` (NGTERM_LOG); this reads the instance's log. Prints a JSON report; exits 0 when the first frame was
 drawn.
 """
 
@@ -29,13 +29,13 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "agterm"
+DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "ngterm"
 FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
-# `impls.base.LAVAPIPE_ICD_VARIABLE`, spelled here: importing the harness runs the plugin's scrub of every AGTERM_*
-# variable, which the script still needs (AGTERM_LAVAPIPE_ICD, AGTERM_VENDOR), so lavapipe is found before that.
+# `impls.base.LAVAPIPE_ICD_VARIABLE`, spelled here: importing the harness runs the plugin's scrub of every NGTERM_*
+# variable, which the script still needs (NGTERM_LAVAPIPE_ICD, NGTERM_VENDOR), so lavapipe is found before that.
 LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
-# The surface's lines, at debug under the explicit `agterm::surface` target; the rest of the app stays at info.
-LOG_FILTER = "info,agterm::surface=debug"
+# The surface's lines, at debug under the explicit `ngterm::surface` target; the rest of the app stays at info.
+LOG_FILTER = "info,ngterm::surface=debug"
 CREATED = "terminal surface created"
 DREW = "terminal drew its first frame"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -71,19 +71,19 @@ def probe(bin: Path, timeout: float, args: Sequence[str] = ()) -> dict[str, Any]
         icd, lavapipe_problem = lavapipe_from_script()
         if icd is not None:
             os.environ[LAVAPIPE_ICD_VARIABLE] = icd
-    # only now: importing the harness scrubs AGTERM_* from this process
+    # only now: importing the harness scrubs NGTERM_* and AGTERM_* from this process
     from agterm_conformance.impls.rust import RustAdapter
 
     class LoggingAdapter(RustAdapter):
         def platform_env(self, env: dict[str, str]) -> None:
             super().platform_env(env)
-            env["AGTERM_LOG"] = LOG_FILTER
+            env[RustAdapter.variable("LOG")] = LOG_FILTER
 
         def instance_executable(self, root: Path) -> list[str]:
             return [*super().instance_executable(root), *args]
 
     if not bin.is_file():
-        return {"ok": False, "error": f"no agterm at {bin}"}
+        return {"ok": False, "error": f"no ngterm at {bin}"}
     adapter = LoggingAdapter(bin)
     report: dict[str, Any] = {"bin": str(bin)}
     if args:

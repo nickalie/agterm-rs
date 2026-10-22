@@ -1,0 +1,21 @@
+[package]
+name = "ngterm-ghostty-vt-sys"
+description = "Raw bindings to libghostty-vt (Ghostty's official vt C API), built with Zig and linked statically"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+# The Zig build (zig_build.rs) is taken from herdr (Apache-2.0) as code; NOTICE carries herdr's license.
+license = "MIT AND Apache-2.0"
+links = "ghostty-vt"
+build = "build.rs"
+
+# Not under the workspace lints: the bindings are bindgen output (scripts/gen-ghostty-vt-bindings.sh), named after
+# the C header.
+[lints.rust]
+non_camel_case_types = "allow"
+non_upper_case_globals = "allow"
+non_snake_case = "allow"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Prepare the pinned, patched libghostty-vt source (Ghostty's VT library behind its official C API,
 # include/ghostty/vt.h) and Ghostty's resources at the same revision in the vendored prefix
-# ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/ghostty-vt-<key>/. The library itself is built by
-# agterm-ghostty-vt-sys's build script (`zig build -Demit-lib-vt` over this prefix's tree, for cargo's target, into its
+# ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/ghostty-vt-<key>/. The library itself is built by
+# ngterm-ghostty-vt-sys's build script (`zig build -Demit-lib-vt` over this prefix's tree, for cargo's target, into its
 # OUT_DIR), which never reaches the network: everything that needs it or the shell happens here. The key hashes the
 # LIBGHOSTTY_VT_ pins of build/pins.env (the one Ghostty pin), build/patches/ghostty-vt/, the prefix layout and the
 # host arch, so another build's pin never moves it and a complete prefix is reused as is.
@@ -33,13 +33,13 @@
 # starts its programs with its own TERM unless WSLENV forwards the pane's.
 #
 # Usage: scripts/build-ghostty-vt.sh                 prepare the prefix unless it is complete, then print its path
-#        scripts/build-ghostty-vt.sh --print-prefix  print the prefix path only (agterm-ghostty-vt-sys/build.rs)
+#        scripts/build-ghostty-vt.sh --print-prefix  print the prefix path only (ngterm-ghostty-vt-sys/build.rs)
 #        scripts/build-ghostty-vt.sh --verify        exit 0 when the prefix is complete, 1 otherwise
 #
 # It runs on Linux, stock macOS (bash 3.2, shasum, BSD patch) and under Git Bash on Windows (scripts/lib/native.sh >
 # Portable shell); on Windows the stamp records native paths, which the build script hands to zig. It needs curl, tar,
 # patch, sha256sum or shasum, and tic with infocmp where tic exists; find_zig needs xz (Linux, macOS) or unzip
-# (Windows) only when it fetches zig. LIBGHOSTTY_VT_ZIG_VERSION comes from AGTERM_GHOSTTY_VT_ZIG, a matching zig on
+# (Windows) only when it fetches zig. LIBGHOSTTY_VT_ZIG_VERSION comes from NGTERM_GHOSTTY_VT_ZIG, a matching zig on
 # PATH, mise, or the pinned ziglang.org archive of the host's OS and arch (LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>).
 set -euo pipefail
 
@@ -48,7 +48,7 @@ source "$(dirname "$0")/lib/native.sh"
 
 PREFIX="$(ghostty_vt_prefix)"
 PATCHES="$NATIVE_ROOT/build/patches/ghostty-vt"
-# The Zig triples of agterm-ghostty-vt-sys's target map (crates/agterm-ghostty-vt-sys/zig_build.rs ZIG_TARGETS, which a
+# The Zig triples of ngterm-ghostty-vt-sys's target map (crates/ngterm-ghostty-vt-sys/zig_build.rs ZIG_TARGETS, which a
 # test keeps equal to this list), without their OS version suffixes: the packages each one's build needs are fetched.
 ZIG_TARGETS=(x86_64-linux-gnu aarch64-linux-gnu x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos
   x86_64-windows-msvc aarch64-windows-msvc)
@@ -84,7 +84,7 @@ else
 fi
 mkdir -p "$VENDOR_ROOT"
 ZIG_SHA="$(zig_pin_sha256 LIBGHOSTTY_VT)"
-ZIG="$(find_zig "$LIBGHOSTTY_VT_ZIG_VERSION" "$ZIG_SHA" "${AGTERM_GHOSTTY_VT_ZIG:-}")"
+ZIG="$(find_zig "$LIBGHOSTTY_VT_ZIG_VERSION" "$ZIG_SHA" "${NGTERM_GHOSTTY_VT_ZIG:-}")"
 # The binary itself, as zig reports it: a version manager's shim found on PATH may resolve to another version from the
 # directory cargo runs the build script in. It is a ZON string, whose backslashes (a Windows path) are escaped; the
 # stamp records it in the native form (native_path), as it records the global cache, since cargo's build script hands
@@ -157,11 +157,11 @@ curl -fsSL --retry 3 -o "$BUILD_DIR/ghostty-themes.tgz" "$LIBGHOSTTY_VT_THEMES_U
 sha256_matches "$LIBGHOSTTY_VT_THEMES_SHA256" "$BUILD_DIR/ghostty-themes.tgz" \
   || die "Ghostty theme package sha256 mismatch"
 tar -xzf "$BUILD_DIR/ghostty-themes.tgz" -C "$STAGE/share/ghostty/themes" --strip-components=1
-pin_lines LIBGHOSTTY_VT >"$STAGE/share/ghostty/themes/.agterm-resource-manifest"
+pin_lines LIBGHOSTTY_VT >"$STAGE/share/ghostty/themes/.ngterm-resource-manifest"
 
 # What Ghostty's build-data tool runs for `+terminfo` (src/main_build_data.zig), alone: the entry's encoder needs
 # nothing but std, so this needs none of the build's dependencies. The helper sits in the tree only while it runs.
-cat >"$TREE/src/agterm_terminfo.zig" <<'ZIG'
+cat >"$TREE/src/ngterm_terminfo.zig" <<'ZIG'
 const std = @import("std");
 
 pub fn main(init: std.process.Init) !void {
@@ -174,9 +174,9 @@ ZIG
 echo "encoding Ghostty's terminfo..." >&2
 (
   cd "$TREE"
-  "$ZIG_EXE" run --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" src/agterm_terminfo.zig
+  "$ZIG_EXE" run --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" src/ngterm_terminfo.zig
 ) >"$BUILD_DIR/ghostty.terminfo"
-rm "$TREE/src/agterm_terminfo.zig"
+rm "$TREE/src/ngterm_terminfo.zig"
 [[ -s "$BUILD_DIR/ghostty.terminfo" ]] || die "Ghostty's terminfo encoder wrote nothing"
 mkdir -p "$STAGE/share/terminfo"
 cp "$BUILD_DIR/ghostty.terminfo" "$STAGE/share/terminfo/ghostty.terminfo"
@@ -185,7 +185,7 @@ if command -v tic >/dev/null; then
 fi
 
 {
-  echo "# The inputs of this libghostty-vt prefix (scripts/build-ghostty-vt.sh); agterm-ghostty-vt-sys builds from it."
+  echo "# The inputs of this libghostty-vt prefix (scripts/build-ghostty-vt.sh); ngterm-ghostty-vt-sys builds from it."
   echo "zig=$ZIG_EXE"
   echo "zig-version=$LIBGHOSTTY_VT_ZIG_VERSION"
   echo "zig-global-cache=$ZIG_CACHE"

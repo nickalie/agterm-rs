@@ -10,6 +10,7 @@ from agterm_conformance.impls.rust import RustAdapter
 from agterm_conformance.vocabulary import (
     LIVE,
     LIVE_TEXTS,
+    NAME_TEXTS,
     SERVER_IDLE_GRACE,
     UPSTREAM,
     live_socket_directory,
@@ -42,10 +43,11 @@ def test_keys_and_variables_per_vocabulary():
         "backedByZmx",
         "AGTERM_UITEST_ENABLE_ZMX",
     )
-    assert (LIVE.result_key, LIVE.backed_key, LIVE.ui_test_opt_in) == ("live", "backedByLive", "AGTERM_UITEST_ENABLE_LIVE")
+    assert (LIVE.result_key, LIVE.backed_key, LIVE.ui_test_opt_in) == ("live", "backedByLive", "NGTERM_UITEST_ENABLE_LIVE")
     # The attach contract and the namespace: upstream's zmx's, and the Rust build's session server's.
     assert (UPSTREAM.session_variable, UPSTREAM.directory_variable) == ("ZMX_SESSION", "ZMX_DIR")
-    assert (LIVE.session_variable, LIVE.directory_variable) == ("AGTERM_LIVE_SESSION", "AGTERM_LIVE_DIR")
+    assert (LIVE.session_variable, LIVE.directory_variable) == ("NGTERM_LIVE_SESSION", "NGTERM_LIVE_DIR")
+    assert (UPSTREAM.daemon_prefix, LIVE.daemon_prefix) == ("agterm-", "ngterm-")
     for vocabulary in (UPSTREAM, LIVE):
         assert vocabulary.session_variable.startswith(vocabulary.variable_prefix)
         assert vocabulary.directory_variable.startswith(vocabulary.variable_prefix)
@@ -56,12 +58,12 @@ def test_keys_and_variables_per_vocabulary():
         "/nonexistent-agterm/state"
     )
     assert upstream_socket_directory("/nonexistent-agterm/state").startswith("/tmp/agterm-zmx-")
-    # the same hash under the session server's prefix: agterm_core::live::socket_directory's test pins its value
+    # the same hash under the session server's prefix: ngterm_core::live::socket_directory's test pins its value
     assert live_socket_directory("/nonexistent-agterm/state") == "/tmp/ngterm-live-22c4fb0b9e3e04dc"
     assert upstream_socket_directory("/nonexistent-agterm/state").endswith("-22c4fb0b9e3e04dc")
     # one server per namespace for the Rust build, a daemon per session for the references
     assert (UPSTREAM.server, UPSTREAM.server_idle) == (None, 0.0)
-    assert (LIVE.server, LIVE.server_idle) == ("agterm-session", SERVER_IDLE_GRACE)
+    assert (LIVE.server, LIVE.server_idle) == ("ngterm-session", SERVER_IDLE_GRACE)
 
 
 @pytest.mark.parametrize("name", ["tree", "session.new", "zmx", "zmx.", "live.list"])
@@ -103,14 +105,14 @@ def test_every_live_text_is_what_the_rust_build_says():
     # Each translated text, up to its first field, is a literal in the Rust sources: a rewording there fails here, not
     # only in a full conformance run.
     sources = _rust_sources()
-    for live in LIVE_TEXTS.values():
+    for live in [*LIVE_TEXTS.values(), *NAME_TEXTS.values()]:
         assert live.split("{", 1)[0] in sources, live
 
 
 def test_the_live_vocabulary_renders_the_live_inventory():
     restore = {"configured": "live", "requestedAtLaunch": "live", "active": "live", "restartRequired": False}
     inventory = {"restore": restore, "inventoryComplete": True, "entries": []}
-    assert cli_format.human({"live": inventory}, vocabulary=LIVE) == cli_format.zmx(inventory)
+    assert cli_format.human({"live": inventory}, vocabulary=LIVE) == cli_format.zmx(inventory, LIVE)
     assert cli_format.human({"zmx": inventory}) == cli_format.zmx(inventory)
     # Under the other vocabulary's key the inventory is not recognized as one.
     assert cli_format.human({"live": inventory}) == "ok"
@@ -129,6 +131,13 @@ def test_each_vocabulary_leads_with_its_own_hosts_client(monkeypatch):
 
 
 def test_the_server_idle_grace_is_the_session_servers():
-    lifecycle = (REPO / "crates/agterm-session/src/server/lifecycle.rs").read_text()
+    lifecycle = (REPO / "crates/ngterm-session/src/server/lifecycle.rs").read_text()
     match = re.search(r"pub const IDLE_GRACE: Duration = Duration::from_secs\((\d+)\);", lifecycle)
     assert match is not None and float(match.group(1)) == SERVER_IDLE_GRACE
+
+
+def test_the_daemon_prefix_and_attach_contract_are_the_session_servers():
+    live = (REPO / "crates/ngterm-core/src/live/mod.rs").read_text()
+    assert f'pub const NAME_PREFIX: &str = "{LIVE.daemon_prefix}";' in live
+    assert f'pub const SESSION_VARIABLE: &str = "{LIVE.session_variable}";' in live
+    assert f'pub const DIRECTORY_VARIABLE: &str = "{LIVE.directory_variable}";' in live

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-TITLE = "agterm-webkit-probe"
+TITLE = "ngterm-webkit-probe"
 SYSCTLS = (
     "kernel/apparmor_restrict_unprivileged_userns",
     "kernel/unprivileged_userns_clone",
@@ -40,8 +40,8 @@ def host_facts() -> dict[str, Any]:
     return facts
 
 
-STAGE_BIN = Path(__file__).resolve().parents[2] / "target" / "conformance-stage" / "bin" / "agterm"
-# the app's own lines about its web engine (`agterm_gpui::html_overlay`, `external_texture`), kept in the report
+STAGE_BIN = Path(__file__).resolve().parents[2] / "target" / "conformance-stage" / "bin" / "ngterm"
+# the app's own lines about its web engine (`ngterm_gpui::html_overlay`, `external_texture`), kept in the report
 ENGINE_LINES = ("web engine", "shared memory", "WPE", "WebKit")
 
 
@@ -71,12 +71,12 @@ def probe(bin: Path, timeout: int) -> dict[str, Any]:
         if icd is None:
             return {**report, "error": f"no lavapipe: {problem}"}
         os.environ[LAVAPIPE_ICD_VARIABLE] = icd
-    # only now: importing the harness scrubs AGTERM_* from this process
+    # only now: importing the harness scrubs NGTERM_* and AGTERM_* from this process
     from agterm_conformance.impls.rust import RustAdapter
     from agterm_conformance.match import assert_ok
 
     if not bin.is_file():
-        return {**report, "error": f"no agterm at {bin}"}
+        return {**report, "error": f"no ngterm at {bin}"}
     adapter = RustAdapter(bin)
     try:
         instance = adapter.launch()

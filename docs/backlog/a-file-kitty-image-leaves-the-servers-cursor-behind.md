@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-session/src/server/pane.rs:1194
+where: crates/ngterm-session/src/server/pane.rs:1194
 added: 2026-10-20
 ---
 # A file, temp-file or shared-memory Kitty image moves the clients' cursor but not the server's

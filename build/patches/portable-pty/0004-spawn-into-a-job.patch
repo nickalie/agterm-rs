@@ -1,9 +1,9 @@
-agterm-pty runs each Windows child tree in a job object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so ending a pane
+ngterm-pty runs each Windows child tree in a job object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so ending a pane
 ends its shell's descendants too. Assigning the job after CreateProcessW leaves a window in which the child can start
 processes outside it, and portable-pty closes the main thread handle a suspended start would need. The child is put
 into the job as it is created instead, through PROC_THREAD_ATTRIBUTE_JOB_LIST beside the pseudoconsole attribute
 (Windows 10 and newer, as ConPTY itself): `ConPtyMasterPty::spawn_command_in_job`, since the slave behind
-`PtyPair::slave` cannot be downcast. agterm's own patch; remove when portable-pty takes a job for the spawn.
+`PtyPair::slave` cannot be downcast. ngterm's own patch; remove when portable-pty takes a job for the spawn.
 
 diff -ruN a/src/win/conpty.rs b/src/win/conpty.rs
 --- a/src/win/conpty.rs

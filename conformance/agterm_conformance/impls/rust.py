@@ -10,6 +10,7 @@ from typing import Any
 
 from agterm_conformance.impls import base
 from agterm_conformance.impls.base import (
+    RUST_PREFIX,
     FAKE_SEAT_ARG,
     LAUNCH_TIMEOUT,
     NO_PROFILE,
@@ -55,6 +56,7 @@ class RustAdapter(Adapter):
     name = "rust"
     app_dir_name = "ngterm"
     ctl_name = "ngtermctl"
+    env_prefix = RUST_PREFIX
     # `live.*`, `ngtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
     # (conformance/docs/rust-build.md > The `live` group).
     vocabulary = LIVE

@@ -76,7 +76,8 @@ def _usage(result, message=None):
 
 
 def _rendered(result, response_result, echo_id=False, vocabulary=UPSTREAM):
-    """The human form of `response_result`, one line per `print`; a `zmx.list` result is read under `vocabulary`."""
+    """The human form of `response_result`, one line per `print`; a `zmx.list` result and the texts naming the app are
+    read under `vocabulary`."""
     return _ok(result, cli_format.human(response_result, echo_id, vocabulary) + "\n")
 
 
@@ -974,14 +975,14 @@ def test_browser_and_config(cli, ctl):
 @pytest.mark.covers("cli:restore mode", "cli:restore capture", "cli:restore clear")
 def test_restore(cli, ctl):
     status = _json(cli("restore", "mode", "--json"))
-    _rendered(cli("restore", "mode"), status)
+    _rendered(cli("restore", "mode"), status, vocabulary=cli.vocabulary)
     configured = status["restore"]["configured"]
     try:
         changed = _json(cli("restore", "mode", "rerun", "--json"))
         assert changed["restore"]["configured"] == "rerun"
-        _rendered(cli("restore", "mode"), assert_ok(ctl.request("restore.mode")))
+        _rendered(cli("restore", "mode"), assert_ok(ctl.request("restore.mode")), vocabulary=cli.vocabulary)
         captured = _json(cli("restore", "capture", "--json"))
-        _rendered(cli("restore", "capture"), assert_ok(ctl.request("restore.capture")))
+        _rendered(cli("restore", "capture"), assert_ok(ctl.request("restore.capture")), vocabulary=cli.vocabulary)
         assert isinstance(captured["count"], int) and captured["text"]
         _ok(cli("restore", "clear"), "ok\n")
         _usage(cli("restore", "mode", "sometimes"))

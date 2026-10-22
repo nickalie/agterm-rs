@@ -28,7 +28,7 @@ diff -ruN a/src/linux/clipboard_html.rs b/src/linux/clipboard_html.rs
 --- a/src/linux/clipboard_html.rs
 +++ b/src/linux/clipboard_html.rs
 @@ -0,0 +1,38 @@
-+//! An HTML representation of a clipboard write (an agterm-rs patch): GPUI's `ClipboardItem` carries text and images
++//! An HTML representation of a clipboard write (an ngterm patch): GPUI's `ClipboardItem` carries text and images
 +//! only, while a terminal copies a selection as `text/html` too (Ghostty's `copy_to_clipboard:html` and `:mixed`).
 +//!
 +//! [`with_clipboard_html`] installs the HTML for the clipboard writes its closure makes on this thread (the platform's
@@ -70,7 +70,7 @@ diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
 --- a/src/linux/native_key.rs
 +++ b/src/linux/native_key.rs
 @@ -0,0 +1,141 @@
-+//! The native key behind a key event (an agterm-rs patch): what XKB said about the key GPUI turned into the
++//! The native key behind a key event (an ngterm patch): what XKB said about the key GPUI turned into the
 +//! [`gpui::Keystroke`] it dispatches, which keeps neither the key's position nor the layout's unshifted character, and
 +//! drops Shift from symbols. A terminal needs both for physical-key bindings and the Kitty keyboard protocol.
 +//!
@@ -343,7 +343,7 @@ diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
      // Internal clipboard
      contents: Option<ClipboardItem>,
      primary_contents: Option<ClipboardItem>,
-+    // The HTML offered with them (agterm-rs: `with_clipboard_html`)
++    // The HTML offered with them (ngterm: `with_clipboard_html`)
 +    html: Option<ClipboardHtml>,
 +    primary_html: Option<ClipboardHtml>,
  
@@ -429,7 +429,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
      pub(crate) pre_edit_text: Option<String>,
      pub(crate) composing: bool,
      pub(crate) pre_key_char_down: Option<Keystroke>,
-+    // The key pressed last and not released since (agterm-rs: the event pump drops the releases between X11's
++    // The key pressed last and not released since (ngterm: the event pump drops the releases between X11's
 +    // autorepeats, so a press of this key again is an autorepeat)
 +    pub(crate) held_key: Option<u32>,
      pub(crate) cursor_handle: cursor::Handle,
@@ -550,7 +550,7 @@ diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
          self.inner.write(data, selection, wait)
      }
  
-+    /// `message`, with an HTML representation offered as `text/html` beside it or instead of it (agterm-rs:
++    /// `message`, with an HTML representation offered as `text/html` beside it or instead of it (ngterm:
 +    /// `with_clipboard_html`).
 +    pub(crate) fn set_text_with_html(
 +        &self,

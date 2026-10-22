@@ -49,7 +49,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/agterm-conformance/reference
-          key: agterm-reference-${{ steps.tag.outputs.tag }}
+          key: ngterm-reference-${{ steps.tag.outputs.tag }}
       - name: fetch the reference
         id: reference
         # bash, not the default `bash -e`: pipefail keeps a fetch failure from passing as tee's 0.

@@ -1,0 +1,30 @@
+[package]
+name = "ngterm-ctl"
+description = "ngtermctl: drive ngterm over its control socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ngtermctl"
+path = "src/main.rs"
+
+[dependencies]
+ngterm-proto.workspace = true
+ngterm-core.workspace = true
+base64.workspace = true
+clap.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+strum.workspace = true
+
+[dev-dependencies]
+ngterm-host ={ workspace = true, features = ["fakes"] }
+ngterm-server.workspace = true
+serde_norway.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

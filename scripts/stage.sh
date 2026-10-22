@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Assemble the staging layout the conformance runner, scripts/run-gpui-dev.sh and the install check run from:
 #
-#   bin/{agterm,ngtermctl,agterm-session}  share/ghostty/{themes,shell-integration}  share/terminfo
-#   share/ngterm/session-BUILD (the staged agterm-session's build id, with bin/agterm-session)
-#   share/ngterm/{agent-status,skills/agterm}  share/ngterm/shell-integration/pwsh/ngterm.ps1
+#   bin/{ngterm,ngtermctl,ngterm-session}  share/ghostty/{themes,shell-integration}  share/terminfo
+#   share/ngterm/session-BUILD (the staged ngterm-session's build id, with bin/ngterm-session)
+#   share/ngterm/{agent-status,skills/ngterm}  share/ngterm/shell-integration/pwsh/ngterm.ps1
 #
-# from cargo's target dir and the vendored prefixes, plus agterm's own themes from build/themes, its PowerShell
-# integration and the agent integrations' payloads from resources/. Binaries are staged when they exist (each appears
-# with its crate's build: agterm, ngtermctl and the live sessions' server, agterm-session); Ghostty's resources are
+# from cargo's target dir and the vendored prefixes, plus ngterm's PowerShell integration and the agent
+# integrations' payloads from resources/. Binaries are staged when they exist (each appears
+# with its crate's build: ngterm, ngtermctl and the live sessions' server, ngterm-session); Ghostty's resources are
 # required. There is no lib/: libghostty-vt is linked statically. The terminfo, themes and shell integration are
 # Ghostty's at LIBGHOSTTY_VT_REV, from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
@@ -49,39 +49,36 @@ cp -R "$GHOSTTY/share/ghostty/themes" "$GHOSTTY/share/ghostty/shell-integration"
 cp -R "$GHOSTTY/share/terminfo" "$DEST/share/terminfo"
 
 staged=()
-for binary in agterm ngtermctl; do
+for binary in ngterm ngtermctl; do
   if [[ -x "$TARGET/$binary" ]]; then
     install -m755 "$TARGET/$binary" "$DEST/bin/$binary"
     staged+=("$binary")
   fi
 done
-# The live sessions' server and its build id (crates/agterm-session/src/build_id.rs): the binary is published by a
+# The live sessions' server and its build id (crates/ngterm-session/src/build_id.rs): the binary is published by a
 # rename, then the id, the sha256 of the staged binary, with the size and modification time of the binary it was
 # written for, the same way, so a server or client never takes the id of another binary for this one's. `install`
 # gives the staged copy a modification time of its own (no -p), so two builds of one size never share both.
-if [[ -x "$TARGET/agterm-session" ]]; then
-  install -m755 "$TARGET/agterm-session" "$DEST/bin/.agterm-session.tmp"
-  mv -f "$DEST/bin/.agterm-session.tmp" "$DEST/bin/agterm-session"
+if [[ -x "$TARGET/ngterm-session" ]]; then
+  install -m755 "$TARGET/ngterm-session" "$DEST/bin/.ngterm-session.tmp"
+  mv -f "$DEST/bin/.ngterm-session.tmp" "$DEST/bin/ngterm-session"
   mkdir -p "$DEST/share/ngterm"
   {
-    sha256_of <"$DEST/bin/agterm-session"
-    echo "binary $(size_and_mtime_ns "$DEST/bin/agterm-session")"
+    sha256_of <"$DEST/bin/ngterm-session"
+    echo "binary $(size_and_mtime_ns "$DEST/bin/ngterm-session")"
   } >"$DEST/share/ngterm/.session-BUILD.tmp"
   mv -f "$DEST/share/ngterm/.session-BUILD.tmp" "$DEST/share/ngterm/session-BUILD"
-  staged+=(agterm-session)
+  staged+=(ngterm-session)
 fi
 
 verify_ghostty_resources "$DEST/share" >&2
-# after the check of Ghostty's own catalog: agterm's bundled theme(s), the seeded default `agterm` among them
-# (upstream's stage_custom_themes)
-install -m644 "$NATIVE_ROOT"/build/themes/* "$DEST/share/ghostty/themes/"
 # ngterm's own PowerShell integration (Ghostty has none) in ngterm's own resources, not Ghostty's, which an inherited
-# GHOSTTY_RESOURCES_DIR replaces: a live PowerShell pane's wrap finds it there (crates/agterm-session/src/launch.rs)
+# GHOSTTY_RESOURCES_DIR replaces: a live PowerShell pane's wrap finds it there (crates/ngterm-session/src/launch.rs)
 install -Dm644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
   "$DEST/share/ngterm/shell-integration/pwsh/ngterm.ps1"
 # the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
 # installers copy them from share/ngterm
 mkdir -p "$DEST/share/ngterm/skills"
 cp -R "$NATIVE_ROOT/resources/agent-status" "$DEST/share/ngterm/agent-status"
-cp -R "$NATIVE_ROOT/resources/skills/agterm" "$DEST/share/ngterm/skills/agterm"
+cp -R "$NATIVE_ROOT/resources/skills/ngterm" "$DEST/share/ngterm/skills/ngterm"
 echo "→ staged ${staged[*]:-no binaries} ($PROFILE) into $DEST" >&2

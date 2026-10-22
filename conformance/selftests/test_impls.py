@@ -160,14 +160,17 @@ def test_inherited_agterm_variable_in_launch_env_is_refused(tmp_path: Path) -> N
         check_launch_env(env_for(tmp_path, AGTERM_SESSION_ID="live"), tmp_path, needs_app_id=True)
     with pytest.raises(LaunchRefused, match="ZMX_DIR"):
         check_launch_env(env_for(tmp_path, ZMX_DIR="/tmp/live"), tmp_path, needs_app_id=True)
+    with pytest.raises(LaunchRefused, match="NGTERM_SESSION_ID"):
+        check_launch_env(env_for(tmp_path, NGTERM_SESSION_ID="live"), tmp_path, needs_app_id=True)
 
 
 def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("AGTERM_SOCKET", "AGTERM_SESSION_ID", "AGTERM_STATE_DIR", "ZMX_DIR", "ZMX_SESSION"):
+    inherited = ("AGTERM_SOCKET", "AGTERM_SESSION_ID", "NGTERM_SOCKET", "NGTERM_SESSION_ID", "ZMX_DIR", "ZMX_SESSION")
+    for name in (*inherited, "AGTERM_STATE_DIR", "NGTERM_STATE_DIR"):
         monkeypatch.setenv(name, "/live")
     monkeypatch.setenv("CONFORMANCE_KEEP", "1")
     env = SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
-    assert not {"AGTERM_SOCKET", "AGTERM_SESSION_ID", "ZMX_DIR", "ZMX_SESSION"} & env.keys()
+    assert not {*inherited, "NGTERM_STATE_DIR"} & env.keys()
     assert env["AGTERM_STATE_DIR"] == str(tmp_path / "state")
     assert env["CONFORMANCE_KEEP"] == "1"
     assert env["PATH"] == "/usr/bin:/bin"
@@ -262,7 +265,9 @@ def test_linux_adapters_draw_headless_by_default(
     assert "DISPLAY" not in env and env["GDK_BACKEND"] == "wayland"
     assert env["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={tmp_path / 'run' / 'bus'}"
     assert "AT_SPI_BUS_ADDRESS" not in env
-    check_launch_env(env, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True)
+    check_launch_env(
+        env, tmp_path, needs_app_id=True, needs_runtime_dir=True, headless=True, prefix=adapter_class.env_prefix
+    )
     assert not SwiftMacosAdapter(tmp_path / "agterm.app").headless
 
 
@@ -1030,7 +1035,7 @@ def test_stop_reaps_through_the_adapters_vocabulary(
     instance = adapter.launch()
     assert instance.vocabulary is LIVE
     assert instance.live_dir == LIVE.socket_directory(instance.state_dir, adapter.app_dir_name)
-    pid = spawn_daemon(tmp_path, "agterm-session", instance.live_dir, daemons, variable="AGTERM_LIVE_DIR")
+    pid = spawn_daemon(tmp_path, "ngterm-session", instance.live_dir, daemons, variable="NGTERM_LIVE_DIR")
     assert instance.request("fake.adopt", pid=pid).ok
     adapter.stop(instance, cleanup=False)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
@@ -1103,27 +1108,27 @@ def test_leftover_check_under_a_session_server_finds_its_server_and_every_proces
 ) -> None:
     mine, other = "/tmp/ngterm-live-mine", "/tmp/ngterm-live-other"
     rows = [
-        (1, "agterm-session", "a", ["/x/agterm-session", "server", mine]),
-        (2, "agterm-session", "b", ["/x/agterm-session", "server", other]),
-        (3, "agterm-session", "c", ["/x/agterm-session", "attach", "agterm-1", f"AGTERM_LIVE_DIR={mine}"]),
-        (4, "bash", "d", ["-bash", f"AGTERM_LIVE_DIR={mine}", "AGTERM_LIVE_SESSION=agterm-1"]),
-        (5, "bash", "e", ["-bash", f"AGTERM_LIVE_DIR={other}"]),
+        (1, "ngterm-session", "a", ["/x/ngterm-session", "server", mine]),
+        (2, "ngterm-session", "b", ["/x/ngterm-session", "server", other]),
+        (3, "ngterm-session", "c", ["/x/ngterm-session", "attach", "ngterm-1", f"NGTERM_LIVE_DIR={mine}"]),
+        (4, "bash", "d", ["-bash", f"NGTERM_LIVE_DIR={mine}", "NGTERM_LIVE_SESSION=ngterm-1"]),
+        (5, "bash", "e", ["-bash", f"NGTERM_LIVE_DIR={other}"]),
         (6, "zmx", "f", ["zmx", f"ZMX_DIR={mine}"]),
-        (7, "agterm-session", "g", ["/x/agterm-session", "server", mine, "--handoff-import", "c", "t"]),
+        (7, "ngterm-session", "g", ["/x/ngterm-session", "server", mine, "--handoff-import", "c", "t"]),
     ]
     monkeypatch.setattr(base, "_processes", lambda: iter(rows))
     # an update's replacement server counts too: its argv starts the same
     assert [pid for pid, *_ in find_leftovers(mine, LIVE)] == [1, 3, 4, 7]
-    assert base.serves_namespace(["/a b/agterm-session", "server", mine], mine, "agterm-session")
-    assert not base.serves_namespace(["/x/agterm-session", "server"], mine, "agterm-session")
-    assert not base.serves_namespace(["/x/zmx", "server", mine], mine, "agterm-session")
+    assert base.serves_namespace(["/a b/ngterm-session", "server", mine], mine, "ngterm-session")
+    assert not base.serves_namespace(["/x/ngterm-session", "server"], mine, "ngterm-session")
+    assert not base.serves_namespace(["/x/zmx", "server", mine], mine, "ngterm-session")
 
 
 def test_a_session_servers_leftover_check_waits_out_its_idle_grace(
     tmp_path: Path, daemons: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live_dir = "/tmp/ngterm-live-grace"
-    spawn_daemon(tmp_path, "agterm-session", live_dir, daemons, variable="AGTERM_LIVE_DIR")
+    spawn_daemon(tmp_path, "ngterm-session", live_dir, daemons, variable="NGTERM_LIVE_DIR")
     monkeypatch.setattr(base, "LEFTOVER_GRACE", 0.0)
     # without an idle grace the server still running is a leftover at once
     no_grace = dataclasses.replace(LIVE, server_idle=0.0)
@@ -1717,6 +1722,23 @@ def test_gpui_renders_on_lavapipe_alone(
     assert not (set(inherited) - {"VK_ICD_FILENAMES"}) & env.keys()
 
 
+def test_each_implementation_gets_its_own_variables(tmp_path: Path, lavapipe: Path) -> None:
+    rust = RustAdapter(None).build_env(tmp_path)
+    assert rust["NGTERM_STATE_DIR"] == str(tmp_path / "state")
+    assert rust["NGTERM_CONTROL_SOCKET"] == str(tmp_path / "state" / "ngterm.sock")
+    assert rust["NGTERM_APP_ID"].startswith(DEFAULT_APP_ID + ".")
+    assert not [name for name in rust if name.startswith("AGTERM_")]
+    fork = SwiftLinuxAdapter(None).build_env(tmp_path)
+    assert fork["AGTERM_STATE_DIR"] == str(tmp_path / "state")
+    assert not [name for name in fork if name.startswith("NGTERM_")]
+    # an implementation's launch carries none of another's variables
+    check_launch_env(rust, tmp_path, needs_app_id=True, needs_runtime_dir=True, prefix="NGTERM_")
+    with pytest.raises(LaunchRefused, match="AGTERM_STATE_DIR would leak.*only harness-set NGTERM_"):
+        check_launch_env({**rust, "AGTERM_STATE_DIR": rust["NGTERM_STATE_DIR"]}, tmp_path, True, True, prefix="NGTERM_")
+    with pytest.raises(LaunchRefused, match="NGTERM_APP_ID is required"):
+        check_launch_env({**rust, "NGTERM_APP_ID": ""}, tmp_path, True, True, prefix="NGTERM_")
+
+
 def test_the_fork_keeps_its_environment(tmp_path: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VK_ICD_FILENAMES", "/somewhere/icd.json")
     env = SwiftLinuxAdapter(None).build_env(tmp_path)
@@ -1821,7 +1843,7 @@ def test_a_headless_gpui_launch_gets_a_seat_and_lavapipe(
         # isolation unchanged: its own weston and bus, a unique app id, no display of the user's
         assert seen["WAYLAND_DISPLAY"] == str(instance.root / "run" / "wayland-0") and "DISPLAY" not in seen
         assert seen["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={instance.root / 'run' / 'bus'}"
-        assert seen["AGTERM_APP_ID"] != DEFAULT_APP_ID
+        assert seen["NGTERM_APP_ID"] != DEFAULT_APP_ID and "AGTERM_APP_ID" not in seen
     finally:
         adapter.stop(instance)
     assert not instance.root.exists()

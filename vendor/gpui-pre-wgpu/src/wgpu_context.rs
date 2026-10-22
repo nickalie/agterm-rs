@@ -296,7 +296,7 @@ impl WgpuContext {
         color_texture_format: TextureFormat,
     ) -> Self {
         let errors = DeviceErrorState::install(&device);
-        // agterm-rs patch: what the device imports (`gpui::dmabuf_import_caps`).
+        // ngterm patch: what the device imports (`gpui::dmabuf_import_caps`).
         #[cfg(target_os = "linux")]
         crate::external_surface::record_caps(&adapter, &device);
 
@@ -459,7 +459,7 @@ impl WgpuContext {
             trace: wgpu::Trace::Off,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
         };
-        // agterm-rs patch: a Vulkan device that imports dmabufs (external surfaces), where the adapter can.
+        // ngterm patch: a Vulkan device that imports dmabufs (external surfaces), where the adapter can.
         #[cfg(target_os = "linux")]
         let opened = crate::external_surface::open_device(adapter, &descriptor);
         #[cfg(not(target_os = "linux"))]

@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-gpui/tests/quick_terminal.rs:126
+where: crates/ngterm-gpui/tests/quick_terminal.rs:126
 added: 2026-10-21
 ---
 # The quick terminal's weston test misses the unzoomed size under load

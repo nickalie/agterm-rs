@@ -771,7 +771,7 @@ pub struct PaintSurface {
     pub content_mask: ContentMask<ScaledPixels>,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
-    /// The frame a Linux renderer draws (agterm-rs patch: external surfaces).
+    /// The frame a Linux renderer draws (ngterm patch: external surfaces).
     #[cfg(target_os = "linux")]
     pub source: crate::ExternalSurface,
 }

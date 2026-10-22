@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Unpack the pinned WPE WebKit (Arch's `wpewebkit` binary package, WPE_ARCH_PACKAGE_URL of build/pins.env) into the
-# vendored prefix ${AGTERM_VENDOR:-~/.cache/agterm-rs/vendor}/wpe-<key>/, for a machine with an Arch-compatible
+# vendored prefix ${NGTERM_VENDOR:-~/.cache/ngterm/vendor}/wpe-<key>/, for a machine with an Arch-compatible
 # userland and no system wpewebkit (no root needed). The key hashes the WPE_ pins and the host arch only. Nothing is
 # built: the package is verified against its pinned sha256 and unpacked, its pkg-config files are relocated to the
 # prefix, and scripts/pkg-config.sh then puts the prefix on PKG_CONFIG_PATH unless a system wpe-webkit-2.0 at least
-# WPE_API_VERSION exists (the system package wins). A distro's wpewebkit is the way to run agterm; this prefix is for
+# WPE_API_VERSION exists (the system package wins). A distro's wpewebkit is the way to run ngterm; this prefix is for
 # building, linking and testing the bindings (scripts/gen-wpe-bindings.sh reads its .gir files).
 #
 # The prefix holds lib/ (libWPEWebKit-2.0.so*, the helper processes in lib/wpe-webkit-2.0/, pkgconfig/), include/,

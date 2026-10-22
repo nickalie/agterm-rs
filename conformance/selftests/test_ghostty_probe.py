@@ -16,19 +16,19 @@ ghostty_probe = importlib.util.module_from_spec(spec)
 sys.modules["ghostty_probe"] = ghostty_probe
 spec.loader.exec_module(ghostty_probe)
 
-CREATED = "2026-10-15T00:00:00.000000Z DEBUG agterm::surface: terminal surface created key=1 scale=2"
-DREW = "2026-10-15T00:00:00.016000Z DEBUG agterm::surface: terminal drew its first frame key=1"
+CREATED = "2026-10-15T00:00:00.000000Z DEBUG ngterm::surface: terminal surface created key=1 scale=2"
+DREW = "2026-10-15T00:00:00.016000Z DEBUG ngterm::surface: terminal drew its first frame key=1"
 
 
 def test_a_drawn_frame_is_seen() -> None:
-    log = f"INFO agterm_gpui::app: serving\n{CREATED}\n{DREW}\n"
+    log = f"INFO ngterm_gpui::app: serving\n{CREATED}\n{DREW}\n"
     assert ghostty_probe.read_log(log) == {"created": True, "drew": True, "error": None}
 
 
 def test_a_serving_app_whose_surface_cannot_be_created_is_a_failure() -> None:
     # The case `version` misses: the app logs the failure and keeps answering on its socket.
-    line = "2026-10-15T00:00:00Z ERROR agterm::surface: could not create the terminal surface key=1 err=pty: boom"
-    assert ghostty_probe.read_log(f"INFO agterm_gpui::app: serving\n{CREATED}\n{line}\n") == {
+    line = "2026-10-15T00:00:00Z ERROR ngterm::surface: could not create the terminal surface key=1 err=pty: boom"
+    assert ghostty_probe.read_log(f"INFO ngterm_gpui::app: serving\n{CREATED}\n{line}\n") == {
         "created": True,
         "drew": False,
         "error": line,
@@ -38,13 +38,13 @@ def test_a_serving_app_whose_surface_cannot_be_created_is_a_failure() -> None:
 def test_colour_codes_are_dropped_from_the_log() -> None:
     # tracing's writer colours a file too; the message itself is never split by a code
     coloured = (
-        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[31mERROR\x1b[0m \x1b[2magterm::surface\x1b[0m\x1b[2m:\x1b[0m "
+        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[31mERROR\x1b[0m \x1b[2mngterm::surface\x1b[0m\x1b[2m:\x1b[0m "
         "could not create the terminal surface \x1b[3merr\x1b[0m\x1b[2m=\x1b[0mboom"
     )
     seen = ghostty_probe.read_log(coloured)
-    assert seen["error"] == "2026-10-15T00:00:00Z ERROR agterm::surface: could not create the terminal surface err=boom"
+    assert seen["error"] == "2026-10-15T00:00:00Z ERROR ngterm::surface: could not create the terminal surface err=boom"
     coloured = (
-        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[34mDEBUG\x1b[0m \x1b[2magterm::surface\x1b[0m\x1b[2m:\x1b[0m "
+        "\x1b[2m2026-10-15T00:00:00Z\x1b[0m \x1b[34mDEBUG\x1b[0m \x1b[2mngterm::surface\x1b[0m\x1b[2m:\x1b[0m "
         "terminal drew its first frame \x1b[3mkey\x1b[0m\x1b[2m=\x1b[0m1"
     )
     assert ghostty_probe.read_log(coloured)["drew"] is True
@@ -55,13 +55,14 @@ def test_an_empty_log_is_neither_drawn_nor_failed() -> None:
 
 
 def test_the_log_filter_is_harness_owned_but_never_inherited() -> None:
-    assert "AGTERM_LOG" in OWN_VARIABLES
-    assert "AGTERM_LOG" not in scrubbed_environ({"AGTERM_LOG": "trace", "PATH": "/bin"})
+    assert {"AGTERM_LOG", "NGTERM_LOG"} <= OWN_VARIABLES
+    inherited = {"AGTERM_LOG": "trace", "NGTERM_LOG": "trace", "PATH": "/bin"}
+    assert not {"AGTERM_LOG", "NGTERM_LOG"} & scrubbed_environ(inherited).keys()
 
 
 def test_a_missing_binary_fails_without_launching(tmp_path: Path) -> None:
-    report = ghostty_probe.probe(tmp_path / "agterm", 1.0)
-    assert report["ok"] is False and "no agterm at" in report["error"]
+    report = ghostty_probe.probe(tmp_path / "ngterm", 1.0)
+    assert report["ok"] is False and "no ngterm at" in report["error"]
 
 
 def recording_probe(monkeypatch: pytest.MonkeyPatch) -> dict:
@@ -77,7 +78,7 @@ def recording_probe(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 def test_extra_arguments_reach_the_probe_in_order(monkeypatch, tmp_path: Path) -> None:
     seen = recording_probe(monkeypatch)
-    status = ghostty_probe.main(["--bin", str(tmp_path / "agterm"), "--arg=--no-such-option", "--arg", "file.txt"])
+    status = ghostty_probe.main(["--bin", str(tmp_path / "ngterm"), "--arg=--no-such-option", "--arg", "file.txt"])
     assert status == 0
     assert seen["args"] == ["--no-such-option", "file.txt"]
 
@@ -85,7 +86,7 @@ def test_extra_arguments_reach_the_probe_in_order(monkeypatch, tmp_path: Path) -
 def test_the_probe_defaults_to_the_runners_stage(monkeypatch) -> None:
     seen = recording_probe(monkeypatch)
     assert ghostty_probe.main([]) == 0
-    assert seen["bin"] == (ghostty_probe.REPO / "target/conformance-stage/bin/agterm").resolve()
+    assert seen["bin"] == (ghostty_probe.REPO / "target/conformance-stage/bin/ngterm").resolve()
 
 
 def test_the_probe_spells_the_harness_variable() -> None:
@@ -138,16 +139,16 @@ def test_a_probe_takes_the_scripts_lavapipe(
 def test_the_cli_finds_lavapipe_before_the_harness_scrubs_agterm_variables(
     tmp_path: Path, fake_bin: Path, fake_compositor_bin: Path, fake_session_bus_bin: Path, make_icd
 ) -> None:
-    """Run as a program: AGTERM_LAVAPIPE_ICD reaches scripts/fetch-lavapipe.sh, though the harness's import drops it."""
+    """Run as a program: NGTERM_LAVAPIPE_ICD reaches scripts/fetch-lavapipe.sh, though the harness's import drops it."""
     helpers = tmp_path / "helpers"
     helpers.mkdir()
     (helpers / "weston").symlink_to(fake_compositor_bin)
     (helpers / "dbus-daemon").symlink_to(fake_session_bus_bin)
     env = {name: value for name, value in os.environ.items() if name != LAVAPIPE_ICD_VARIABLE}
     env.update(
-        AGTERM_LAVAPIPE_ICD=str(make_icd()),
+        NGTERM_LAVAPIPE_ICD=str(make_icd()),
         # no vendored lavapipe to fall back on, should the override be lost
-        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        NGTERM_VENDOR=str(tmp_path / "vendor"),
         HOME=str(tmp_path / "home"),
         PATH=f"{helpers}{os.pathsep}{os.environ['PATH']}",
         PYTHONPATH=str(Path(__file__).resolve().parents[1]),

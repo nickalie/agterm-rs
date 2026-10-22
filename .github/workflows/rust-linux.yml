@@ -1,5 +1,5 @@
 # The Rust workspace on Linux: format, strict clippy, the lint report and cargo test. Then the staged build under the
-# conformance suite, once the cargo job passes. The WPE WebKit crates (the -sys crates and agterm-wpe) and the app's
+# conformance suite, once the cargo job passes. The WPE WebKit crates (the -sys crates and ngterm-wpe) and the app's
 # HTML overlays over them need a WPE WebKit Ubuntu does not package: the Ubuntu job builds the workspace without them
 # and the app without the overlays (WORKSPACE_WITHOUT_WPE and GPUI_WITHOUT_HTML in scripts/lib/native.sh), the wpe job
 # checks them on Arch, and the conformance jobs run there too.
@@ -43,7 +43,7 @@ jobs:
       # and the libghostty-vt prefix's layout, part of its key).
       - uses: actions/cache@v6
         with:
-          path: ~/.cache/agterm-rs/vendor
+          path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       - name: pinned Zig toolchain (sha256 from build/pins.env)
         shell: bash
@@ -54,15 +54,15 @@ jobs:
           sha="$(zig_pin_sha256 LIBGHOSTTY_VT)"
           zig="$(find_zig "$LIBGHOSTTY_VT_ZIG_VERSION" "$sha" "")"
           echo "LIBGHOSTTY_VT: $zig"
-      # the patched source agterm-ghostty-vt-sys builds the static libghostty-vt from (with zig, offline, when
+      # the patched source ngterm-ghostty-vt-sys builds the static libghostty-vt from (with zig, offline, when
       # `cargo build --workspace` builds it); Ghostty's resources beside it
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
-      # the fonts Ghostty embeds, which agterm-gpui (built with the workspace) embeds too
+      # the fonts Ghostty embeds, which ngterm-gpui (built with the workspace) embeds too
       - name: terminal fonts
         run: scripts/fetch-fonts.sh
       # GPUI needs a seat on its headless weston, which only --fake-seat gives (weston 15.0+; Ubuntu 26.04 ships 14):
-      # the pinned weston, first on PATH, where agterm-gpui's process tests look for one taking it.
+      # the pinned weston, first on PATH, where ngterm-gpui's process tests look for one taking it.
       - name: weston prefix (--fake-seat)
         run: echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
       - name: format
@@ -90,11 +90,11 @@ jobs:
         shell: bash
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
       # fish is installed above so the fish replay script's unit test runs against a real fish parser
-      # agterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
+      # ngterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
       # (mesa-vulkan-drivers): none may skip here (only the nested-niri check is #[ignore]d, no niri on Ubuntu, and the
       # GTK forwarding checks, which need a GTK build of agterm that nothing here builds). They run without the HTML
       # overlays here; the bash conformance job runs the instance tests again with them, on Arch.
-      # agterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
+      # ngterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
       # the display tests, so the device must be there. udmabuf is a bool in the kernel's Kconfig, built in or absent
       # and never a module, so there is nothing to modprobe or install: the runner's kernel has it or the job fails.
       # systemd's udev rules give the device to the kvm group, which the runner user is not in.
@@ -111,7 +111,7 @@ jobs:
       - name: test
         shell: bash
         env:
-          AGTERM_REQUIRE_DISPLAY_TESTS: "1"
+          NGTERM_REQUIRE_DISPLAY_TESTS: "1"
         run: |
           source scripts/lib/native.sh
           cargo test "${WORKSPACE_WITHOUT_WPE[@]}"
@@ -175,22 +175,22 @@ jobs:
       # source with its Zig global cache; keyed like the prefixes
       - uses: actions/cache@v6
         with:
-          path: ~/.cache/agterm-rs/vendor
+          path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       - name: clippy
         run: >-
-          cargo clippy -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
+          cargo clippy -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys
           --all-targets --all-features -- -D warnings
-      # agterm-wpe's engine tests run pages headless in SHM mode here (the runner has no DRM render node, so its
+      # ngterm-wpe's engine tests run pages headless in SHM mode here (the runner has no DRM render node, so its
       # dmabuf mode reports itself skipped), in process and through a worker process (the system's package needs no
       # worker; the vendored one always gets one, so its transport is tested here too)
       - name: test
-        run: cargo test -p agterm-wpe -p agterm-wpe-sys -p agterm-wpe-platform-sys -p agterm-wpe-javascriptcore-sys
+        run: cargo test -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys
       - name: the bindings are a regeneration at the pins
         run: scripts/gen-wpe-bindings.sh --check
       # The app with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the headless page
       # harness (the real engine on lavapipe, in SHM: no render node here). It links the static libghostty-vt, which
-      # agterm-ghostty-vt-sys builds from the source the script prepares (with its own pinned Zig), and embeds the
+      # ngterm-ghostty-vt-sys builds from the source the script prepares (with its own pinned Zig), and embeds the
       # terminal fonts the other script fetches; its unit tests measure DejaVu Sans Mono through fontconfig.
       - name: what the app builds on
         run: |
@@ -198,12 +198,12 @@ jobs:
           scripts/build-ghostty-vt.sh
           scripts/fetch-fonts.sh
           scripts/fetch-lavapipe.sh
-      - name: clippy (agterm-gpui, html)
-        run: cargo clippy -p agterm-gpui --all-targets -- -D warnings
-      - name: test (agterm-gpui, html)
+      - name: clippy (ngterm-gpui, html)
+        run: cargo clippy -p ngterm-gpui --all-targets -- -D warnings
+      - name: test (ngterm-gpui, html)
         run: |
-          cargo test -p agterm-gpui --lib
-          AGTERM_REQUIRE_DISPLAY_TESTS=1 cargo test -p agterm-gpui --test html_overlay
+          cargo test -p ngterm-gpui --lib
+          NGTERM_REQUIRE_DISPLAY_TESTS=1 cargo test -p ngterm-gpui --test html_overlay
 
   # The staged build under the suite (run-rust-linux.sh: each instance on its own headless weston and session bus),
   # held by conformance/rust-passing.txt, once per login shell. Its HTML overlays run on WPE WebKit, which Ubuntu does
@@ -282,7 +282,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/cache@v6
         with:
-          path: ~/.cache/agterm-rs/vendor
+          path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       # the source the app's libghostty-vt is built from, with the stage's terminfo, themes and shell integration
       # (Ghostty's at the same pin)
@@ -309,12 +309,12 @@ jobs:
       - name: the process tests with the HTML overlays
         if: matrix.shell == 'bash'
         env:
-          AGTERM_REQUIRE_DISPLAY_TESTS: "1"
-        # the app's live panes attach through the cargo-built agterm-session beside it, which a gpui-only test run
+          NGTERM_REQUIRE_DISPLAY_TESTS: "1"
+        # the app's live panes attach through the cargo-built ngterm-session beside it, which a gpui-only test run
         # does not build
         run: |
-          cargo build -p agterm-session --bin agterm-session
-          cargo test -p agterm-gpui --test instance --test privileges --test quit
+          cargo build -p ngterm-session --bin ngterm-session
+          cargo test -p ngterm-gpui --test instance --test privileges --test quit
       - name: install the suite
         run: |
           python -m venv /opt/suite

@@ -228,7 +228,7 @@ pub struct X11ClientState {
     pub(crate) pre_edit_text: Option<String>,
     pub(crate) composing: bool,
     pub(crate) pre_key_char_down: Option<Keystroke>,
-    // The key pressed last and not released since (agterm-rs: the event pump drops the releases between X11's
+    // The key pressed last and not released since (ngterm: the event pump drops the releases between X11's
     // autorepeats, so a press of this key again is an autorepeat)
     pub(crate) held_key: Option<u32>,
     pub(crate) cursor_handle: cursor::Handle,

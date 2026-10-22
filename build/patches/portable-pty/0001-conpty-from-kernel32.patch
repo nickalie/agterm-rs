@@ -4,7 +4,7 @@ here, looked up with GetModuleHandleW/GetProcAddress (kernel32 is always loaded)
 goes.
 
 From herdr (https://github.com/herdrdev/herdr, Apache-2.0) vendor/patches/portable-pty/0001-control-conpty-loading.patch,
-modified: herdr also loads a hash-checked app-local conpty.dll bundle; agterm ships none, so only the kernel32 path
+modified: herdr also loads a hash-checked app-local conpty.dll bundle; ngterm ships none, so only the kernel32 path
 is kept. herdr issues #761 and #1533; upstream discussion https://github.com/microsoft/terminal/issues/17452.
 Remove when portable-pty stops probing a bare conpty.dll.
 

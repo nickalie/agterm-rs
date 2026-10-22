@@ -1,6 +1,6 @@
 ---
 worth: later
-where: crates/agterm-session/src/attach_tty/owner.rs:19
+where: crates/ngterm-session/src/attach_tty/owner.rs:19
 added: 2026-10-21
 ---
 # A silent outer terminal stalls a session's output for 30 s on its first clipboard read
@@ -29,4 +29,4 @@ client waits and the stall stays; nothing to undo. Transcript:
 
 Since Task 26 ngterm's own live panes attach in process and answer a delegated read through the app's clipboard
 policy at once, so they never stall; the stall stays for the attach CLI in another terminal (the remote path, a
-user's own `agterm-session attach`).
+user's own `ngterm-session attach`).

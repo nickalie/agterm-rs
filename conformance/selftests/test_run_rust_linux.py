@@ -82,8 +82,8 @@ def layers(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def stage(tmp_path: Path, fake_bin: Path) -> Path:
-    """A staged tree whose bin/agterm is the fake app: no Rust binary needs to exist."""
-    app = tmp_path / "stage" / "bin" / "agterm"
+    """A staged tree whose bin/ngterm is the fake app: no Rust binary needs to exist."""
+    app = tmp_path / "stage" / "bin" / "ngterm"
     app.parent.mkdir(parents=True)
     shutil.copy2(fake_bin, app)
     return app.parent.parent
@@ -91,9 +91,9 @@ def stage(tmp_path: Path, fake_bin: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def lavapipe_icd(make_icd, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as AGTERM_LAVAPIPE_ICD by every run."""
+    """A lavapipe ICD manifest, handed to scripts/fetch-lavapipe.sh as NGTERM_LAVAPIPE_ICD by every run."""
     icd = make_icd()
-    monkeypatch.setenv("AGTERM_LAVAPIPE_ICD", str(icd))
+    monkeypatch.setenv("NGTERM_LAVAPIPE_ICD", str(icd))
     return icd
 
 
@@ -167,7 +167,7 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     (tmp_path / "report" / "report.md").write_text("stale")
     completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), AGTERM_SOCKET="/nowhere")
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert f"agterm: `{stage}/bin/agterm`" in report
+    assert f"ngterm: `{stage}/bin/ngterm`" in report
     assert "layers: protocol" in report
     assert "display: headless" in report
     assert "rust: 1 pass, 0 fail" in report
@@ -191,7 +191,7 @@ def test_a_run_launches_its_binary_on_lavapipe_with_a_seat(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert report.startswith("## rust-linux conformance\n")
     assert "frontend" not in report
-    assert f"agterm: `{stage}/bin/agterm`" in report
+    assert f"ngterm: `{stage}/bin/ngterm`" in report
     assert f"Vulkan: lavapipe only, `{lavapipe_icd}`" in report
     assert "rust: 1 pass, 0 fail" in report and "ratchet holds" in report
     assert "rust frontend" not in (tmp_path / "report" / "pytest.log").read_text()
@@ -201,16 +201,16 @@ def test_a_run_launches_its_binary_on_lavapipe_with_a_seat(
     assert env["VK_DRIVER_FILES"] == env["VK_ICD_FILENAMES"] == str(lavapipe_icd)
     assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
     # the override reached the script, never the instance
-    assert not {"AGTERM_LAVAPIPE_ICD", "CONFORMANCE_LAVAPIPE_ICD"} & env.keys()
+    assert not {"NGTERM_LAVAPIPE_ICD", "CONFORMANCE_LAVAPIPE_ICD"} & env.keys()
 
 
 def test_a_run_without_the_binary_skips_everything(tmp_path: Path, layers: Path) -> None:
-    """A stage without bin/agterm (the app crate not built): nothing launches."""
+    """A stage without bin/ngterm (the app crate not built): nothing launches."""
     empty = tmp_path / "empty-stage"
     (empty / "bin").mkdir(parents=True)
     completed, report = run(tmp_path, empty, layers, ratchet(tmp_path))
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "agterm: not staged" in report
+    assert "ngterm: not staged" in report
     assert "rust: 0 pass, 0 fail, 0 skip(unsupported), 1 skip(not-yet-at-level)" in report
 
 
@@ -220,10 +220,10 @@ def test_a_run_without_lavapipe_stops_before_anything_runs(
     with open(lock, "w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)  # refused before queueing
         completed, report = run(
-            tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), AGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json")
+            tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), NGTERM_LAVAPIPE_ICD=str(tmp_path / "absent.json")
         )
     assert completed.returncode == 2
-    assert "AGTERM_LAVAPIPE_ICD names no ICD manifest" in completed.stderr
+    assert "NGTERM_LAVAPIPE_ICD names no ICD manifest" in completed.stderr
     assert "no lavapipe for the GPUI build" in completed.stderr
     assert "waiting for another conformance run" not in completed.stdout
     assert report == ""
@@ -234,7 +234,7 @@ def vendored_weston(vendor: Path, fake_compositor_bin: Path) -> Path:
     repo = SCRIPT.parents[2]
     found = subprocess.run(
         [str(repo / "scripts/build-weston.sh"), "--print-prefix"],
-        env={**os.environ, "AGTERM_VENDOR": str(vendor)},
+        env={**os.environ, "NGTERM_VENDOR": str(vendor)},
         capture_output=True,
         text=True,
         check=True,
@@ -261,7 +261,7 @@ def test_a_run_on_a_weston_without_a_seat_stops_naming_the_fix(tmp_path: Path, s
         stage,
         layers,
         ratchet(tmp_path, PROBE_ID),
-        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        NGTERM_VENDOR=str(tmp_path / "vendor"),
         FAKE_COMPOSITOR_HELP="old",
     )
     assert completed.returncode == 2
@@ -280,7 +280,7 @@ def test_a_run_takes_the_vendored_weston_over_an_old_one(
         stage,
         layers,
         ratchet(tmp_path, PROBE_ID),
-        AGTERM_VENDOR=str(tmp_path / "vendor"),
+        NGTERM_VENDOR=str(tmp_path / "vendor"),
         FAKE_COMPOSITOR_HELP="old",
         LAUNCH_PROBE=str(probe),
     )
@@ -419,12 +419,12 @@ def test_a_newly_passing_id_is_printed(tmp_path: Path, stage: Path, layers: Path
 
 
 def test_without_an_agterm_binary_every_test_skips(tmp_path: Path, layers: Path) -> None:
-    """Before the app crate exists: a stage without bin/agterm runs, skips everything and holds the empty ratchet."""
+    """Before the app crate exists: a stage without bin/ngterm runs, skips everything and holds the empty ratchet."""
     empty = tmp_path / "stage"
     (empty / "bin").mkdir(parents=True)
     completed, report = run(tmp_path, empty, layers, ratchet(tmp_path))
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "agterm: not staged" in report
+    assert "ngterm: not staged" in report
     assert "rust: 0 pass, 0 fail, 0 skip(unsupported), 1 skip(not-yet-at-level)" in report
 
 

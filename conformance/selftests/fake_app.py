@@ -1,4 +1,5 @@
-"""A stand-in app for adapter self-tests: serves the JSON-line protocol on `AGTERM_CONTROL_SOCKET`.
+"""A stand-in app for adapter self-tests: serves the JSON-line protocol on `AGTERM_CONTROL_SOCKET` (under the Rust
+adapter, `NGTERM_CONTROL_SOCKET`: whichever prefix the adapter set).
 
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails),
 ignore-term (serve, ignoring SIGTERM and SIGABRT, each recorded in `fake-signals`; FAKE_ABORT=exit makes SIGABRT
@@ -21,7 +22,9 @@ import threading
 import uuid
 
 mode = os.environ.get("FAKE_APP_MODE", "serve")
-state = os.environ["AGTERM_STATE_DIR"]
+# The adapter's prefix: the references' AGTERM_, the Rust build's NGTERM_.
+PREFIX = "NGTERM_" if "NGTERM_STATE_DIR" in os.environ else "AGTERM_"
+state = os.environ[PREFIX + "STATE_DIR"]
 with open(os.path.join(state, "fake-env.json"), "w") as sink:
     json.dump(dict(os.environ), sink)
 
@@ -161,10 +164,10 @@ def handle(request: dict) -> dict:
 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 # A previous run on the same state dir (a relaunch) leaves its socket file behind, as a quit app may.
 try:
-    os.unlink(os.environ["AGTERM_CONTROL_SOCKET"])
+    os.unlink(os.environ[PREFIX + "CONTROL_SOCKET"])
 except FileNotFoundError:
     pass
-listener.bind(os.environ["AGTERM_CONTROL_SOCKET"])
+listener.bind(os.environ[PREFIX + "CONTROL_SOCKET"])
 listener.listen()
 while True:
     conn, _ = listener.accept()

@@ -1,0 +1,29 @@
+[package]
+name = "ngterm-app"
+description = "ngterm's frontend-neutral app services: process launcher, process table, logging, restore launch, quick-terminal placement, agent integrations, the remote presentation process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+ngterm-core.workspace = true
+ngterm-host.workspace = true
+# the live probe's launch inputs and the process table
+ngterm-session.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+ngterm-host = { workspace = true, features = ["fakes"] }
+# a launched pane's foreground read through the process table (tests/pane_foreground.rs)
+ngterm-term.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -25,7 +25,7 @@ diff -ruN a/src/linux/window_state.rs b/src/linux/window_state.rs
 --- a/src/linux/window_state.rs
 +++ b/src/linux/window_state.rs
 @@ -0,0 +1,88 @@
-+//! A window's state as the window manager reports it (an agterm-rs patch): GPUI tracks an X11 window's
++//! A window's state as the window manager reports it (an ngterm patch): GPUI tracks an X11 window's
 +//! `_NET_WM_STATE` for itself but gives no read-back of its minimized state, which `window.list` needs, and while the
 +//! window is minimized it reads it as not maximized, though the window manager keeps it maximized, and the frame saved
 +//! for its next launch needs that. The X11 client notes both each time it reads the window's `_NET_WM_STATE` (at
@@ -159,7 +159,7 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
          let mut state = self.0.state.borrow_mut();
          state.background_appearance = background_appearance;
          state.update_transparency();
-+        // The compositor's blur behind the window, as `org_kde_kwin_blur` asks it on Wayland (an agterm-rs patch):
++        // The compositor's blur behind the window, as `org_kde_kwin_blur` asks it on Wayland (an ngterm patch):
 +        // KWin's `_KDE_NET_WM_BLUR_BEHIND_REGION`, whose empty region blurs the whole window; a compositor without
 +        // the effect ignores the property.
 +        let blur = state.atoms._KDE_NET_WM_BLUR_BEHIND_REGION;

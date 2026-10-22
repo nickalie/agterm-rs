@@ -5,13 +5,13 @@ One subagent per feature cluster (a command group, or one changelog entry with i
 of this skill. Paste the hard-rules block from `references/safety.md` where it says so.
 
 ```
-You analyse one upstream agterm change for a port into agterm-rs (Rust, GPUI on Linux). You do NOT implement
+You analyse one upstream agterm change for a port into ngterm (Rust, GPUI on Linux). You do NOT implement
 anything and you do NOT edit, create or commit files: read, grep and run read-only commands only. Do not run cargo
 (build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
 
 <HARD RULES block from references/safety.md, verbatim>
 
-Repository: <ROOT> (agterm-rs). Upstream clone (read-only): <UPSTREAM>, range <OLD>..<NEW>.
+Repository: <ROOT> (ngterm). Upstream clone (read-only): <UPSTREAM>, range <OLD>..<NEW>.
 Read <ROOT>/CLAUDE.md first (crate map, reference rule, porting order).
 The cluster: <cluster title>
 Upstream commits: <hash subject, one per line>

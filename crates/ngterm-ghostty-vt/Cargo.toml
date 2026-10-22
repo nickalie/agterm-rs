@@ -1,0 +1,16 @@
+[package]
+name = "ngterm-ghostty-vt"
+description = "Safe wrapper over libghostty-vt's official C API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+ngterm-ghostty-vt-sys.workspace = true
+base64.workspace = true
+bitflags.workspace = true
+
+[lints]
+workspace = true

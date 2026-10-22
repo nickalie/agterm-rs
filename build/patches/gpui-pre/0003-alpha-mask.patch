@@ -2,7 +2,7 @@ Coverage masks a caller rasterizes itself (GPUI patch for docs/plans/20261014-gp
 `Window::paint_alpha_mask` paints one byte of coverage per device pixel, tinted with a color as a monochrome glyph is
 (a `MonochromeSprite`), at a whole device pixel, from the sprite atlas under a new key, `AtlasKey::AlphaMask`
 (`RenderAlphaMaskParams`: the caller's name and an id it keeps unique per mask), rasterized only on an atlas miss.
-GPUI could tint only glyphs its text system rasterized and SVGs its renderer rasterized; agterm's terminal draws box
+GPUI could tint only glyphs its text system rasterized and SVGs its renderer rasterized; ngterm's terminal draws box
 drawing, block, braille, powerline and legacy computing characters procedurally, as Ghostty's sprite font does, and
 needs them pixel for pixel in the cell. Every platform atlas takes the key unchanged (they allocate by
 `AtlasKey::texture_kind`). An upstream candidate (Zed). scripts/vendor-gpui.sh applies this after 0002.

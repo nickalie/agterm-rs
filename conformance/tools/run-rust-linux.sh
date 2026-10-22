@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Rust workspace, stage it and run the protocol, cli and behaviors layers against it, then hold the
 # ratchet: every id in conformance/rust-passing.txt must still pass. The isolation is run-reference-linux.sh's:
-# every instance comes from the harness (unique AGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
+# every instance comes from the harness (unique NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
 # parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
 #
 #   conformance/tools/run-rust-linux.sh [--stage DIR] [--out DIR] [--tests DIR]
@@ -13,7 +13,7 @@
 # does: every listed id must pass, and newly passing ids come only from what ran. The red tests a build short of
 # parity has wait out their read-backs, so this is a task's routine run; a full run (the default) stays required at
 # milestones (conformance/README.md > Rust runner and ratchet).
-# The build (bin/agterm, staged into target/conformance-stage, reports in conformance/reports/rust-linux) renders
+# The build (bin/ngterm, staged into target/conformance-stage, reports in conformance/reports/rust-linux) renders
 # on Mesa's lavapipe only, from scripts/fetch-lavapipe.sh (exit 2 without one), its weston with --fake-seat.
 # --stage runs an already staged tree (scripts/stage.sh layout) instead of building and staging into target/.
 # Without the app's binary in the stage every test skips and parity reads 0%.
@@ -62,7 +62,7 @@ if [[ -z "$ratchet_only" ]] && ((${#also[@]} + ${#also_k[@]})); then
 fi
 
 # The app binary in the stage, and the defaults.
-app=agterm
+app=ngterm
 out="${out:-$repo/conformance/reports/rust-linux}"
 ratchet="${ratchet:-$repo/conformance/rust-passing.txt}"
 
@@ -111,7 +111,8 @@ fi
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
 
 # The build renders through Vulkan: on lavapipe and nothing else (the harness points VK_DRIVER_FILES at it), never on
-# this machine's GPU driver, so a missing lavapipe stops the run here. Not AGTERM_-prefixed: the plugin scrubs those.
+# this machine's GPU driver, so a missing lavapipe stops the run here. Not NGTERM_- or AGTERM_-prefixed: the plugin
+# scrubs those.
 if ! lavapipe="$("$repo/scripts/fetch-lavapipe.sh")"; then
     echo "no lavapipe for the GPUI build: see scripts/fetch-lavapipe.sh" >&2
     exit 2
@@ -164,7 +165,7 @@ if [[ -z "$stage" ]]; then
     # shellcheck source=../../scripts/lib/native.sh
     (
         cd "$repo" && source scripts/lib/native.sh && cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit
-        cargo build --release -p agterm-gpui
+        cargo build --release -p ngterm-gpui
     )
     rm -rf "$stage"
     "$repo/scripts/stage.sh" "$stage"
@@ -175,8 +176,8 @@ if [[ -x "$stage/bin/$app" ]]; then
     bin_args=(--bin "$stage/bin/$app")
 fi
 
-# A shell inside a live agterm session exports its socket and session; the plugin scrubs these too.
-while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(AGTERM_|ZMX_)' || true)
+# A shell inside a live ngterm or agterm session exports its socket and session; the plugin scrubs these too.
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' || true)
 
 mkdir -p "$out"
 rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl"
@@ -217,7 +218,7 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
         echo "- mode: full"
     fi
     echo "- suite time: ${elapsed}s"
-    if ((${#bin_args[@]})); then echo "- agterm: \`$stage/bin/$app\`"; else echo "- agterm: not staged"; fi
+    if ((${#bin_args[@]})); then echo "- ngterm: \`$stage/bin/$app\`"; else echo "- ngterm: not staged"; fi
     echo "- Vulkan: lavapipe only, \`$lavapipe\`"
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- layers: ${layers[*]#"$tests/"}"

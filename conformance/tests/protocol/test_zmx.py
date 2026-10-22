@@ -65,7 +65,7 @@ def test_list_joins_each_pane_claim(ctl):
     (row,) = [row for row in inventory["entries"] if row.get("sessionID") == sid]
     # Outside Live a pane still claims its daemon name; no daemon runs, so none is observed.
     assert_subset(row, {"pane": "left", "state": "claimed", "observation": "absent", "windowState": "open"})
-    assert row["daemon"].startswith("agterm-")
+    assert row["daemon"].startswith(ctl.vocabulary.daemon_prefix)
     assert_absent(row, "clients", "leaderPID")
 
 

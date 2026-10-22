@@ -1,4 +1,4 @@
-//! The native key behind a key event (an agterm-rs patch): what XKB said about the key GPUI turned into the
+//! The native key behind a key event (an ngterm patch): what XKB said about the key GPUI turned into the
 //! [`gpui::Keystroke`] it dispatches, which keeps neither the key's position nor the layout's unshifted character, and
 //! drops Shift from symbols. A terminal needs both for physical-key bindings and the Kitty keyboard protocol.
 //!

@@ -6,7 +6,6 @@ __pycache__/
 /build/*
 !/build/pins.env
 !/build/patches/
-!/build/themes/
 conformance/**/build/
 conformance/reports/
 target/

@@ -19,9 +19,9 @@ rows, the terminal below its prompt.
   the background and the sidebar shows it under a 0.30 black wash.
 
 The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
-finds (nothing is fetched here). It logs its terminal's first frame under the target `agterm::surface`.
+finds (nothing is fetched here). It logs its terminal's first frame under the target `ngterm::surface`.
 
---bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/agterm); the themes are read from
+--bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/ngterm); the themes are read from
 its share/ghostty/themes. --keep saves every screenshot taken there. Prints a JSON report; exits 0 when every check
 holds.
 """
@@ -45,10 +45,10 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "agterm"
+DEFAULT_BIN = REPO / "target" / "conformance-stage" / "bin" / "ngterm"
 FETCH_LAVAPIPE = REPO / "scripts" / "fetch-lavapipe.sh"
 # The harness's lavapipe variable (`impls.base.LAVAPIPE_ICD_VARIABLE`), spelled here: importing the harness scrubs every
-# AGTERM_* variable, which the script still needs, so lavapipe is found before that import.
+# NGTERM_* variable, which the script still needs, so lavapipe is found before that import.
 LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
 # The output the window is maximized into: smaller than the suite's, so a screenshot decodes quickly in pure Python.
 OUTPUT_SIZE = (1280, 800)
@@ -59,7 +59,7 @@ CHANGED_THEME = "Builtin Light"
 CURSOR = (0xFF, 0x00, 0xFF)
 DARKER_5 = 10  # the Settings tint slider at Darker 5: a 0.30 black wash
 TOLERANCE = 2  # per channel, for the compositor's rounding
-LOG_FILTER = "info,agterm::surface=debug"
+LOG_FILTER = "info,ngterm::surface=debug"
 DREW = "terminal drew its first frame"
 POLL = 0.1
 
@@ -198,7 +198,7 @@ def contains(image: Image, box: Box, color: Rgb) -> bool:
 
 
 def washed(color: Rgb, white: bool, opacity: float) -> Rgb:
-    """`color` under a white or black wash at `opacity` (`agterm_core::chrome::Rgb::washed`)."""
+    """`color` under a white or black wash at `opacity` (`ngterm_core::chrome::Rgb::washed`)."""
     added = 255 * opacity if white else 0
     return tuple(min(255, max(0, round(channel * (1 - opacity) + added))) for channel in color)  # type: ignore[return-value]
 
@@ -352,7 +352,7 @@ def make_adapter(bin: Path) -> Any:
 
         def platform_env(self, env: dict[str, str]) -> None:
             super().platform_env(env)
-            env["AGTERM_LOG"] = LOG_FILTER
+            env[RustAdapter.variable("LOG")] = LOG_FILTER
 
         def ghostty_config(self) -> str:
             return super().ghostty_config() + f"cursor-color = {hex_rgb(CURSOR)}\ncursor-style-blink = false\n"
@@ -378,7 +378,7 @@ def probe(bin: Path, timeout: float, keep: Path | None) -> dict[str, Any]:
         return {**report, "ok": False, "error": f"lavapipe: {problem}"}
     os.environ[LAVAPIPE_ICD_VARIABLE] = icd
     if not bin.is_file():
-        return {**report, "ok": False, "error": f"no agterm at {bin}"}
+        return {**report, "ok": False, "error": f"no ngterm at {bin}"}
     try:
         background = theme_background(themes, THEME)
         changed = theme_background(themes, CHANGED_THEME)

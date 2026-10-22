@@ -1,4 +1,4 @@
-agterm-rs: the formatter writes skipped cells unstyled (upstream agterm's zmx Ghostty patch, rebased onto
+ngterm: the formatter writes skipped cells unstyled (upstream agterm's zmx Ghostty patch, rebased onto
 LIBGHOSTTY_VT_REV)
 
 From upstream agterm v0.36.0 (https://github.com/umputun/agterm, MIT): scripts/zmx-patches/ghostty/
@@ -11,7 +11,7 @@ before it is buffered as a blank, so the spaces it becomes are written unstyled,
 previous cell's style and a gap after a colored run came back painted. Cells the program wrote, spaces included, keep
 their style; plain output is unchanged. The pin's fast cell-run path buffers blanks only under the default style, so
 it needs no change. Every styled (VT, HTML) formatter output takes it: the session server's snapshot as zmx's did,
-and agterm's own copy and write-file actions.
+and ngterm's own copy and write-file actions.
 
 Applied by scripts/build-ghostty-vt.sh. No header changes.
 

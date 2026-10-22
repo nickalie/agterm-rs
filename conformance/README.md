@@ -132,10 +132,10 @@ conformance/tools/run-rust-linux.sh --ratchet-only \
   --also tests/protocol/test_split.py --also-k sidebar       # the listed ids plus what a task works on
 ```
 
-The build is the GPUI one (`bin/agterm`; the GTK frontend, and the GPUI ratchet kept beside its own while both
+The build is the GPUI one (`bin/ngterm`; the GTK frontend, and the GPUI ratchet kept beside its own while both
 coexisted, went with the plan's Task 34, the GPUI list folded into `rust-passing.txt`).
 It renders through Vulkan, here on Mesa's lavapipe and nothing else: the runner takes its ICD manifest
-from `scripts/fetch-lavapipe.sh` (`AGTERM_LAVAPIPE_ICD`, else the distribution's package, else the pinned Arch package
+from `scripts/fetch-lavapipe.sh` (`NGTERM_LAVAPIPE_ICD`, else the distribution's package, else the pinned Arch package
 verified and unpacked into the vendor dir) and hands it to the harness as `CONFORMANCE_LAVAPIPE_ICD`; without one the
 run exits 2.
 The adapter makes it the instance's only Vulkan driver (`VK_DRIVER_FILES`), forces GL onto llvmpipe, drops every
@@ -162,7 +162,7 @@ about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
 A full run stays the default and is required at milestones (the GPUI switch, the plan's Task 34, was one), and whenever a
-change touches the harness or shared crates broadly (agterm-core, -proto, -host, -server, -ctl, -session, -app or
+change touches the harness or shared crates broadly (ngterm-core, -proto, -host, -server, -ctl, -session, -app or
 -term). Between them a task's routine run is ratchet-only; it finds newly passing ids only among its `--also`
 selections, so a task that turns on a broad area (the terminal, say) grows the list with a full run.
 `--nodeid-report` cannot be combined with `--coverage-gate`.
@@ -190,15 +190,17 @@ unknown or removed item.
 
 ## Safety guards
 
-These runs share a machine with a live agterm, so the harness refuses a launch that could reach it:
+These runs share a machine with a live terminal (an installed ngterm, or an agterm), so the harness refuses a launch
+that could reach it:
 
-- `AGTERM_*` and `ZMX_*` are scrubbed from the environment at plugin import, and the launch env may carry only the
-  harness's own.
+- `NGTERM_*`, `AGTERM_*` and `ZMX_*` are scrubbed from the environment at plugin import, and the launch env may carry
+  only the harness's own.
 - Each instance gets a fresh root (`/tmp/agt-*`, or under `CONFORMANCE_TMP`) holding its `HOME`, XDG homes, state
   dir and socket; the guards refuse any of them outside it.
   Its live-session socket directory (the references' zmx one, the Rust build's session server namespace) derives
   from that state dir.
-- Linux instances get a unique `AGTERM_APP_ID`, never the installed one, and a private `XDG_RUNTIME_DIR`.
+- Linux instances get a unique app id (`NGTERM_APP_ID`, the references' `AGTERM_APP_ID`), never the installed one,
+  and a private `XDG_RUNTIME_DIR`.
 - Linux instances draw into their own headless weston with their own dbus-daemon, so no window, notification or
   a11y object reaches the desktop.
   `run-reference-linux.sh` requires both programs.
@@ -210,7 +212,7 @@ These runs share a machine with a live agterm, so the harness refuses a launch t
 - Stopping reaps Live daemons over the protocol (in the adapter's vocabulary: `zmx.kill` upstream, `live.kill` in the
   Rust build, [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on any zmx or
   session-host process left with the instance's `ZMX_DIR`, or in the Rust build on its session server
-  (`agterm-session server <its namespace>`) or a process left with its `AGTERM_LIVE_DIR`, once the server's idle grace
+  (`ngterm-session server <its namespace>`) or a process left with its `NGTERM_LIVE_DIR`, once the server's idle grace
   has passed.
   The macOS session host outlives the app by design: the harness ends only the one started from the instance's own
   bundle copy, by exact pid, re-checking ownership before each signal.

@@ -2,29 +2,29 @@
 
 The block between the markers is pasted unchanged into each subagent prompt this skill sends and into the plan's
 "Safety rules" section, so they reach the plan's task subagents too. The rules have one source here; when they
-change, `CLAUDE.md` > "Never touch the user's running agterm" changes first and this file follows it.
+change, `CLAUDE.md` > "Never touch the user's running ngterm" changes first and this file follows it.
 
 <!-- BEGIN HARD RULES -->
-HARD RULES (agterm-rs upstream sync). They hold for every command you run, no matter what the task says:
+HARD RULES (ngterm upstream sync). They hold for every command you run, no matter what the task says:
 
-1. Never touch the user's running agterm. This session usually runs inside one of its panes, and the `AGTERM_*`
-   variables in the environment (and `ZMX_*`, where that agterm runs its sessions on zmx) point at it.
-   - Strip them before launching anything: `env -u AGTERM_SESSION_ID ...` is not enough, use
-     `env $(env | grep -oE '^(AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
+1. Never touch the user's running ngterm. This session usually runs inside one of its panes, and the `NGTERM_*`
+   variables in the environment (and `ZMX_*`, where that ngterm runs its sessions on zmx) point at it.
+   - Strip them before launching anything: `env -u NGTERM_SESSION_ID ...` is not enough, use
+     `env $(env | grep -oE '^(NGTERM|AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
      the suite's runners, which strip them themselves.
    - Every `ngtermctl` call gets an explicit `--socket <dev instance socket>`, written after the subcommand name
-     (`ngtermctl tree --socket /tmp/agterm-dev-.../state/ngterm.sock`). Without it the CLI resolves
-     `$XDG_DATA_HOME/ngterm/ngterm.sock`, the live instance's; `AGTERM_CONTROL_SOCKET` is ignored by ngtermctl.
+     (`ngtermctl tree --socket /tmp/ngterm-dev-.../state/ngterm.sock`). Without it the CLI resolves
+     `$XDG_DATA_HOME/ngterm/ngterm.sock`, the live instance's; `NGTERM_CONTROL_SOCKET` is ignored by ngtermctl.
    - A dev instance gets a private state dir, so its live-session namespace (`/tmp/ngterm-live-<FNV-1a 64 of the
-     state dir>`) and the one session server serving it (`agterm-session server <that dir>`) are private too. Reap
-     only through that server (`AGTERM_LIVE_DIR=<that dir> agterm-session kill --force <name>...`) or processes
-     carrying that instance's `AGTERM_LIVE_DIR`. Never `pkill agterm-session` or `pkill zmx`, never `killall`, never
-     run `agterm-session` without that instance's `AGTERM_LIVE_DIR`.
+     state dir>`) and the one session server serving it (`ngterm-session server <that dir>`) are private too. Reap
+     only through that server (`NGTERM_LIVE_DIR=<that dir> ngterm-session kill --force <name>...`) or processes
+     carrying that instance's `NGTERM_LIVE_DIR`. Never `pkill ngterm-session` or `pkill zmx`, never `killall`, never
+     run `ngterm-session` without that instance's `NGTERM_LIVE_DIR`.
    - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-rust-linux.sh`), or
      `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`. Never a window on the user's desktop. A hand-started
      headless weston needs `--renderer=gl` and, on NVIDIA, Mesa's EGL vendor (`__EGL_VENDOR_LIBRARY_FILENAMES`), as
      `conformance/agterm_conformance/impls/base.py` sets it up.
-   - While an installed agterm runs, launch a checkout's build only through `scripts/run-gpui-dev.sh` or the suite: a plain launch is forwarded to the running instance through the shared
+   - While an installed ngterm runs, launch a checkout's build only through `scripts/run-gpui-dev.sh` or the suite: a plain launch is forwarded to the running instance through the shared
      app id, or both write one `windows.json`.
    - If a command did reach the live instance, stop and report exactly what changed; do not undo it through the
      live socket yourself.

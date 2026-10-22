@@ -1,0 +1,44 @@
+[package]
+name = "ngterm-wpe"
+description = "WPE WebKit host: offscreen web views on an engine thread of their own, frames out as dmabuf or SHM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+# no library of its own: the key that hands dependents' build scripts the library directories (DEP_NGTERM_WPE_LIBDIRS)
+links = "ngterm-wpe"
+
+[dependencies]
+ngterm-wpe-sys.workspace = true
+ngterm-wpe-platform-sys.workspace = true
+ngterm-wpe-javascriptcore-sys.workspace = true
+async-channel.workspace = true
+# `serde`: the worker's messages carry the input's modifiers and the pages' settings
+bitflags = { workspace = true, features = ["serde"] }
+gio.workspace = true
+glib.workspace = true
+libc.workspace = true
+# the worker's transport (`worker`): a SOCK_SEQPACKET pair, descriptors passed with SCM_RIGHTS, sealed memfds, polls
+rustix = { workspace = true, features = ["event", "fs", "net"] }
+# the worker's messages, as JSON
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[build-dependencies]
+pkg-config.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# One engine per process (WebKit binds its main run loop to the first thread that uses it), so the engine tests run
+# in processes of their own, which this harness starts (tests/headless/main.rs).
+[[test]]
+name = "headless"
+path = "tests/headless/main.rs"
+harness = false
+
+[lints]
+workspace = true

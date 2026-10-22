@@ -1,6 +1,6 @@
 ---
 worth: yes
-where: crates/agterm-session/src/process_table/mod.rs:72
+where: crates/ngterm-session/src/process_table/mod.rs:72
 added: 2026-10-20
 ---
 # Windows' console foreground can name a background child, which restore then replays

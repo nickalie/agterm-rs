@@ -4,13 +4,13 @@
 #
 #   pins-delta.sh [--upstream DIR] OLD_TAG NEW_TAG
 #
-# ZMX_REV (with its date comment): upstream's zmx, which this build does not run. agterm-session carries what the app
+# ZMX_REV (with its date comment): upstream's zmx, which this build does not run. ngterm-session carries what the app
 # relies on of it (the attach contract, the snapshot, upstream's explicit leadership patch), so a move, and a change
 # to upstream's scripts/zmx-patches/ between the tags (listed by file), is a plan task porting the behavior it changes
-# into agterm-session under `live.*` and the attach contract; the script prints zmx's compare URL for it. A change to
+# into ngterm-session under `live.*` and the attach contract; the script prints zmx's compare URL for it. A change to
 # zmx-patches/ghostty/ is a change to the libghostty-vt patch taken from it (build/patches/ghostty-vt/README.md).
 #
-# Upstream's GHOSTTY_REV is reported too, never pinned: agterm-rs pins its own Ghostty (LIBGHOSTTY_VT_REV, ghostty
+# Upstream's GHOSTTY_REV is reported too, never pinned: ngterm pins its own Ghostty (LIBGHOSTTY_VT_REV, ghostty
 # main, for libghostty-vt's C API and the resources), so a move upstream is a note to review the Ghostty-level changes
 # between the two revisions, and a LIBGHOSTTY_VT_REV bump is a change of its own.
 #
@@ -48,7 +48,7 @@ for name in ZMX_REV GHOSTTY_REV; do
   case "$name" in
     ZMX_REV)
       repo="$(value "$setup_new" ZMX_REPO)"
-      echo "# zmx moved: port what it changes into agterm-session" \
+      echo "# zmx moved: port what it changes into ngterm-session" \
         "(${repo:-https://github.com/neurosnap/zmx}/compare/$rev_old...$rev_new)"
       ;;
     GHOSTTY_REV)

@@ -27,7 +27,11 @@ if TYPE_CHECKING:
 IMPLS = ("swift-macos", "swift-linux", "rust")
 # A rust run without a binary is legal: the adapter reports nothing and every test skips.
 BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
-SCRUB_PREFIXES = ("AGTERM_", "ZMX_")
+# The prefixes of the implementations' own variables: upstream's and the fork's, and the Rust build's (ngterm).
+UPSTREAM_PREFIX = "AGTERM_"
+RUST_PREFIX = "NGTERM_"
+# Every variable a live terminal hands its shells: either app's own, and zmx's.
+SCRUB_PREFIXES = (UPSTREAM_PREFIX, RUST_PREFIX, "ZMX_")
 IMPL_FIXTURE = "impl_options"
 UI_FIXTURES = frozenset({"ui", "ui_for"})
 # Skip reasons start with these, so the summary can tell a divergence from a missing feature.
@@ -57,8 +61,8 @@ def scrub_environ(environ: MutableMapping[str, str]) -> list[str]:
     return removed
 
 
-# At import, before any hook runs: a run started inside a live agterm shell must not hand its
-# AGTERM_SOCKET / AGTERM_SESSION_ID / ZMX_DIR to anything this process spawns.
+# At import, before any hook runs: a run started inside a live ngterm or agterm shell must not hand its
+# NGTERM_SOCKET / AGTERM_SESSION_ID / ZMX_DIR to anything this process spawns.
 SCRUBBED = scrub_environ(os.environ)
 
 
@@ -696,19 +700,19 @@ class Cli:
     ) -> CliResult:
         """Without `--socket`: for the local-only subcommands, which refuse it, and for socket resolution itself.
 
-        `env` (default: the instance's) must point `AGTERM_STATE_DIR` under the instance root, so even a command
-        that did open a socket would resolve one there, never the user's. Without it the caller names the platform
-        default that `env` resolves to as `default_socket`, which must lie under the root too.
+        `env` (default: the instance's) must point the state directory variable (`AGTERM_STATE_DIR`, the Rust build's
+        `NGTERM_STATE_DIR`) under the instance root, so even a command that did open a socket would resolve one there,
+        never the user's. Without it the caller names the platform default that `env` resolves to as
+        `default_socket`, which must lie under the root too.
         """
         env = dict(self.instance.env if env is None else env)
-        if state_dir := env.get("AGTERM_STATE_DIR"):
+        variable = self.instance.variable("STATE_DIR")
+        if state_dir := env.get(variable):
             check_under_root(state_dir, self.instance.root)
         elif default_socket is not None:
             check_under_root(default_socket, self.instance.root)
         else:
-            raise SocketOutsideRoot(
-                f"refusing {self.program} without --socket: no AGTERM_STATE_DIR and no checked default"
-            )
+            raise SocketOutsideRoot(f"refusing {self.program} without --socket: no {variable} and no checked default")
         return self._run([os.fspath(self.ctl_path), *args], env, input, timeout)
 
     def spawn(self, *args: str, input: str | None = None, interactive: bool = False) -> CliProcess:

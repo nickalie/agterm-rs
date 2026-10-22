@@ -110,271 +110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agterm-app"
-version = "0.1.0"
-dependencies = [
- "agterm-core",
- "agterm-host",
- "agterm-session",
- "agterm-term",
- "libc",
- "serde_json",
- "tempfile",
- "toml 1.1.8+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "agterm-core"
-version = "0.1.0"
-dependencies = [
- "agterm-host",
- "agterm-proto",
- "bitflags 2.13.2",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "strum 0.27.2",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "unicase",
- "unicode-normalization",
- "url",
- "uuid",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "agterm-ctl"
-version = "0.1.0"
-dependencies = [
- "agterm-core",
- "agterm-host",
- "agterm-proto",
- "agterm-server",
- "base64 0.23.1",
- "clap",
- "libc",
- "serde_json",
- "serde_norway",
- "strum 0.27.2",
- "tempfile",
-]
-
-[[package]]
-name = "agterm-ghostty-vt"
-version = "0.1.0"
-dependencies = [
- "agterm-ghostty-vt-sys",
- "base64 0.23.1",
- "bitflags 2.13.2",
-]
-
-[[package]]
-name = "agterm-ghostty-vt-sys"
-version = "0.1.0"
-dependencies = [
- "tempfile",
-]
-
-[[package]]
-name = "agterm-gpui"
-version = "0.1.0"
-dependencies = [
- "agterm-app",
- "agterm-core",
- "agterm-host",
- "agterm-proto",
- "agterm-server",
- "agterm-session",
- "agterm-term",
- "agterm-wpe",
- "ashpd",
- "async-channel",
- "cosmic-text",
- "fancy-regex",
- "futures-util",
- "gio",
- "gpui-kit",
- "gpui-pre-linux",
- "gpui-pre-wgpu",
- "image",
- "libc",
- "netlink-packet-core",
- "netlink-packet-route",
- "netlink-sys",
- "notify",
- "png 0.18.1",
- "raw-window-handle",
- "serde",
- "serde_json",
- "signal-hook",
- "tempfile",
- "thiserror 2.0.20",
- "tiny-skia 0.12.0",
- "tracing",
- "url",
- "uuid",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "x11rb",
- "zbus",
-]
-
-[[package]]
-name = "agterm-host"
-version = "0.1.0"
-
-[[package]]
-name = "agterm-proto"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_norway",
- "serde_with",
- "strum 0.27.2",
-]
-
-[[package]]
-name = "agterm-pty"
-version = "0.1.0"
-dependencies = [
- "libc",
- "portable-pty",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "agterm-server"
-version = "0.1.0"
-dependencies = [
- "agterm-core",
- "agterm-host",
- "agterm-proto",
- "libc",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
-name = "agterm-session"
-version = "0.1.0"
-dependencies = [
- "agterm-core",
- "agterm-ghostty-vt",
- "agterm-host",
- "agterm-proto",
- "agterm-pty",
- "base64 0.23.1",
- "interprocess",
- "libc",
- "postcard",
- "rustix",
- "serde",
- "serde_json",
- "signal-hook",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "uuid",
- "widestring",
- "windows-sys 0.61.2",
- "wmi",
-]
-
-[[package]]
-name = "agterm-term"
-version = "0.1.0"
-dependencies = [
- "agterm-core",
- "agterm-ghostty-vt",
- "agterm-host",
- "agterm-pty",
- "agterm-session",
- "base64 0.23.1",
- "bitflags 2.13.2",
- "libc",
- "png 0.18.1",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
- "uuid",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "agterm-wpe"
-version = "0.1.0"
-dependencies = [
- "agterm-wpe-javascriptcore-sys",
- "agterm-wpe-platform-sys",
- "agterm-wpe-sys",
- "async-channel",
- "bitflags 2.13.2",
- "gio",
- "glib",
- "libc",
- "pkg-config",
- "rustix",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
-name = "agterm-wpe-javascriptcore-sys"
-version = "0.1.0"
-dependencies = [
- "glib-sys",
- "gobject-sys",
- "libc",
- "shell-words",
- "system-deps 9.0.0",
- "tempfile",
-]
-
-[[package]]
-name = "agterm-wpe-platform-sys"
-version = "0.1.0"
-dependencies = [
- "gio-sys",
- "glib-sys",
- "gobject-sys",
- "libc",
- "shell-words",
- "system-deps 9.0.0",
- "tempfile",
-]
-
-[[package]]
-name = "agterm-wpe-sys"
-version = "0.1.0"
-dependencies = [
- "agterm-wpe-javascriptcore-sys",
- "agterm-wpe-platform-sys",
- "gio-sys",
- "glib-sys",
- "gobject-sys",
- "libc",
- "shell-words",
- "soup3-sys",
- "system-deps 9.0.0",
- "tempfile",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4792,6 +4527,271 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "ngterm-app"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ngterm-core",
+ "ngterm-host",
+ "ngterm-session",
+ "ngterm-term",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "ngterm-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.2",
+ "ngterm-host",
+ "ngterm-proto",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "unicase",
+ "unicode-normalization",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ngterm-ctl"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "clap",
+ "libc",
+ "ngterm-core",
+ "ngterm-host",
+ "ngterm-proto",
+ "ngterm-server",
+ "serde_json",
+ "serde_norway",
+ "strum 0.27.2",
+ "tempfile",
+]
+
+[[package]]
+name = "ngterm-ghostty-vt"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bitflags 2.13.2",
+ "ngterm-ghostty-vt-sys",
+]
+
+[[package]]
+name = "ngterm-ghostty-vt-sys"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "ngterm-gpui"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "async-channel",
+ "cosmic-text",
+ "fancy-regex",
+ "futures-util",
+ "gio",
+ "gpui-kit",
+ "gpui-pre-linux",
+ "gpui-pre-wgpu",
+ "image",
+ "libc",
+ "netlink-packet-core",
+ "netlink-packet-route",
+ "netlink-sys",
+ "ngterm-app",
+ "ngterm-core",
+ "ngterm-host",
+ "ngterm-proto",
+ "ngterm-server",
+ "ngterm-session",
+ "ngterm-term",
+ "ngterm-wpe",
+ "notify",
+ "png 0.18.1",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tiny-skia 0.12.0",
+ "tracing",
+ "url",
+ "uuid",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
+name = "ngterm-host"
+version = "0.1.0"
+
+[[package]]
+name = "ngterm-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_with",
+ "strum 0.27.2",
+]
+
+[[package]]
+name = "ngterm-pty"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "portable-pty",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ngterm-server"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ngterm-core",
+ "ngterm-host",
+ "ngterm-proto",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "ngterm-session"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "interprocess",
+ "libc",
+ "ngterm-core",
+ "ngterm-ghostty-vt",
+ "ngterm-host",
+ "ngterm-proto",
+ "ngterm-pty",
+ "postcard",
+ "rustix",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "uuid",
+ "widestring",
+ "windows-sys 0.61.2",
+ "wmi",
+]
+
+[[package]]
+name = "ngterm-term"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bitflags 2.13.2",
+ "libc",
+ "ngterm-core",
+ "ngterm-ghostty-vt",
+ "ngterm-host",
+ "ngterm-pty",
+ "ngterm-session",
+ "png 0.18.1",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ngterm-wpe"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "bitflags 2.13.2",
+ "gio",
+ "glib",
+ "libc",
+ "ngterm-wpe-javascriptcore-sys",
+ "ngterm-wpe-platform-sys",
+ "ngterm-wpe-sys",
+ "pkg-config",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "ngterm-wpe-javascriptcore-sys"
+version = "0.1.0"
+dependencies = [
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "shell-words",
+ "system-deps 9.0.0",
+ "tempfile",
+]
+
+[[package]]
+name = "ngterm-wpe-platform-sys"
+version = "0.1.0"
+dependencies = [
+ "gio-sys",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "shell-words",
+ "system-deps 9.0.0",
+ "tempfile",
+]
+
+[[package]]
+name = "ngterm-wpe-sys"
+version = "0.1.0"
+dependencies = [
+ "gio-sys",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "ngterm-wpe-javascriptcore-sys",
+ "ngterm-wpe-platform-sys",
+ "shell-words",
+ "soup3-sys",
+ "system-deps 9.0.0",
+ "tempfile",
+]
 
 [[package]]
 name = "nix"

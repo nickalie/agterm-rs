@@ -1,7 +1,7 @@
-agterm-rs — third-party notices
+ngterm — third-party notices
 ===============================
 
-agterm-rs is licensed under the MIT License (each crate's `license` in Cargo.toml). Parts of it are derived from
+ngterm is licensed under the MIT License (each crate's `license` in Cargo.toml). Parts of it are derived from
 the projects below, under their licenses, whose notices must accompany the code. Each derived module names its
 source in its module docs.
 
@@ -11,7 +11,7 @@ Ghostty
 
 https://github.com/ghostty-org/ghostty
 
-agterm links libghostty-vt, Ghostty's VT library, built from Ghostty's source at the revision `build/pins.env` pins
+ngterm links libghostty-vt, Ghostty's VT library, built from Ghostty's source at the revision `build/pins.env` pins
 as `LIBGHOSTTY_VT_REV`. Modules that port Ghostty's code cite the Ghostty file and revision they follow.
 
 MIT License
@@ -42,7 +42,7 @@ X.Org rgb.txt
 
 https://gitlab.freedesktop.org/xorg/app/rgb
 
-`agterm-core`'s X11 color names (`src/ghostty_config/keys.rs`, which `scripts/gen-ghostty-config-keys.sh` generates
+`ngterm-core`'s X11 color names (`src/ghostty_config/keys.rs`, which `scripts/gen-ghostty-config-keys.sh` generates
 from Ghostty's `src/terminal/res/rgb.txt`) are X.Org's `rgb.txt` as Ghostty ships it, under the license of X.Org's
 `app/rgb`:
 
@@ -76,12 +76,12 @@ herdr
 
 https://github.com/herdrdev/herdr
 
-`agterm-session`'s live-session server (its server lifecycle, wire framing, local endpoint, client transport, PTY
-actor, update handoff and per-OS process code), `agterm-pty`'s PTY spawn and PTY actor, `agterm-ghostty-vt-sys`'s
+`ngterm-session`'s live-session server (its server lifecycle, wire framing, local endpoint, client transport, PTY
+actor, update handoff and per-OS process code), `ngterm-pty`'s PTY spawn and PTY actor, `ngterm-ghostty-vt-sys`'s
 Zig build of libghostty-vt (`zig_build.rs`), two of its libghostty-vt patches (`build/patches/ghostty-vt/0002` and
 `0003`, whose README.md names herdr's originals) and four portable-pty patches (`build/patches/portable-pty/0001`
 to `0003` and `0006`, each naming its herdr original) are taken from herdr at the commit `build/pins.env` pins as `HERDR_REV`, then trimmed to what
-agterm uses and reworked. herdr's files carry no license header and herdr ships no
+ngterm uses and reworked. herdr's files carry no license header and herdr ships no
 NOTICE file, so each derived file states in its header the herdr source file it was taken from, that it is licensed
 under the Apache License 2.0, and that it was modified. herdr's license follows.
 
@@ -293,11 +293,11 @@ zmx
 
 https://github.com/neurosnap/zmx
 
-`agterm-session`'s test of whether a client's input is typing (`server/lead.rs` `is_user_input`, which decides when
+`ngterm-session`'s test of whether a client's input is typing (`server/lead.rs` `is_user_input`, which decides when
 an unmanaged client takes a session's lead) is ported from zmx's `isUserInput` and `parseKittyCsiU` (`src/util.zig`),
 and its attach snapshot (`server/snapshot.rs`) from zmx's `serializeTerminalState`, `writeColorOverrides` and
-`writePwd` (`src/util.zig`), at the commit `8bab1f0173b07e79835ea372d749af3dbf0d0842`, the one agterm's live sessions
-ran on before `agterm-session` replaced them. zmx's license follows.
+`writePwd` (`src/util.zig`), at the commit `8bab1f0173b07e79835ea372d749af3dbf0d0842`, the one ngterm's live sessions
+ran on before `ngterm-session` replaced them. zmx's license follows.
 
 MIT License
 

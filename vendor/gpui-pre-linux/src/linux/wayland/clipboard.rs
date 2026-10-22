@@ -30,7 +30,7 @@ pub(crate) struct Clipboard {
     // Internal clipboard
     contents: Option<ClipboardItem>,
     primary_contents: Option<ClipboardItem>,
-    // The HTML offered with them (agterm-rs: `with_clipboard_html`)
+    // The HTML offered with them (ngterm: `with_clipboard_html`)
     html: Option<ClipboardHtml>,
     primary_html: Option<ClipboardHtml>,
 

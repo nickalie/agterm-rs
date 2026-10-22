@@ -1,4 +1,4 @@
-agterm-rs: Kitty placement-id namespaces and relative placements' parent links in the C API
+ngterm: Kitty placement-id namespaces and relative placements' parent links in the C API
 
 The C API at LIBGHOSTTY_VT_REV (and at ghostty main on 2026-10-17: kitty_graphics.h is byte-identical) reports a
 placement's id without its namespace and a relative placement (P=/Q=) without its parent, so an embedder cannot draw

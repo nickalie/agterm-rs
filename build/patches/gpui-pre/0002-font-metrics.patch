@@ -1,7 +1,7 @@
 A public accessor for a face's whole metrics (GPUI patch for docs/plans/20261014-gpui-frontend.md Task 15):
 `TextSystem::font_metrics` returns the `FontMetrics` the platform text system read, in font units, so a caller gets
 the line gap and the underline's position and thickness, which `TextSystem` measured but never exposed (it had
-`ascent`, `descent`, `cap_height`, `x_height` only). agterm's terminal sizes its cells and its box-drawing lines from
+`ascent`, `descent`, `cap_height`, `x_height` only). ngterm's terminal sizes its cells and its box-drawing lines from
 them, as Ghostty does. An upstream candidate (Zed): read-only, no behavior change. scripts/vendor-gpui.sh applies
 this after 0001.
 

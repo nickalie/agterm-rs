@@ -5,7 +5,7 @@
     coverage-map.py KEY [KEY ...]                # covers keys: `session.hud`, `field:tree.linkOpenMode`, `cli:x y`
     coverage-map.py --grep REGEX                 # every covers key matching REGEX (e.g. '^session\\.hud|hud')
 
-Run it from the agterm-rs checkout with the suite's venv (`.venv/bin/python`, which has PyYAML). For each key it
+Run it from the ngterm checkout with the suite's venv (`.venv/bin/python`, which has PyYAML). For each key it
 prints the test functions whose `@pytest.mark.covers(...)` names it (read with `ast`, nothing is imported or run),
 how many of their node ids `conformance/rust-passing.txt` lists, and whether `exemptions` excuses the key. A key
 with no test and no exemption is what the coverage gate will fail on.

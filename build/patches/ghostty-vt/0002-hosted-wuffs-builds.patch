@@ -1,4 +1,4 @@
-agterm-rs: hosted Wuffs builds (herdr's libghostty-vt patch 0004, rebased onto LIBGHOSTTY_VT_REV)
+ngterm: hosted Wuffs builds (herdr's libghostty-vt patch 0004, rebased onto LIBGHOSTTY_VT_REV)
 
 From herdr (https://github.com/herdrdev/herdr, HERDR_REV 143bf5f, Apache-2.0):
 vendor/patches/libghostty-vt/0004-fix-hosted-wuffs-builds.patch, modified: its paths rebased off

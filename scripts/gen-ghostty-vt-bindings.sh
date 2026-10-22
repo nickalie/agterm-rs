@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Regenerate the checked-in crates/agterm-ghostty-vt-sys/src/bindings.rs from the vendored prefix's ghostty/vt.h (its
+# Regenerate the checked-in crates/ngterm-ghostty-vt-sys/src/bindings.rs from the vendored prefix's ghostty/vt.h (its
 # include/, copied from the patched tree by scripts/build-ghostty-vt.sh).
 # Run after a LIBGHOSTTY_VT_REV or build/patches/ghostty-vt change (scripts/build-ghostty-vt.sh first), then review the
 # diff: the vt API is still moving, so a pin bump is a change of its own.
-# Only the parts of the C API agterm-ghostty-vt binds are generated: the function families below and the types they
+# Only the parts of the C API ngterm-ghostty-vt binds are generated: the function families below and the types they
 # reach, plus the option, data and callback types their untyped `void*` values carry and the integer `#define`
 # constants those values take (bindgen emits no `#define` without an allowlist). The output keeps bindgen's
 # compile-time layout assertions (size, alignment and field offsets of every struct), so a target whose C layout
@@ -19,7 +19,7 @@ if [[ "${1:-}" == --check ]]; then
   shift
 fi
 HEADER="${1:-$("$ROOT/scripts/build-ghostty-vt.sh" --print-prefix)/include/ghostty/vt.h}"
-BINDINGS="$ROOT/crates/agterm-ghostty-vt-sys/src/bindings.rs"
+BINDINGS="$ROOT/crates/ngterm-ghostty-vt-sys/src/bindings.rs"
 [[ -s "$HEADER" ]] || { echo "no ghostty/vt.h at $HEADER: run scripts/build-ghostty-vt.sh" >&2; exit 1; }
 command -v bindgen >/dev/null || { echo "bindgen is required (cargo install bindgen-cli)" >&2; exit 1; }
 

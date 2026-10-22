@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Regenerate the checked-in crates/agterm-core/src/ghostty_config/keys.rs from ghostty's src/config/Config.zig at the
-# LIBGHOSTTY_VT_REV of build/pins.env (the Ghostty agterm's terminal and its config diagnostics follow): every config
+# Regenerate the checked-in crates/ngterm-core/src/ghostty_config/keys.rs from ghostty's src/config/Config.zig at the
+# LIBGHOSTTY_VT_REV of build/pins.env (the Ghostty ngterm's terminal and its config diagnostics follow): every config
 # key with its value kind, the compatibility handlers of renamed and removed keys, and the X11 color names. Run after a
 # LIBGHOSTTY_VT_REV bump, then review the diff: the script fails on a field type or handler shape it does not know, so
-# a new kind of value is decided in agterm-core's validate.rs, not guessed here.
+# a new kind of value is decided in ngterm-core's validate.rs, not guessed here.
 #
 # Usage: scripts/gen-ghostty-config-keys.sh [SOURCE]   (SOURCE: an unpacked ghostty source tree at LIBGHOSTTY_VT_REV;
 #                                                       default: the archive of LIBGHOSTTY_VT_REV, fetched and verified)
@@ -12,7 +12,7 @@ set -euo pipefail
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
 
-OUT="$NATIVE_ROOT/crates/agterm-core/src/ghostty_config/keys.rs"
+OUT="$NATIVE_ROOT/crates/ngterm-core/src/ghostty_config/keys.rs"
 SOURCE="${1:-}"
 if [[ -z "$SOURCE" ]]; then
   mkdir -p "$VENDOR_ROOT"
