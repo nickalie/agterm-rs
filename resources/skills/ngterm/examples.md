@@ -137,6 +137,15 @@ safely-interpolated values (a UUID-shaped session id) belong in it.
 
 ## Keep a forking agent session reattaching across restarts (a SessionStart hook)
 
+ngterm already does this for Claude Code and Codex: Help ▸ Install Agent Status Hooks installs a restore adapter
+(`~/.config/ngterm/agent-status/ngterm-agent-restore.sh`) on their `SessionStart` and `SessionEnd` hooks. On every
+start it pins `claude --resume <id> || claude` (or `codex --no-daemon resume <id> || codex --no-daemon`) for the
+pane, so after /clear, /resume or a fork the next restart reattaches to the conversation the pane was in last; a
+deliberate exit (`/exit`, `/quit`) clears the pin, and an ngterm quit keeps it. It skips `claude -p`, SDK runs,
+subagents, `codex exec`, and a codex on the shared app-server daemon, whose hooks cannot see the pane (run
+`codex --no-daemon` to have Codex pin). Do not write the hook below by hand for those two agents: a second hook
+pinning the same pane fights the adapter. Write it for another agent or another line.
+
 `claude --resume <id> --fork-session` mints a NEW claude session on every ngterm restart, so restoring it
 verbatim never reattaches the session you were in. Fix it by rewriting the override to the LIVE session id
 on every start, from a Claude Code `SessionStart` hook — it runs inside the session's shell, where

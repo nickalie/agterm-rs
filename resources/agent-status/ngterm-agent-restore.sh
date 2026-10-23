@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# ngterm-agent-restore — keep a pane's restore pin on the agent conversation it is in.
+#
+#   ngterm-agent-restore.sh claude start   # Claude Code SessionStart
+#   ngterm-agent-restore.sh claude end     # Claude Code SessionEnd
+#   ngterm-agent-restore.sh codex start    # Codex SessionStart
+#   ngterm-agent-restore.sh codex end      # Codex SessionEnd
+#
+# Installed by ngterm's Help ▸ Install Agent Status Hooks command. An ngterm extension beyond upstream, which
+# ships this only as cookbook recipes (claude-session-resume, codex-session-resume) and as the SessionStart-pin
+# pattern in its skill.
+#
+# In rerun restore mode a pane re-runs its captured foreground argv, or its `session restore` pin. A bare `claude`
+# or `codex` argv comes back as a NEW conversation, and `claude --resume X` stays on X after /clear or /resume
+# switched the process elsewhere. These hooks pin the LIVE conversation instead, on every session start (startup,
+# resume, clear, compact, fork), so the next launch reattaches to the latest one:
+#
+#   claude --resume <session_id> || claude
+#   codex --no-daemon resume <session_id> || codex --no-daemon
+#
+# The fallback starts a fresh agent when the conversation cannot be resumed: Claude Code fires SessionStart before
+# the first message, and a conversation that never got one is not resumable ("No conversation found"). Both agents
+# exit 0 when quit (/exit, /quit, Ctrl-C twice, Ctrl-D), so the fallback runs only on that failure or a crash.
+#
+# The pin is shell code typed into the pane's login shell (fish, bash, zsh or PowerShell 7 all take `a || b`),
+# sticky and persisted, so only a strictly checked id goes into it: the payload's `session_id`, UUID-shaped, hex
+# digits and dashes only. Anything else leaves the existing pin alone.
+#
+# What pins, and what clears:
+# - Claude Code: only the interactive CLI pins. A `claude -p` run (also one spawned by a tool call of the pane's
+#   interactive claude, which inherits its environment) and an Agent SDK run have CLAUDE_CODE_ENTRYPOINT `sdk-cli`,
+#   `sdk-ts`, `sdk-py`, …: Claude Code rewrites an inherited `cli` to `sdk-cli` for a non-interactive run before any
+#   hook fires. A payload with an `agent_id` comes from inside a subagent. SessionEnd clears the pin only on a
+#   deliberate exit (reason `prompt_input_exit` or `logout`); a killed process (SIGHUP when ngterm quits) ends with
+#   `other`, and `clear` and `resume` are followed by a SessionStart that re-pins, so all three keep it.
+# - Codex: the hook must have been fired by an interactive codex in this pane, which it finds among its ancestors.
+#   `codex exec`/`review` runs are skipped, and so are the shared app-server daemon (`codex app-server`) and a TUI
+#   attached to a remote one (`--remote`): there the hooks run in the server's environment, not the pane's, so they
+#   cannot tell which pane the conversation is in. Codex runs its TUI on that daemon by default; `codex --no-daemon`
+#   runs the session in the TUI's own process, where the hooks fire with the pane's environment, so the pin carries
+#   `--no-daemon` to keep the restored codex pinning. Codex's SessionEnd always carries reason `other`; in process it
+#   fires when Codex closes normally (/quit, Ctrl-C, Ctrl-D) but not when it is killed, and also for an earlier
+#   conversation of the same process once that one is unloaded, so it clears the pin only when the ending session
+#   is the one this pane last pinned (a per-pane state file).
+#
+# As a hook it must never disturb the agent: no output (Claude Code adds a SessionStart hook's stdout to the
+# conversation), always exit 0, and outside ngterm (NGTERM_SESSION_ID unset) it does nothing. It needs no jq or
+# python: the payload is matched with bash's own regex.
+#
+# ngtermctl resolution: $NGTERMCTL, else the path the installer bakes in, else `ngtermctl` on PATH.
+
+trap 'exit 0' EXIT
+exec >/dev/null 2>&1
+
+[ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+
+agent=${1:-}
+event=${2:-}
+
+payload=
+if [ ! -t 0 ]; then
+  IFS= read -r -d '' -t 5 payload || true # EOF ends the read: the payload carries no NUL
+fi
+
+# A top-level string field of the payload. The key must not follow a backslash: a key quoted inside a string value is
+# escaped (\"session_id\"), so the match cannot come from a message or a path. Both agents write the ids first.
+string_field() {
+  local re="(^|[^\\])\"$1\"[[:space:]]*:[[:space:]]*\"([^\"\\]*)\""
+  [[ $payload =~ $re ]] || return 1
+  printf '%s' "${BASH_REMATCH[2]}"
+}
+
+session_id() {
+  local id uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+  id=$(string_field session_id) || return 1
+  [[ $id =~ $uuid_re ]] || return 1
+  printf '%s' "$id"
+}
+
+restore() {
+  local args=(session restore "$@" --target "$NGTERM_SESSION_ID")
+  [ -n "${NGTERM_PANE_ID:-}" ] && args+=(--pane-id "$NGTERM_PANE_ID")
+  [ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
+  "${NGTERMCTL:-ngtermctl}" "${args[@]}" </dev/null || true
+}
+
+# The file holding the Codex session this pane last pinned: in the owner-only runtime directory where there is one.
+state_file() {
+  local key
+  key=$(printf '%s-%s' "$NGTERM_SESSION_ID" "${NGTERM_PANE_ID:-${NGTERM_PANE:-left}}" | tr -c 'A-Za-z0-9._-' '_')
+  printf '%s/ngterm-restore-%s-%s' "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}" "${UID:-0}" "$key"
+}
+
+# Replaces the state file with $1, created afresh and exclusively (noclobber opens with O_EXCL), so a link planted
+# under its name in a shared temp directory is never followed.
+write_state() {
+  rm -f -- "$2"
+  (set -C; umask 077; printf '%s\n' "$1" >"$2") || true
+}
+
+# The argv of process $1, one argument per line: exact from /proc where there is one, else split from ps on spaces.
+process_args() {
+  if [ -r "/proc/$1/cmdline" ]; then
+    tr '\0' '\n' <"/proc/$1/cmdline"
+  else
+    ps -o command= -p "$1" | tr ' ' '\n'
+  fi
+}
+
+# Whether the codex that fired this hook is an interactive one: the nearest `codex` among the first few ancestors
+# (the hook may run under the `sh -c` Codex starts it through), whose first positional argument is not a
+# non-interactive subcommand. No codex found means another host: fail closed, the pin is sticky.
+interactive_codex() {
+  local p=$PPID line ppid arg base value_next first
+  local -a argv
+  for _ in 1 2 3 4; do
+    [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null || return 1
+    argv=()
+    while IFS= read -r line; do argv+=("$line"); done < <(process_args "$p")
+    [ "${#argv[@]}" -gt 0 ] || return 1
+    base=${argv[0]##*/}
+    if [ "$base" = codex ] || [ "$base" = codex.exe ]; then
+      first=
+      value_next=0
+      for arg in "${argv[@]:1}"; do
+        if [ "$value_next" = 1 ]; then value_next=0; continue; fi
+        case "$arg" in
+          --remote | --remote=*) return 1 ;;
+          -c | --config | -m | --model | -p | --profile | -s | --sandbox | -a | --ask-for-approval | -C | --cd | \
+            -i | --image | --add-dir | --enable | --disable | --local-provider | --remote-auth-token-env) value_next=1 ;;
+          -*) ;;
+          *) first=$arg; break ;;
+        esac
+      done
+      case "$first" in exec | e | review | app-server | mcp-server) return 1 ;; esac
+      return 0
+    fi
+    line=$(ps -o ppid= -p "$p") || return 1
+    ppid=${line//[[:space:]]/}
+    p=$ppid
+  done
+  return 1
+}
+
+claude_hook() {
+  [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] || return 0
+  [ -n "$(string_field agent_id)" ] && return 0
+  local id reason
+  case "$event" in
+    start)
+      id=$(session_id) || return 0
+      restore "claude --resume $id || claude"
+      ;;
+    end)
+      reason=$(string_field reason) || return 0
+      case "$reason" in prompt_input_exit | logout) restore --clear ;; esac
+      ;;
+  esac
+}
+
+codex_hook() {
+  interactive_codex || return 0
+  local id file
+  id=$(session_id) || return 0
+  file=$(state_file)
+  case "$event" in
+    start)
+      restore "codex --no-daemon resume $id || codex --no-daemon"
+      write_state "$id" "$file"
+      ;;
+    end)
+      [ "$(cat "$file" 2>/dev/null)" = "$id" ] || return 0
+      restore --clear
+      rm -f -- "$file"
+      ;;
+  esac
+}
+
+case "$agent" in
+  claude) claude_hook ;;
+  codex) codex_hook ;;
+esac
+exit 0

@@ -145,6 +145,39 @@ fn a_fresh_install_wires_every_present_agent() {
     assert_fresh_install_files(&home);
 }
 
+/// The restore adapter in the package, executable and with `ngtermctl` baked in, and the Claude Code and Codex hooks
+/// calling it.
+fn assert_restore_adapter_installed(home: &Home) {
+    let restore = home
+        .path(".config/ngterm/agent-status")
+        .join(config::RESTORE_WRAPPER_NAME);
+    assert_eq!(
+        files::posix_mode(&restore).unwrap() & 0o111,
+        0o111,
+        "the restore adapter is executable"
+    );
+    let tool = home.env.bundled_cli.clone().unwrap();
+    assert!(
+        fs::read_to_string(&restore)
+            .unwrap()
+            .contains(&format!("  NGTERMCTL='{}'", tool.display())),
+        "the restore adapter has ngtermctl baked in"
+    );
+    let settings = home.read(".claude/settings.json");
+    let codex = home.read(".codex/config.toml");
+    for (config, arguments) in [
+        (&settings, "claude start"),
+        (&settings, "claude end"),
+        (&codex, "codex start"),
+        (&codex, "codex end"),
+    ] {
+        assert!(
+            config.contains(&format!("{}' {arguments}", restore.display())),
+            "{arguments}"
+        );
+    }
+}
+
 fn assert_fresh_install_files(home: &Home) {
     let wrapper = home.path(".config/ngterm/agent-status").join(WRAPPER_NAME);
     assert_eq!(
@@ -162,6 +195,7 @@ fn assert_fresh_install_files(home: &Home) {
         home.read(".claude/settings.json")
             .contains("ngterm-claude-status.sh' completed --auto-reset")
     );
+    assert_restore_adapter_installed(home);
     assert_eq!(home.read(".claude/settings.json.bak"), "{\"model\": \"opus\"}\n");
     assert_eq!(files::posix_mode(&home.path(".claude/settings.json")), Some(0o600));
     assert_eq!(files::posix_mode(&home.path(".claude/settings.json.bak")), Some(0o600));
@@ -217,13 +251,30 @@ fn before_the_rename(text: &str) -> String {
         .replace("// ngterm-", "// agterm-")
 }
 
+/// Claude settings `json` without the restore adapter's entries, which no install from before the rename wrote.
+fn without_restore_hooks(json: &str) -> String {
+    let mut root: serde_json::Value = serde_json::from_str(json).unwrap();
+    let hooks = root["hooks"].as_object_mut().unwrap();
+    for entries in hooks.values_mut() {
+        entries
+            .as_array_mut()
+            .unwrap()
+            .retain(|entry| !entry.to_string().contains(config::RESTORE_WRAPPER_NAME));
+    }
+    hooks.retain(|_, entries| entries.as_array().is_some_and(|entries| !entries.is_empty()));
+    serde_json::to_string_pretty(&root).unwrap()
+}
+
 /// What an install from before the rename left in `home` with its package in `dir` (the legacy directory, as the fork
 /// installs, or this build's own): every agent's config calling `dir` under the old names, the plugins under their old
 /// names and markers, and its package there.
 fn install_before_the_rename(home: &Home, dir: &Path) {
     let dir = dir.display().to_string();
     let (claude, _) = config::merge_claude_settings(Some("{\"model\": \"opus\"}\n"), &dir, &[]).unwrap();
-    home.write(".claude/settings.json", &before_the_rename(&claude));
+    home.write(
+        ".claude/settings.json",
+        &before_the_rename(&without_restore_hooks(&claude)),
+    );
     let CodexMerge::Merged(codex) = config::merge_codex_config("model = \"gpt-5\"\n", &dir) else {
         panic!("the old Codex block");
     };

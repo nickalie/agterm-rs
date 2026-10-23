@@ -14,6 +14,11 @@ pub const CODEX_WRAPPER_NAME: &str = "ngterm-codex-status.sh";
 /// the firing agent owns the pane, then delegates to the generic wrapper.
 pub const CLAUDE_WRAPPER_NAME: &str = "ngterm-claude-status.sh";
 
+/// The restore adapter (an ngterm extension beyond upstream, which ships it only as cookbook recipes): on each session
+/// start it pins the pane's `session restore` line to the live Claude Code or Codex conversation, and on a deliberate
+/// exit it clears the pin, so a rerun launch brings every pane back to its latest conversation.
+pub const RESTORE_WRAPPER_NAME: &str = "ngterm-agent-restore.sh";
+
 /// The bundled Pi extension's path inside the package, its destination name and its ownership sentinel.
 pub const PI_EXTENSION_RELATIVE_PATH: &str = "pi/ngterm-status.ts";
 pub const PI_EXTENSION_NAME: &str = "ngterm-status.ts";
@@ -72,6 +77,11 @@ const CLAUDE_HOOKS: [(&str, Option<&str>, &str); 6] = [
     ("SessionEnd", None, "completed --auto-reset"),
 ];
 
+/// The Claude Code events the restore adapter handles, with its arguments. `SessionStart` fires on startup, resume,
+/// clear and compact, so the pin follows every conversation switch; `SessionEnd` clears it only on a deliberate exit
+/// (the adapter reads the payload's `reason`).
+const CLAUDE_RESTORE_HOOKS: [(&str, &str); 2] = [("SessionStart", "claude start"), ("SessionEnd", "claude end")];
+
 /// Whether an earlier installer (this build's before `SessionEnd`, the fork's, upstream's) wrote `event`: only those
 /// entries are its own to migrate, so a `SessionEnd` entry naming a wrapper is always the user's.
 fn written_by_earlier_installs(event: &str) -> bool {
@@ -87,6 +97,10 @@ const CODEX_HOOKS: [(&str, &str); 6] = [
     ("PermissionRequest", "permission-request"),
     ("Stop", "stop"),
 ];
+
+/// The Codex events the restore adapter handles, written into the managed block after the status hooks, so the status
+/// hooks keep their group indexes and with them the trust Codex recorded for them.
+const CODEX_RESTORE_HOOKS: [(&str, &str); 2] = [("SessionStart", "codex start"), ("SessionEnd", "codex end")];
 
 /// The existing `settings.json` is non-empty but not a JSON object, or a `hooks` value the merge writes has the wrong
 /// shape: the installer refuses to overwrite what it could not read.
@@ -146,11 +160,35 @@ pub fn merge_claude_settings(
         entries.push(hook_entry(&command, state, matcher));
         changed = true;
     }
+    changed |= merge_claude_restore_hooks(&mut hooks, script_dir);
     if !changed {
         return Ok((existing.unwrap_or_default().to_owned(), false));
     }
     root.insert("hooks".to_owned(), Value::Object(hooks));
     Ok((serialize(&Value::Object(root)), true))
+}
+
+/// Adds the restore adapter's entry to each of its events that has none calling it, returning whether any was added.
+/// The adapter is probed on its own: a status hook in the same event (`SessionEnd`) does not count.
+fn merge_claude_restore_hooks(hooks: &mut Map<String, Value>, script_dir: &str) -> bool {
+    let adapter = restore_wrapper_path(script_dir);
+    let command = format!("{} ", shell_quote(&adapter));
+    let mut changed = false;
+    for (event, arguments) in CLAUDE_RESTORE_HOOKS {
+        let entries = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new()));
+        let Value::Array(entries) = entries else {
+            continue; // the shape was checked when the hooks were read
+        };
+        if entries
+            .iter()
+            .any(|entry| entry_calls(entry, std::slice::from_ref(&adapter)))
+        {
+            continue;
+        }
+        entries.push(hook_entry(&command, arguments, None));
+        changed = true;
+    }
+    changed
 }
 
 /// Appends the marker-guarded `source` line for the shell integration to a shell rc file (upstream's
@@ -266,12 +304,19 @@ pub fn backup_path(path: &str) -> String {
 #[must_use]
 pub fn codex_hooks_block(script_dir: &str) -> String {
     let wrapper = shell_quote(&format!("{script_dir}/{CODEX_WRAPPER_NAME}"));
-    CODEX_HOOKS
+    let restore = shell_quote(&restore_wrapper_path(script_dir));
+    let status = CODEX_HOOKS
         .iter()
-        .map(|(event, action)| {
+        .map(|(event, action)| (*event, format!("{wrapper} {action}")));
+    let restores = CODEX_RESTORE_HOOKS
+        .iter()
+        .map(|(event, arguments)| (*event, format!("{restore} {arguments}")));
+    status
+        .chain(restores)
+        .map(|(event, command)| {
             format!(
                 "[[hooks.{event}]]\n[[hooks.{event}.hooks]]\ntype = \"command\"\ncommand = {}",
-                toml_basic_string(&format!("{wrapper} {action}"))
+                toml_basic_string(&command)
             )
         })
         .collect::<Vec<_>>()
@@ -286,6 +331,10 @@ pub fn shell_quote(value: &str) -> String {
 
 fn toml_basic_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn restore_wrapper_path(script_dir: &str) -> String {
+    format!("{script_dir}/{RESTORE_WRAPPER_NAME}")
 }
 
 fn wrapper_path(script_dir: &str) -> String {
@@ -321,7 +370,11 @@ fn claude_hooks_object(root: &Map<String, Value>) -> Result<Map<String, Value>, 
     let Value::Object(hooks) = value else {
         return Err(MalformedSettings);
     };
-    for (event, _, _) in CLAUDE_HOOKS {
+    let events = CLAUDE_HOOKS
+        .iter()
+        .map(|(event, _, _)| *event)
+        .chain(CLAUDE_RESTORE_HOOKS.iter().map(|(event, _)| *event));
+    for event in events {
         if let Some(entries) = hooks.get(event)
             && !is_array_of_objects(entries)
         {
@@ -542,7 +595,11 @@ fn hook_entry(command: &str, state: &str, matcher: Option<&str>) -> Value {
 /// Whether an entry already invokes us: either the adapter or the generic wrapper counts, so a customized wrapper
 /// entry the migration declined is not doubled by a stock one.
 fn entry_uses_wrapper(entry: &Value, script_dir: &str) -> bool {
-    let probes = [claude_wrapper_path(script_dir), wrapper_path(script_dir)];
+    entry_calls(entry, &[claude_wrapper_path(script_dir), wrapper_path(script_dir)])
+}
+
+/// Whether one of `entry`'s commands names one of `probes`.
+fn entry_calls(entry: &Value, probes: &[String]) -> bool {
     let Some(commands) = entry.get("hooks").filter(|hooks| is_array_of_objects(hooks)) else {
         return false;
     };
@@ -577,9 +634,10 @@ fn trim_horizontal(line: &str) -> &str {
 }
 
 /// The scripts whose mention makes a Codex marker block ours: the current wrappers and those named before the rename.
-const CODEX_BLOCK_SCRIPTS: [&str; 4] = [
+const CODEX_BLOCK_SCRIPTS: [&str; 5] = [
     WRAPPER_NAME,
     CODEX_WRAPPER_NAME,
+    RESTORE_WRAPPER_NAME,
     LEGACY_WRAPPER_NAME,
     LEGACY_CODEX_WRAPPER_NAME,
 ];
