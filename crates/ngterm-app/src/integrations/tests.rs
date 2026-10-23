@@ -145,8 +145,8 @@ fn a_fresh_install_wires_every_present_agent() {
     assert_fresh_install_files(&home);
 }
 
-/// The restore adapter in the package, executable and with `ngtermctl` baked in, and the Claude Code and Codex hooks
-/// calling it.
+/// The restore adapter in the package, executable and with `ngtermctl` baked in, the Claude Code hooks calling it and
+/// the Codex hooks not.
 fn assert_restore_adapter_installed(home: &Home) {
     let restore = home
         .path(".config/ngterm/agent-status")
@@ -164,18 +164,16 @@ fn assert_restore_adapter_installed(home: &Home) {
         "the restore adapter has ngtermctl baked in"
     );
     let settings = home.read(".claude/settings.json");
-    let codex = home.read(".codex/config.toml");
-    for (config, arguments) in [
-        (&settings, "claude start"),
-        (&settings, "claude end"),
-        (&codex, "codex start"),
-        (&codex, "codex end"),
-    ] {
+    for arguments in ["claude start", "claude end"] {
         assert!(
-            config.contains(&format!("{}' {arguments}", restore.display())),
+            settings.contains(&format!("{}' {arguments}", restore.display())),
             "{arguments}"
         );
     }
+    assert!(
+        !home.read(".codex/config.toml").contains(config::RESTORE_WRAPPER_NAME),
+        "Codex gets no restore hooks"
+    );
 }
 
 fn assert_fresh_install_files(home: &Home) {

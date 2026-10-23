@@ -595,7 +595,7 @@ fn codex_merge_refreshes_a_managed_block_and_keeps_the_trust_state() {
     }
     assert!(!contents.contains(&format!("'{legacy}' blocked")));
     assert!(contents.contains(
-        "command = \"'/home/me/.config/ngterm/agent-status/ngterm-agent-restore.sh' codex end\"\n\n[hooks.state]\n"
+        "command = \"'/home/me/.config/ngterm/agent-status/ngterm-codex-status.sh' stop\"\n\n[hooks.state]\n"
     ));
     assert!(contents.contains("trusted_hash = \"sha256:stale-but-preserved\"\n# <<<"));
     assert_eq!(contents.matches(RC_MARKER_BEGIN).count(), 1);
@@ -878,53 +878,4 @@ fn the_restore_hooks_are_added_once_beside_the_users_own() {
             "{malformed}"
         );
     }
-}
-
-/// The restore entries follow the status ones, so the status hooks keep the group indexes Codex keys their trust
-/// by (`config.toml:session_start:0:0` stays the status adapter's).
-#[test]
-fn the_codex_block_wires_the_restore_adapter_after_the_status_hooks() {
-    let block = codex_hooks_block(SCRIPT_DIR);
-    let restore_hook = format!("{SCRIPT_DIR}/{RESTORE_WRAPPER_NAME}");
-    let status_end = block.find("ngterm-codex-status.sh' stop").unwrap();
-    assert!(block.find(&format!("'{restore_hook}' codex start")).unwrap() > status_end);
-    let parsed: toml::Table = format!("{block}\n").parse().unwrap();
-    let command = |event: &str, index: usize| {
-        parsed["hooks"][event][index]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    };
-    assert_eq!(
-        command("SessionStart", 0),
-        format!("'{SCRIPT_DIR}/{CODEX_WRAPPER_NAME}' session-start")
-    );
-    assert_eq!(command("SessionStart", 1), format!("'{restore_hook}' codex start"));
-    assert_eq!(command("SessionEnd", 0), format!("'{restore_hook}' codex end"));
-    assert_eq!(parsed["hooks"]["SessionStart"].as_array().map(Vec::len), Some(2));
-}
-
-/// An install from before the restore adapter refreshes its managed block in place: the status hooks keep their
-/// trust records, the restore hooks join them.
-#[test]
-fn a_codex_block_from_before_the_restore_adapter_gains_it_and_keeps_its_trust() {
-    let status_only = CODEX_HOOKS
-        .iter()
-        .map(|(event, action)| {
-            format!(
-                "[[hooks.{event}]]\n[[hooks.{event}.hooks]]\ntype = \"command\"\ncommand = \"'{SCRIPT_DIR}/{CODEX_WRAPPER_NAME}' {action}\""
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let trust = "[hooks.state]\n\n[hooks.state.\"/home/me/.codex/config.toml:session_start:0:0\"]\ntrusted_hash = \"sha256:kept\"\n";
-    let existing = format!("model = \"gpt-5\"\n\n{RC_MARKER_BEGIN}\n{status_only}\n\n{trust}{RC_MARKER_END}\n");
-    let contents = merged(merge_codex_config(&existing, SCRIPT_DIR));
-    assert!(
-        contents.contains(&format!("codex end\"\n\n{trust}{RC_MARKER_END}\n")),
-        "{contents}"
-    );
-    assert!(contents.contains(&format!("'{SCRIPT_DIR}/{RESTORE_WRAPPER_NAME}' codex start")));
-    assert!(contents.parse::<toml::Table>().is_ok());
-    assert_eq!(merge_codex_config(&contents, SCRIPT_DIR), CodexMerge::Unchanged);
 }

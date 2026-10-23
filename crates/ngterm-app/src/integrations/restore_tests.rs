@@ -1,15 +1,13 @@
 //! The restore adapter run for real: which `ngtermctl session restore` calls it makes for a hook's event, payload and
-//! process. A stub `ngtermctl` records each call's argv; the environment is built from scratch, so no `NGTERM_*`
+//! environment. A stub `ngtermctl` records each call's argv; the environment is built from scratch, so no `NGTERM_*`
 //! variable of a live instance reaches the script and nothing talks to an app.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 const ID: &str = "0f8a4c3e-6b1d-4e2a-9c7f-1a2b3c4d5e6f";
-const CODEX_ID: &str = "01a16832-3f4c-7a12-a5b7-81a8ccd380e2";
 const SESSION: &str = "06882D55-AC80-4B1B-8BBE-682FDDDEC95A";
 const PANE: &str = "05E0AB65-271B-4389-9946-C3A7E2060CAC";
 const SOCKET: &str = "/nonexistent/ngterm-restore-test.sock";
@@ -22,12 +20,6 @@ fn adapter() -> PathBuf {
 fn claude_payload(event: &str, extra: &str) -> String {
     format!(
         r#"{{"session_id":"{ID}","transcript_path":"/home/u/.claude/projects/-p/{ID}.jsonl","cwd":"/p","hook_event_name":"{event}"{extra}}}"#
-    )
-}
-
-fn codex_payload(id: &str, event: &str) -> String {
-    format!(
-        r#"{{"session_id":"{id}","transcript_path":"/home/u/.codex/sessions/rollout-{id}.jsonl","cwd":"/p","hook_event_name":"{event}","model":"m","source":"startup"}}"#
     )
 }
 
@@ -103,21 +95,6 @@ impl Bench {
     fn claude(&self, event: &str, payload: &str, vars: &[(&str, &str)]) -> Vec<Vec<String>> {
         let mut command = self.command("bash", vars);
         command.arg(adapter()).args(["claude", event]);
-        Self::run(command, payload);
-        self.calls()
-    }
-
-    /// The adapter as Codex runs it: a child of a process whose argv is `codex <codex_args...>` (a bash named codex,
-    /// its script given with `-c`, which Codex's own `-c KEY=VALUE` option skips like a config value).
-    fn codex(&self, event: &str, payload: &str, codex_args: &[&str]) -> Vec<Vec<String>> {
-        let mut command = self.command("bash", &[]);
-        command
-            .arg0("codex")
-            .arg("-c")
-            .arg("bash \"$HOOK\" codex \"$EVENT\"; :")
-            .args(codex_args)
-            .env("HOOK", adapter())
-            .env("EVENT", event);
         Self::run(command, payload);
         self.calls()
     }
@@ -249,7 +226,6 @@ fn outside_ngterm_the_adapter_does_nothing() {
     for (agent, event, payload) in [
         ("claude", "start", claude_payload("SessionStart", "")),
         ("claude", "end", claude_payload("SessionEnd", r#","reason":"logout""#)),
-        ("codex", "start", codex_payload(CODEX_ID, "SessionStart")),
     ] {
         let mut command = bench.command("bash", &[CLI]);
         command
@@ -261,106 +237,5 @@ fn outside_ngterm_the_adapter_does_nothing() {
     let mut command = bench.command("bash", &[CLI]);
     command.arg(adapter());
     Bench::run(command, "");
-    assert_eq!(bench.calls(), Vec::<Vec<String>>::new());
-}
-
-#[test]
-fn an_interactive_codex_pins_its_conversation_and_clears_it_on_quit() {
-    let bench = Bench::new();
-    let line = format!("codex --no-daemon resume {CODEX_ID} || codex --no-daemon");
-    bench.codex("start", &codex_payload(CODEX_ID, "SessionStart"), &[]);
-    bench.codex("start", &codex_payload(CODEX_ID, "SessionStart"), &["resume", CODEX_ID]);
-    bench.codex(
-        "start",
-        &codex_payload(CODEX_ID, "SessionStart"),
-        &["--no-daemon", "-m", "exec", "fix it"],
-    );
-    assert_eq!(
-        bench.calls(),
-        vec![pin(&line); 3],
-        "an option's value is not the subcommand"
-    );
-
-    bench.codex("end", &codex_payload(CODEX_ID, "SessionEnd"), &["--no-daemon"]);
-    assert_eq!(bench.calls().last(), Some(&clear()));
-    bench.codex("end", &codex_payload(CODEX_ID, "SessionEnd"), &["--no-daemon"]);
-    assert_eq!(
-        bench.calls().len(),
-        4,
-        "the pin was cleared once; a second end finds nothing of its own"
-    );
-}
-
-/// The state file in a shared temp directory is created afresh and owner-only: a link planted under its name is
-/// replaced, never written through.
-#[test]
-fn the_codex_state_file_never_follows_a_planted_link() {
-    use std::os::unix::fs::MetadataExt;
-    let bench = Bench::new();
-    let uid = fs::metadata(bench.path("ngtermctl")).unwrap().uid();
-    let state = bench.path(&format!("ngterm-restore-{uid}-{SESSION}-{PANE}"));
-    let victim = bench.path("victim");
-    fs::write(&victim, "untouched").unwrap();
-    std::os::unix::fs::symlink(&victim, &state).unwrap();
-
-    bench.codex("start", &codex_payload(CODEX_ID, "SessionStart"), &[]);
-
-    assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched");
-    let metadata = fs::symlink_metadata(&state).unwrap();
-    assert!(metadata.file_type().is_file());
-    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-    assert_eq!(fs::read_to_string(&state).unwrap(), format!("{CODEX_ID}\n"));
-}
-
-/// Codex's `SessionEnd` also fires for an earlier conversation of the same process once it is unloaded: only the
-/// session this pane last pinned clears the pin.
-#[test]
-fn a_codex_end_of_another_conversation_keeps_the_pin() {
-    let bench = Bench::new();
-    let earlier = "01a16832-0000-7000-8000-000000000001";
-    bench.codex("start", &codex_payload(earlier, "SessionStart"), &[]);
-    bench.codex("start", &codex_payload(CODEX_ID, "SessionStart"), &[]);
-    bench.codex("end", &codex_payload(earlier, "SessionEnd"), &[]);
-    assert_eq!(bench.calls().len(), 2, "{:?}", bench.calls());
-    bench.codex("end", &codex_payload(CODEX_ID, "SessionEnd"), &[]);
-    assert_eq!(bench.calls().last(), Some(&clear()));
-}
-
-/// `codex exec`, `codex review`, the shared app-server daemon (whose hooks run in the daemon's environment, not the
-/// pane's) and a TUI on a remote server never pin; neither does a hook no codex fired.
-#[test]
-fn a_codex_that_is_not_the_panes_interactive_one_pins_nothing() {
-    let bench = Bench::new();
-    let start = codex_payload(CODEX_ID, "SessionStart");
-    for args in [
-        &["exec", "--skip-git-repo-check", "say ok"][..],
-        &["e", "say ok"],
-        &["-c", "model=x", "exec", "say ok"],
-        &["review"],
-        &[
-            "app-server",
-            "--listen",
-            "unix://",
-            "--analytics-default-enabled",
-            "--managed-daemon",
-        ],
-        &["--remote", "ws://127.0.0.1:4500"],
-        &["--remote=ws://127.0.0.1:4500"],
-    ] {
-        assert_eq!(
-            bench.codex("start", &start, args),
-            Vec::<Vec<String>>::new(),
-            "{args:?}"
-        );
-    }
-    let mut command = bench.command("bash", &[]);
-    command.arg(adapter()).args(["codex", "start"]);
-    Bench::run(command, &start);
-    let mut bad = bench.command("bash", &[]);
-    bad.arg0("codex")
-        .arg("-c")
-        .arg("bash \"$HOOK\" codex start; :")
-        .env("HOOK", adapter());
-    Bench::run(bad, r#"{"session_id":"thr_123","hook_event_name":"SessionStart"}"#);
     assert_eq!(bench.calls(), Vec::<Vec<String>>::new());
 }

@@ -36,14 +36,12 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
   (`resources/shell-integration/pwsh`), since Ghostty has none.
 - Another extension beyond upstream: Install Agent Status Hooks… also wires a restore adapter
-  (`resources/agent-status/ngterm-agent-restore.sh`) into Claude Code's and Codex's `SessionStart` and `SessionEnd`
-  hooks. On every session start it pins the pane's `session restore` line to the live conversation
-  (`claude --resume <id> || claude`, `codex --no-daemon resume <id> || codex --no-daemon`), so a rerun launch brings
-  each pane back to the conversation it was in last, through /clear, /resume and forks; a deliberate exit clears the
-  pin, an ngterm quit keeps it. It skips `claude -p`, SDK runs and subagents, `codex exec` and `review`, and a codex
-  whose session runs on Codex's shared app-server daemon (its default), whose hooks run in the daemon's environment
-  and cannot tell the pane: Codex pins from `codex --no-daemon`. Upstream ships the idea only as its
-  `claude-session-resume` and `codex-session-resume` cookbook recipes; the script's header holds the details.
+  (`resources/agent-status/ngterm-agent-restore.sh`) into Claude Code's `SessionStart` and `SessionEnd` hooks (Claude
+  Code only: Codex gets no restore hooks). On every session start it pins the pane's `session restore` line to the
+  live conversation (`claude --resume <id> || claude`), so a rerun launch brings each pane back to the conversation it
+  was in last, through /clear, /resume and forks; a deliberate exit clears the pin, an ngterm quit keeps it. It skips
+  `claude -p`, SDK runs and subagents. Upstream ships the idea only as its `claude-session-resume` cookbook recipe;
+  the script's header holds the details.
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.

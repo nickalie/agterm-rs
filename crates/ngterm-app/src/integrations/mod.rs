@@ -21,12 +21,12 @@
 //!   flight as `active --blink` (upstream's goes `completed` at once), and the installer adds a sixth Claude hook,
 //!   `SessionEnd` → `completed --auto-reset`, so that claim cannot outlive the agent ([`hooks_config`]);
 //! - the package adds a restore adapter, `ngterm-agent-restore.sh`, which upstream has no counterpart for (it ships the
-//!   idea as its `claude-session-resume` and `codex-session-resume` cookbook recipes and the `SessionStart`-pin
-//!   pattern in its skill): the installer wires it to Claude Code's and Codex's `SessionStart` and `SessionEnd`, and it
-//!   keeps the pane's `session restore` pin on the live conversation (`claude --resume <id>`, `codex --no-daemon resume
-//!   <id>`), clearing it on a deliberate exit, so a rerun launch reattaches each pane to its latest conversation; the
-//!   script's header holds what it pins, what it skips and why (`build/patches/agent-status/0003-restore-adapter.patch`),
-//!   and the skill tells agents not to hand-write that hook for those two agents
+//!   idea as its `claude-session-resume` cookbook recipe and the `SessionStart`-pin pattern in its skill): the
+//!   installer wires it to Claude Code's `SessionStart` and `SessionEnd` only (Codex gets no restore hooks), and it
+//!   keeps the pane's `session restore` pin on the live conversation (`claude --resume <id>`), clearing it on a
+//!   deliberate exit, so a rerun launch reattaches each pane to its latest Claude Code conversation; the script's
+//!   header holds what it pins, what it skips and why (`build/patches/agent-status/0003-restore-adapter.patch`), and
+//!   the skill tells agents not to hand-write that hook for Claude Code
 //!   (`build/patches/skill-ngterm/0005-restore-adapter.patch`);
 //! - every script and plugin calls `ngtermctl` where upstream's calls `agtermctl` (the wrappers' default, their
 //!   comments and the shell integration's);
