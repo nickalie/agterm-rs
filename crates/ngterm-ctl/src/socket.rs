@@ -3,8 +3,9 @@
 //! Resolution is upstream's `BasicOptions.socketPath` (`agtermctlKit/Commands.swift`, over
 //! `ControlResolve.socketPath`): `--socket`, then `<NGTERM_STATE_DIR>/ngterm.sock`, then the state directory's default,
 //! then `/tmp/ngterm/ngterm.sock`. Upstream's default is macOS's `~/Library/Application Support/agterm`; the Linux one
-//! is `<XDG data home>/ngterm` (Linux glue: Foundation's application support directory on Linux, which the fork's
-//! `PersistenceStore.defaultDirectory` resolves, under this build's own directory name, `ngterm_core::paths`). The CLI
+//! is `<XDG data home>/ngterm` (Foundation's application support directory on Linux, which upstream's
+//! `PersistenceStore.defaultDirectory` resolves there, under this build's own directory name, `ngterm_core::paths`).
+//! The CLI
 //! shares the app's state-dir code but, as upstream's, never reads the app's socket variables: neither
 //! `NGTERM_CONTROL_SOCKET` nor a pane's `NGTERM_SOCKET` routes a command anywhere.
 

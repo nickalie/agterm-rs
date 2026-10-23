@@ -1,7 +1,7 @@
 """Live sessions in the host's own login shell: a Rust-only extension (capability `live-any-shell`).
 
-Upstream and the Linux fork wrap a pane in zmx only for a zsh login shell; the Rust build also wraps bash and fish,
-starting each with Ghostty's shell integration. Both references skip these tests as unsupported; the Rust CI runs them
+Upstream wraps a pane in zmx only for a zsh login shell; the Rust build also wraps bash and fish, starting each with
+Ghostty's shell integration. The reference skips these tests as unsupported; the Rust CI runs them
 under zsh, bash and fish login shells with `--must-pass live-any-shell`.
 
 The host picks the shell (the password database's), so every line typed here is valid in zsh, bash and fish alike."""
@@ -13,7 +13,7 @@ from agterm_conformance.match import assert_ok, find_session
 
 LIVE_ANY_SHELL = pytest.mark.requires(
     "live-any-shell",
-    reason="a Rust-only extension: the references wrap a pane in zmx only for a zsh login shell",
+    reason="a Rust-only extension: upstream wraps a pane in zmx only for a zsh login shell",
 )
 
 

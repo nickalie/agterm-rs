@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from agterm_conformance.impls.base import Adapter
 from agterm_conformance.impls.rust import RustAdapter
-from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
 from agterm_conformance.plugin import ImplOptions
 
 ADAPTERS: dict[str, type[Adapter]] = {
     SwiftMacosAdapter.name: SwiftMacosAdapter,
-    SwiftLinuxAdapter.name: SwiftLinuxAdapter,
     RustAdapter.name: RustAdapter,
 }
 

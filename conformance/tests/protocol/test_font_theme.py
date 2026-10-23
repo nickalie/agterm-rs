@@ -37,8 +37,7 @@ def _font(ctl, cmd, sid, pane=None):
 
 @pytest.fixture
 def opened(ctl):
-    """Sessions a test opens, reset and closed afterwards: a new pane inherits the focused pane's size, and the
-    Linux fork's `theme.set` stops answering once about seven sessions are mounted."""
+    """Sessions a test opens, reset and closed afterwards: a new pane inherits the focused pane's size."""
     sids = []
     yield sids
     for sid in sids:
@@ -146,29 +145,22 @@ def theme_restored(ctl):
         ctl.request("theme.set")
 
 
-def _slots(adapter, result, light, dark=None):
+def _slots(result, light, dark=None):
     """Check a `theme.set`/`theme.list` result for the stored `light` (or single) and `dark` slots."""
     sync = dark is not None
     assert result["sync"] is sync, result
-    if adapter.has("theme-slots-by-sync"):
-        if sync:
-            assert (result["light"], result["dark"]) == (light, dark), result
-            assert_absent(result, "theme")
-        else:
-            assert result.get("theme") == light, result
-            assert_absent(result, "light", "dark")
-        return
-    # The Linux fork always reports the stored light slot, and as `theme` the side on screen, which follows the
-    # desktop's color scheme while syncing.
-    assert result.get("light") == light, result
-    assert result.get("dark") == dark, result
-    assert result.get("theme") in ((light, dark) if sync else (light,)), result
+    if sync:
+        assert (result["light"], result["dark"]) == (light, dark), result
+        assert_absent(result, "theme")
+    else:
+        assert result.get("theme") == light, result
+        assert_absent(result, "light", "dark")
 
 
-def _set(ctl, adapter, slots=(None, None), **args):
+def _set(ctl, slots=(None, None), **args):
     """`theme.set` with `args`, expecting the stored (light, dark) `slots`, and its `theme.list` read-back."""
     result = assert_ok(ctl.request("theme.set", **args))
-    _slots(adapter, result, *slots)
+    _slots(result, *slots)
     listed = assert_ok(ctl.request("theme.list"))
     assert {key: value for key, value in listed.items() if key != "themes"} == result
     return result
@@ -185,26 +177,26 @@ def test_list_names_the_bundled_themes(ctl, theme_restored):
 
 
 @pytest.mark.covers("theme.set", "theme.list", "field:result.theme", "field:result.sync")
-def test_set_a_single_theme(ctl, adapter, theme_restored):
-    _set(ctl, adapter, (LIGHT, None), name=LIGHT)
-    _set(ctl, adapter, (DARK, None), name=f"  {DARK}  ")
-    _set(ctl, adapter, (LIGHT, None), light=LIGHT)
+def test_set_a_single_theme(ctl, theme_restored):
+    _set(ctl, (LIGHT, None), name=LIGHT)
+    _set(ctl, (DARK, None), name=f"  {DARK}  ")
+    _set(ctl, (LIGHT, None), light=LIGHT)
 
 
 @pytest.mark.covers("theme.set", "theme.list", "field:result.light", "field:result.dark", "field:result.sync")
-def test_dark_slot_turns_appearance_sync_on_and_none_turns_it_off(ctl, adapter, theme_restored):
-    _set(ctl, adapter, (LIGHT, None), name=LIGHT)
-    _set(ctl, adapter, (LIGHT, DARK), dark=DARK)
-    _set(ctl, adapter, (DARK, LIGHT), light=DARK, dark=LIGHT)
-    _set(ctl, adapter, (DARK, None), dark="NONE")
-    _set(ctl, adapter, (LIGHT, DARK), name=LIGHT, dark=DARK)
-    _set(ctl, adapter, (DARK, None), name=DARK, dark="none")
+def test_dark_slot_turns_appearance_sync_on_and_none_turns_it_off(ctl, theme_restored):
+    _set(ctl, (LIGHT, None), name=LIGHT)
+    _set(ctl, (LIGHT, DARK), dark=DARK)
+    _set(ctl, (DARK, LIGHT), light=DARK, dark=LIGHT)
+    _set(ctl, (DARK, None), dark="NONE")
+    _set(ctl, (LIGHT, DARK), name=LIGHT, dark=DARK)
+    _set(ctl, (DARK, None), name=DARK, dark="none")
 
 
 @pytest.mark.covers("theme.set", "field:result.sync")
-def test_bare_set_returns_to_ghostty_builtin_colors(ctl, adapter, theme_restored):
-    _set(ctl, adapter, (LIGHT, DARK), light=LIGHT, dark=DARK)
-    assert _set(ctl, adapter) == {"sync": False}
+def test_bare_set_returns_to_ghostty_builtin_colors(ctl, theme_restored):
+    _set(ctl, (LIGHT, DARK), light=LIGHT, dark=DARK)
+    assert _set(ctl) == {"sync": False}
 
 
 @pytest.mark.covers("theme.set")
@@ -217,7 +209,7 @@ def test_bare_set_returns_to_ghostty_builtin_colors(ctl, adapter, theme_restored
         ({"name": LIGHT.lower()}, f"unknown theme: {LIGHT.lower()}"),
     ],
 )
-def test_set_refusals_leave_the_slots_alone(ctl, adapter, theme_restored, args, error):
-    before = _set(ctl, adapter, (DARK, None), name=DARK)
+def test_set_refusals_leave_the_slots_alone(ctl, theme_restored, args, error):
+    before = _set(ctl, (DARK, None), name=DARK)
     assert_error(ctl.request("theme.set", **args), error)
     assert {key: value for key, value in assert_ok(ctl.request("theme.list")).items() if key != "themes"} == before

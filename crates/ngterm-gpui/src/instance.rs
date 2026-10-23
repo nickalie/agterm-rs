@@ -1,7 +1,6 @@
 //! One running ngterm per application id, by `GApplication`'s own D-Bus protocol (plan > Solution Overview > Single
-//! instance). This build's id ([`DEFAULT_APP_ID`]) is not the GTK fork's, so the two no longer forward to each other;
-//! they keep apart through separate state directories (`ngterm_core::paths`) instead. A GTK-build launch given the
-//! same id (`NGTERM_APP_ID`) still forwards to a GPUI primary and back.
+//! instance). This build's id ([`DEFAULT_APP_ID`]) is its own, not upstream's, so it never forwards to an agterm
+//! instance; instances of different ids keep apart through separate state directories (`ngterm_core::paths`).
 //!
 //! The primary owns the app id's well-known name on the session bus and serves, at `GApplication`'s object path,
 //! `org.gtk.Application` (`Activate` with platform data: the only call a default-flags GTK launch makes; `Open` the

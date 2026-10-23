@@ -7,7 +7,7 @@ from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.plugin import Ctl
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which the references create only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
 )
 
 

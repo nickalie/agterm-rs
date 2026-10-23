@@ -405,7 +405,7 @@ def test_session_move_and_go(cli, ctl):
     "cli:session resize",
     "cli:session scratch",
 )
-def test_session_panes(cli, ctl, adapter):
+def test_session_panes(cli, ctl):
     sid = _new(ctl)
     _ok(cli("session", "split", "on", "--axis", "horizontal", "--target", sid), "ok\n")
     ctl.wait_mounted(sid, "left", "right")
@@ -418,12 +418,7 @@ def test_session_panes(cli, ctl, adapter):
     _ok(cli("session", "focus", "left", "--target", sid), "ok\n")
     assert _node(ctl, sid)["splitFocused"] is False
 
-    resized = cli("session", "resize", "--split-ratio", "0.3", "--target", sid)
-    if adapter.has("resize-echoes-ratio"):
-        _ok(resized, "0.300\n")
-    else:
-        # The Linux fork answers without the applied ratio, so its CLI prints the bare acknowledgement.
-        _ok(resized, "ok\n")
+    _ok(cli("session", "resize", "--split-ratio", "0.3", "--target", sid), "0.300\n")
     assert _node(ctl, sid)["splitRatio"] == pytest.approx(0.3, abs=1e-6)
     _usage(cli("session", "resize", "--target", sid))
 
@@ -1032,7 +1027,7 @@ def test_zmx_commands_refused_before_acting(cli, ctl):
 # -- Live sessions
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which the references create only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
 )
 PRESENTATION_HELLO = {
     "kind": "hello",

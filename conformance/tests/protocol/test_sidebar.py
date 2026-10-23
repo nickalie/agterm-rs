@@ -92,7 +92,7 @@ def test_unknown_mode_is_refused(ctl, cmd, field, error):
 
 
 def _settled_width(ctl, width, window=None):
-    """Poll `tree` until the sidebar reads `width`: a GTK paned stores its own position after the reply."""
+    """Poll `tree` until the sidebar reads `width`: a view may store its own position after the reply."""
 
     def reads(response):
         assert assert_ok(response)["tree"]["sidebarWidth"] == width
@@ -118,8 +118,8 @@ def test_width_below_the_floor_is_clamped(ctl, adapter):
     if adapter.has("sidebar-min-width"):
         _settled_width(ctl, WIDTH_MIN)
         return
-    # The Linux fork's GTK paned stops at the sidebar's own minimum width (240 points here) and stores that
-    # position after the reply.
+    # Without the capability the view may stop above the floor, at the sidebar's own minimum width, and store
+    # that position after the reply.
 
     def narrowed(response):
         assert WIDTH_MIN <= assert_ok(response)["tree"]["sidebarWidth"] < start

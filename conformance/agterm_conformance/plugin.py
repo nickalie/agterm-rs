@@ -24,10 +24,10 @@ if TYPE_CHECKING:
     from agterm_conformance.impls.base import Adapter, Instance
     from agterm_conformance.vocabulary import Vocabulary
 
-IMPLS = ("swift-macos", "swift-linux", "rust")
+IMPLS = ("swift-macos", "rust")
 # A rust run without a binary is legal: the adapter reports nothing and every test skips.
-BIN_REQUIRED = frozenset({"swift-macos", "swift-linux"})
-# The prefixes of the implementations' own variables: upstream's and the fork's, and the Rust build's (ngterm).
+BIN_REQUIRED = frozenset({"swift-macos"})
+# The prefixes of the implementations' own variables: upstream's and the Rust build's (ngterm).
 UPSTREAM_PREFIX = "AGTERM_"
 RUST_PREFIX = "NGTERM_"
 # Every variable a live terminal hands its shells: either app's own, and zmx's.

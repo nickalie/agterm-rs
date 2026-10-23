@@ -1,6 +1,6 @@
 """A second zmx client on one of an instance's daemons: the local stand-in for a viewer attached over ssh.
 
-Both references hand an overlay to a presenter only while every pane's own client follows (`followsRemotely`), and
+Upstream hands an overlay to a presenter only while every pane's own client follows (`followsRemotely`), and
 a pane follows only when another client of its daemon claimed the lead. `leading_client` is that client, started
 the way `RemoteSession.attachCommand` starts the viewer's on the origin, minus ssh.
 """

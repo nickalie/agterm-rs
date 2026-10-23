@@ -4,7 +4,7 @@
 //! (upstream's `SettingsModel.persistAndApply` → `apply` → `reloadConfigClearingSessionZoom`). Interactive previews
 //! (the palette's live theme picker) are not reachable over the socket.
 //!
-//! The result carries the slots by sync state (`theme-slots-by-sync`): `theme` for the single theme while not
+//! The result carries the slots by sync state, as upstream's does: `theme` for the single theme while not
 //! following, `light` and `dark` while following, `sync` always.
 
 use std::path::PathBuf;

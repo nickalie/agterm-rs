@@ -1,8 +1,6 @@
 """What a quit and a relaunch on the same state directory bring back. Each test starts its own instance through the
 `launch` fixture and relaunches it with `launch.relaunch`, which SIGTERMs the launched pid and starts the same binary
-on the same root.
-
-A pane's shell starts in the account's real home on the Linux fork, so every line typed here only prints."""
+on the same root."""
 
 import re
 import uuid
@@ -11,7 +9,7 @@ import pytest
 from agterm_conformance.match import assert_absent, assert_ok, find_session, workspaces
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which the references create only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
 )
 
 
@@ -45,7 +43,6 @@ def test_relaunch_keeps_workspaces_sessions_and_their_metadata(launch):
     window = assert_ok(ctl.request("window.list"))["windows"][0]
     assert_ok(ctl.request("window.rename", window["id"], name="kept window"))
     alpha = assert_ok(ctl.request("workspace.new", name="alpha"))["id"]
-    # Each split is made while its session is selected: the Linux fork mounts a pane only once it is on screen.
     first = _new(ctl, workspace=alpha, name="first")
     assert_ok(ctl.request("session.flag", first, mode="on"))
     assert_ok(ctl.request("session.context", first, mode="set", text="what it is for"))

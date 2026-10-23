@@ -1,4 +1,4 @@
-//! Persistence in upstream's on-disk formats, which the Linux fork shares: the window index `windows.json`, each
+//! Persistence in upstream's on-disk formats: the window index `windows.json`, each
 //! window's `windows/<ID>.json` snapshot, the legacy single-window `workspaces.json`, `settings.json` and Open Recent's
 //! `recent-closed.json`, all in the state directory.
 //!

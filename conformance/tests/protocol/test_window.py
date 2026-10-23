@@ -111,15 +111,9 @@ def test_window_option_addresses_that_windows_store(ctl, second):
 
 
 @pytest.mark.covers("window.select", "window.go", "field:window.active")
-def test_select_and_go_move_the_active_window(ctl, adapter, second):
+def test_select_and_go_move_the_active_window(ctl, second):
     first = _first(ctl)
     assert assert_ok(ctl.request("window.select", first))["id"] == first
-    if not adapter.has("select-takes-frontmost"):
-        # The Linux fork takes `active` from the focus the compositor grants after presenting the window, which
-        # it may withhold or hand back to a window still activating; `window.go` steps from that window.
-        for direction in ("next", "prev"):
-            assert assert_ok(ctl.request("window.go", to=direction))["id"] in (first, second)
-        return
     _settled(ctl, first, active=True)
     for direction, landed, other in (("next", second, first), ("prev", first, second)):
         assert assert_ok(ctl.request("window.go", to=direction))["id"] == landed
@@ -131,9 +125,7 @@ def test_select_and_go_move_the_active_window(ctl, adapter, second):
 def test_go_needs_another_open_window(ctl, second):
     assert_ok(ctl.request("window.close", second))
     _settled(ctl, second, open=False)
-    response = ctl.request("window.go", to="next")
-    # Upstream adds " to navigate to"; the Linux fork stops at "window".
-    assert not response.ok and response.error.startswith("no other open window"), response.raw
+    assert_error(ctl.request("window.go", to="next"), "no other open window to navigate to")
 
 
 @pytest.mark.covers("window.rename", "field:window.name")
@@ -149,7 +141,7 @@ def test_resize_echoes_the_applied_size(ctl, adapter, second):
     if adapter.has("window-geometry"):
         _settled(ctl, second, geometry={"width": 900, "height": 600})
     else:
-        # GTK4 reports no window position, so the Linux fork omits `geometry` rather than half of it.
+        # Wayland gives a client no window position, so the build omits `geometry` rather than half of it.
         assert_absent(_window(ctl, second), "geometry")
 
 
@@ -191,11 +183,9 @@ def test_minimize_on_and_off(ctl, adapter, second):
         if adapter.has("window-minimize"):
             _settled(ctl, second, minimized=minimized)
         else:
-            # Wayland's xdg-shell has no minimized state for GTK4 to report.
+            # Wayland's xdg-shell has no minimized state to report.
             assert _window(ctl, second)["open"] is True
-    response = ctl.request("window.minimize", second, mode="pin")
-    # Upstream says "invalid window minimize mode", the Linux fork "invalid minimize mode".
-    assert not response.ok and response.error.endswith("minimize mode: pin"), response.raw
+    assert_error(ctl.request("window.minimize", second, mode="pin"), "invalid window minimize mode: pin")
 
 
 @pytest.mark.covers("window.new", "window.minimize", "field:window.minimized")
@@ -226,9 +216,7 @@ def test_close_keeps_the_window_and_select_reopens_it(ctl, adapter, second):
     ] + ([("window.move", {"x": 40, "y": 60})] if adapter.has("window-geometry") else []):
         assert_error(ctl.request(cmd, second, **args), NOT_OPEN)
     for cmd in ("tree", "workspace.new"):
-        response = ctl.request(cmd, window=second)
-        # Upstream adds " — window.select it first" to a closed `--window`; the Linux fork stops at "open".
-        assert not response.ok and response.error.startswith("window not open"), response.raw
+        assert_error(ctl.request(cmd, window=second), NOT_OPEN)
 
     assert assert_ok(ctl.request("window.select", second))["id"] == second
     _settled(ctl, second, open=True)

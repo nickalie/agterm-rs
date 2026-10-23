@@ -1,7 +1,7 @@
 # agterm conformance suite
 
 Black-box tests that define feature parity with upstream agterm.
-The same tests run against the released macOS app, the Linux fork and the Rust build, over the control socket,
+The same tests run against the released macOS app and the Rust build, over the control socket,
 `agtermctl` and the accessibility tree.
 
 ## Install
@@ -20,9 +20,6 @@ beside it (`agtermctl`, the Rust build's `ngtermctl`: the adapter's `ctl_name`).
 # upstream macOS release (a bundle or its executable); fetch_reference.py downloads and caches it by tag
 bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.36.0 | sed -n 's/^bundle=//p')
 .venv/bin/python -m pytest conformance/tests --impl swift-macos --bin "$bundle"
-
-# the installed Linux fork: protocol, cli and behaviors, with a report in conformance/reports/reference-linux/
-conformance/tools/run-reference-linux.sh [--bin PATH] [-- PYTEST_ARGS...]
 
 # the Rust build; without --bin every test skips and parity reads 0%
 .venv/bin/python -m pytest conformance/tests --impl rust --bin <rust-binary>
@@ -82,37 +79,28 @@ not-yet-at-level, so an unsupported capability is a recorded divergence, not a g
 
 ## Reference discipline
 
-A test is accepted only when it is green on its references: reference-macos in CI and reference-linux through
-`run-reference-linux.sh`, whose report goes on the PR.
-Red on a reference means the test is wrong.
+The reference is upstream's macOS release: a test is accepted only when it is green on reference-macos in CI.
+Red on the reference means the test is wrong.
 
-When the references disagree on observable state or effects:
-
-- a legitimate platform divergence becomes a capability with a reason, and the test asserts each branch under
-  `requires` or `adapter.has`, holding each build to its platform's reference;
-- a fork bug against upstream's documented contract keeps upstream's assertion everywhere, with
-  `xfail(strict=True, raises=AssertionError)` on `swift-linux` only, listed in
-  [docs/fork-bugs.md](docs/fork-bugs.md).
-
-Error text that differs only in wording is asserted on its shared part.
+Where the Rust build legitimately differs from the reference on observable state or effects (a platform divergence,
+such as Wayland giving a client no window position), the divergence becomes a capability with a reason, and the test
+asserts each branch under `requires` or `adapter.has`. Everything else asserts upstream's behavior and upstream's
+full error text directly.
 
 The Rust build is held to upstream's contract, its capability branches included: it claims the capabilities listed
 in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
 takes upstream's branch unless that list says otherwise.
-reference-linux is a diagnostic for it, not a reference: a Rust test that differs from the fork is judged against
-upstream.
-The per-platform rule above applies to the two Swift references.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-rust-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 A Rust-only extension (today `live-any-shell`, Live sessions in bash, fish and PowerShell login shells) is a
-capability neither reference claims: its tests skip as unsupported on both references and are validated by the Rust
-CI with `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
+capability the reference does not claim: its tests skip as unsupported there and are validated by the Rust CI with
+`--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 
 ## Rust runner and ratchet
 
 `tools/run-rust-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
 `target/conformance-stage` (or runs an existing stage given with `--stage DIR`) and runs the protocol, cli and
-behaviors layers with `--impl rust` under run-reference-linux.sh's isolation.
+behaviors layers with `--impl rust`, each instance on its own headless weston and session bus (Safety guards).
 It runs pytest with `$PYTHON`, else `.venv/bin/python`, else `python3`, with this checkout's harness first on
 `PYTHONPATH`.
 Into `--out DIR` (default `reports/rust-linux/`) it writes `report.md`, `junit.xml`, `pytest.log` and `nodeids.jsonl`,
@@ -140,7 +128,7 @@ verified and unpacked into the vendor dir) and hands it to the harness as `CONFO
 run exits 2.
 The adapter makes it the instance's only Vulkan driver (`VK_DRIVER_FILES`), forces GL onto llvmpipe, drops every
 inherited device selection, refuses a manifest that does not load lavapipe, and starts the instance's weston with
-`--fake-seat` (GPUI panics on a compositor without a `wl_seat`); the fork's adapter keeps its weston and environment.
+`--fake-seat` (GPUI panics on a compositor without a `wl_seat`).
 `--fake-seat` needs weston 15.0 or later: where the weston on PATH lacks it (Ubuntu 26.04 ships 14), the runner takes
 the one `scripts/build-weston.sh` vendors, else exits 2 naming that script, and the adapter refuses such a weston with
 the same pointer. The ICD manifest must name a driver that is there.
@@ -197,13 +185,12 @@ that could reach it:
   only the harness's own.
 - Each instance gets a fresh root (`/tmp/agt-*`, or under `CONFORMANCE_TMP`) holding its `HOME`, XDG homes, state
   dir and socket; the guards refuse any of them outside it.
-  Its live-session socket directory (the references' zmx one, the Rust build's session server namespace) derives
+  Its live-session socket directory (upstream's zmx one, the Rust build's session server namespace) derives
   from that state dir.
-- Linux instances get a unique app id (`NGTERM_APP_ID`, the references' `AGTERM_APP_ID`), never the installed one,
-  and a private `XDG_RUNTIME_DIR`.
+- Linux instances get a unique app id (`NGTERM_APP_ID`), never the installed one, and a private `XDG_RUNTIME_DIR`.
 - Linux instances draw into their own headless weston with their own dbus-daemon, so no window, notification or
   a11y object reaches the desktop.
-  `run-reference-linux.sh` requires both programs.
+  The harness requires both programs.
   `CONFORMANCE_LINUX_DISPLAY=session` uses the desktop's display and bus instead, for debugging only.
 - A GPUI instance renders on lavapipe only, in either display mode: never on the machine's GPU driver.
 - URI and file launches go to a no-op handler through the isolated `mimeapps.list` and `BROWSER=true`.
@@ -221,8 +208,6 @@ that could reach it:
 - `CFFIXED_USER_HOME` does not isolate the `com.umputun.agterm` defaults domain, which every macOS instance shares
   with the account.
   Run reference-macos only on an ephemeral runner, never on a Mac with a live agterm.
-- A Linux pane starts in the real home (the fork ignores `HOME`): keep what a test types side-effect free or `cd` into
-  the instance root first.
 
 ## CI
 

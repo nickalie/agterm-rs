@@ -25,7 +25,7 @@ Handler = Callable[[bytes], bytes | None]
 class FakeServer:
     """Serves one connection at a time; `handler` maps the request line to raw reply bytes (None: close).
 
-    With `limit`, it stops reading once the line exceeds it and leaves the rest unread, as the references do.
+    With `limit`, it stops reading once the line exceeds it and leaves the rest unread, as upstream does.
     """
 
     def __init__(self, path: Path, handler: Handler, limit: int | None = None) -> None:

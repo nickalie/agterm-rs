@@ -4,8 +4,8 @@
 //! that directory is root-owned). An earlier link is replaced; a real file there (a package's or a hand-installed
 //! binary) is the user's and is left alone.
 //!
-//! The CLI is `ngtermctl`, not upstream's `agtermctl`: the GTK fork puts its own `~/.local/bin/agtermctl` there, and
-//! the two CLIs resolve different default sockets, so this build neither takes nor touches that name.
+//! The CLI is `ngtermctl`, not upstream's `agtermctl`: the two CLIs resolve different default sockets, so this build
+//! neither takes nor touches a `~/.local/bin/agtermctl` an agterm install put there.
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -247,13 +247,13 @@ mod tests {
     }
 
     #[test]
-    fn the_forks_agtermctl_link_is_left_alone() {
+    fn an_agtermctl_link_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let tool = bundled_tool(dir.path());
-        let forks = home.join(".local/bin/agtermctl");
-        fs::create_dir_all(forks.parent().unwrap()).unwrap();
-        symlink("/home/me/.local/share/agterm-linux/bin/agtermctl", &forks).unwrap();
+        let agtermctl = home.join(".local/bin/agtermctl");
+        fs::create_dir_all(agtermctl.parent().unwrap()).unwrap();
+        symlink("/opt/agterm/bin/agtermctl", &agtermctl).unwrap();
 
         let planned = plan(&env(&home, Some(tool.clone())));
         assert!(
@@ -262,8 +262,8 @@ mod tests {
         assert!(matches!(apply(&planned, None), CliResult::Installed { .. }));
         assert_eq!(fs::read_link(home.join(".local/bin/ngtermctl")).unwrap(), tool);
         assert_eq!(
-            fs::read_link(&forks).unwrap(),
-            Path::new("/home/me/.local/share/agterm-linux/bin/agtermctl")
+            fs::read_link(&agtermctl).unwrap(),
+            Path::new("/opt/agterm/bin/agtermctl")
         );
     }
 

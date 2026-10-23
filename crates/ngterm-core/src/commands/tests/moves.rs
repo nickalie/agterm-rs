@@ -73,7 +73,7 @@ fn move_next_to_an_anchor_across_workspaces() {
     assert_eq!(fixture.order(destination), [first, last]);
 }
 
-/// `drop-placement`: after an anchor below it lands right after the anchor, the drop's post-removal index.
+/// Placed like a sidebar drop: after an anchor below it lands right after the anchor, the drop's post-removal index.
 #[test]
 fn move_after_an_anchor_below_it_lands_right_after_it() {
     let mut fixture = Fixture::new(2);

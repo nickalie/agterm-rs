@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from agterm_conformance.client import Response, SocketOutsideRoot
 from agterm_conformance.impls.base import Instance, Profile
-from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
+from upstream_adapter import UpstreamVocabularyAdapter
 from agterm_conformance.match import session_ids
 from agterm_conformance.plugin import Cli, Ctl, skip_reason
 from agterm_conformance.wait import (
@@ -37,13 +37,18 @@ def run_suite(pytester: pytest.Pytester, *args: str) -> pytest.RunResult:
     return pytester.runpytest("-p", "no:cacheprovider", "-rs", *args)
 
 
-def swift_linux(fake_bin: Path, *extra: str) -> tuple[str, ...]:
-    return ("--impl", "swift-linux", "--bin", str(fake_bin), *extra)
+def upstream(fake_bin: Path, *extra: str) -> tuple[str, ...]:
+    return ("--impl", UpstreamVocabularyAdapter.name, "--bin", str(fake_bin), *extra)
+
+
+@pytest.fixture(autouse=True)
+def _upstream_impl(upstream_impl: str) -> str:
+    return upstream_impl
 
 
 @pytest.fixture
 def ctl(roots: list[Path], fake_bin: Path) -> Iterator[Ctl]:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
         yield Ctl(instance)
@@ -82,7 +87,7 @@ def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], 
         def test_above_level(ctl):
             raise AssertionError("must not run")
 
-        @pytest.mark.requires("window-geometry", reason="GTK4 cannot restore x/y")
+        @pytest.mark.requires("window-geometry", reason="no window position here")
         def test_unsupported(ctl):
             raise AssertionError("must not run")
 
@@ -101,13 +106,13 @@ def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], 
             pass
         """
     )
-    result = run_suite(pytester, *swift_linux(fake_bin))
+    result = run_suite(pytester, *upstream(fake_bin))
     result.assert_outcomes(passed=3, failed=1, skipped=3)
     result.stdout.fnmatch_lines_random(
         [
-            "SKIPPED [[]1[]] test_skip_reasons_and_summary.py:7: not-yet-at-level: since 0.37.0, swift-linux is at 0.36.0",
-            "*unsupported: swift-linux lacks window-geometry (GTK4 cannot restore x/y)",
-            "swift-linux: 2 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns, "
+            "SKIPPED [[]1[]] test_skip_reasons_and_summary.py:7: not-yet-at-level: since 0.37.0, upstream is at 0.36.0",
+            "*unsupported: upstream lacks window-geometry (no window position here)",
+            "upstream: 2 pass, 1 fail, 1 skip(unsupported), 1 skip(not-yet-at-level), 1 skip(other), 0 reruns, "
             "parity 50.0%",
         ]
     )
@@ -128,7 +133,7 @@ def test_launch_fixture_starts_seeded_instances_and_stops_them(
             assert not (second.instance.state_dir / "settings.json").exists()
         """
     )
-    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    run_suite(pytester, *upstream(fake_bin)).assert_outcomes(passed=1)
     assert len(roots) == 2 and not any(root.exists() for root in roots)
 
 
@@ -149,7 +154,7 @@ def test_launch_fixture_relaunches_on_the_same_state_dir(
             assert launch.launched == [second.instance]
         """
     )
-    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    run_suite(pytester, *upstream(fake_bin)).assert_outcomes(passed=1)
     assert len(roots) == 1 and not roots[0].exists()
 
 
@@ -165,7 +170,7 @@ def test_launch_fixture_waits_for_a_first_run_launch(
             assert launch.launched == [ctl.instance]
         """
     )
-    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    run_suite(pytester, *upstream(fake_bin)).assert_outcomes(passed=1)
     assert len(roots) == 1 and not roots[0].exists()
 
 
@@ -185,7 +190,7 @@ def test_a_failed_first_run_wait_keeps_its_root_through_teardown(
             assert launch.launched == []
         """
     )
-    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    run_suite(pytester, *upstream(fake_bin)).assert_outcomes(passed=1)
     assert len(roots) == 1 and (roots[0] / "app.log").exists()
 
 
@@ -202,9 +207,9 @@ def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pyte
     )
     why = "the password-database login shell is /bin/fish, not zsh"
     adapter = SimpleNamespace(
-        available=True, name="swift-linux", profile=Profile("0.36.0", frozenset(), {"live-sessions": why})
+        available=True, name="upstream", profile=Profile("0.36.0", frozenset(), {"live-sessions": why})
     )
-    assert skip_reason(item, adapter) == f"unsupported: swift-linux lacks live-sessions on this host: {why} (needs zmx)"
+    assert skip_reason(item, adapter) == f"unsupported: upstream lacks live-sessions on this host: {why} (needs zmx)"
 
 
 def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
@@ -213,12 +218,12 @@ def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: 
         import pytest
 
         @pytest.mark.since("1.0")
-        @pytest.mark.requires("window-geometry", reason="GTK4")
+        @pytest.mark.requires("window-geometry", reason="no window position here")
         def test_both(ctl):
             pass
         """
     )
-    result = run_suite(pytester, *swift_linux(fake_bin))
+    result = run_suite(pytester, *upstream(fake_bin))
     result.stdout.fnmatch_lines(["*0 skip(unsupported), 1 skip(not-yet-at-level)*", "*not-yet-at-level: since 1.0*"])
     assert roots == []
 
@@ -344,9 +349,9 @@ def test_reruns_are_counted(pytester: pytest.Pytester, roots: list[Path], fake_b
             assert len(calls) > 1
         """
     )
-    result = run_suite(pytester, *swift_linux(fake_bin, "--reruns", "1"))
+    result = run_suite(pytester, *upstream(fake_bin, "--reruns", "1"))
     assert result.parseoutcomes() == {"passed": 1, "rerun": 1}
-    result.stdout.fnmatch_lines(["swift-linux: 1 pass, 0 fail, * 1 reruns, parity 100.0%"])
+    result.stdout.fnmatch_lines(["upstream: 1 pass, 0 fail, * 1 reruns, parity 100.0%"])
 
 
 def test_summary_is_absent_without_conformance_tests(pytester: pytest.Pytester) -> None:
@@ -390,7 +395,7 @@ def test_app_is_per_test_and_shared_app_per_module(
             record(app)
         """
     pytester.makepyfile(test_one=body, test_two=body)
-    result = run_suite(pytester, *swift_linux(fake_bin))
+    result = run_suite(pytester, *upstream(fake_bin))
     result.assert_outcomes(passed=8)
     pids = [int(line) for line in pids_file.read_text().split()]
     assert len(pids) == len(set(pids)) == 6
@@ -413,7 +418,7 @@ def test_ctl_waits_through_the_fixture(pytester: pytest.Pytester, roots: list[Pa
             assert ctl.wait_tree(lambda tree: session_ids(tree) == ["s1"])
         """
     )
-    run_suite(pytester, *swift_linux(fake_bin)).assert_outcomes(passed=1)
+    run_suite(pytester, *upstream(fake_bin)).assert_outcomes(passed=1)
 
 
 def test_cli_passes_the_instance_socket(
@@ -441,7 +446,7 @@ def test_cli_passes_the_instance_socket(
             assert cli("tree").json()["argv"][-1] == os.fspath(app.socket)
         """
     )
-    run_suite(pytester, *swift_linux(fake_bin, "--ctl", str(fake_ctl))).assert_outcomes(passed=2)
+    run_suite(pytester, *upstream(fake_bin, "--ctl", str(fake_ctl))).assert_outcomes(passed=2)
 
 
 def test_cli_local_runs_without_a_socket_in_the_instance_env(ctl: Ctl, fake_ctl: Path) -> None:
@@ -513,9 +518,9 @@ def test_cli_spawn_close_stops_a_command_that_keeps_running(ctl: Ctl, stream_ctl
 
 def test_cli_without_agtermctl_fails_clearly(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
     pytester.makepyfile("def test_cli(cli):\n    pass\n")
-    result = run_suite(pytester, *swift_linux(fake_bin))
+    result = run_suite(pytester, *upstream(fake_bin))
     result.assert_outcomes(errors=1)
-    result.stdout.fnmatch_lines(["*swift-linux has no agtermctl: pass --ctl*"])
+    result.stdout.fnmatch_lines(["*upstream has no agtermctl: pass --ctl*"])
 
 
 # -- waits

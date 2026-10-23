@@ -3,11 +3,10 @@
 //! `ControlResolve.socketPath` over `AGTERM_STATE_DIR` or `PersistenceStore.defaultDirectory`), under this build's
 //! names (`NGTERM_CONTROL_SOCKET`, `NGTERM_STATE_DIR`).
 //!
-//! The Linux base is glue taken from the Linux fork: `PersistenceStore.defaultDirectory` is Foundation's application
-//! support directory, which on Linux is the XDG data home, and an empty variable counts as unset, as the fork's
-//! `linuxStateDirectory()` (`agterm-linux/Sources/AgtermLinux/App.swift`) treats `AGTERM_STATE_DIR`; upstream would
-//! take an empty value as given. The directory name is this build's own (`ngterm`), not the fork's, since the two
-//! register different application ids and so cannot keep each other off one directory.
+//! The Linux base: `PersistenceStore.defaultDirectory` is Foundation's application support directory, which on Linux
+//! is the XDG data home of the XDG Base Directory spec (`$XDG_DATA_HOME`, else `~/.local/share`). An empty
+//! `NGTERM_STATE_DIR` counts as unset, as the spec treats an empty variable; upstream would take an empty value as
+//! given. The directory name is this build's own (`ngterm`), not upstream's `agterm`.
 //!
 //! Every function reads the environment through [`Env`], so tests pass a [`MapEnv`] instead of mutating the
 //! process environment.

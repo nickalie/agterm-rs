@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from agterm_conformance.impls.base import GHOSTTY_SHELL_CONFIG, Adapter, Instance, LaunchError, StopError
-from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.impls.swift_macos import LAUNCH_MODES, SwiftMacosAdapter
 from agterm_conformance.match import active_session_id, assert_ok
 from agterm_conformance.wait import wait_text
@@ -53,8 +52,6 @@ def with_mechanism(adapter: Adapter, mechanism: str) -> Adapter:
 
 
 def make(args: argparse.Namespace) -> Adapter:
-    if args.impl == "swift-linux":
-        return SwiftLinuxAdapter(args.bin, args.ctl)
     return SwiftMacosAdapter(args.bin, args.ctl, launch_mode=args.launch_mode, enable_zmx=not args.no_zmx)
 
 
@@ -102,7 +99,7 @@ def run(adapter: Adapter, mechanism: str, timeout: float) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--impl", choices=("swift-linux", "swift-macos"), required=True)
+    parser.add_argument("--impl", choices=("swift-macos",), required=True)
     parser.add_argument("--bin", type=Path, required=True)
     parser.add_argument("--ctl", type=Path)
     parser.add_argument("--mechanism", choices=MECHANISMS, default="both")

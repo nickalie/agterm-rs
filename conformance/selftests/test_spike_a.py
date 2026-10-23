@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 from agterm_conformance.impls.base import GHOSTTY_SHELL_CONFIG, LaunchError, LeftoverProcesses, StopError
-from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
 from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
 
 spec = importlib.util.spec_from_file_location(
@@ -31,10 +30,10 @@ spec.loader.exec_module(spike)
 def test_mechanism_controls_shell_env_and_ghostty_config(
     tmp_path: Path, mechanism: str, shell: str, config: str
 ) -> None:
-    adapter = spike.with_mechanism(SwiftLinuxAdapter(tmp_path / "agterm-linux"), mechanism)
-    assert isinstance(adapter, SwiftLinuxAdapter) and adapter.bin == tmp_path / "agterm-linux"
+    adapter = spike.with_mechanism(SwiftMacosAdapter(tmp_path / "agterm.app"), mechanism)
+    assert isinstance(adapter, SwiftMacosAdapter) and adapter.bin == tmp_path / "agterm.app"
     env = adapter.build_env(tmp_path)
-    assert env["SHELL"] == shell and env["AGTERM_APP_ID"]
+    assert env["SHELL"] == shell and env["AGTERM_STATE_DIR"]
     assert adapter.ghostty_config() == config
 
 
@@ -47,9 +46,9 @@ def test_mechanism_keeps_the_macos_launch_mode(tmp_path: Path) -> None:
 def test_probe_line_matches_shell_output_not_the_echoed_input() -> None:
     echoed = "$ " + spike.PROBE.rstrip("\n")
     assert not re.search(spike.PROBE_LINE, echoed)
-    found = re.search(spike.PROBE_LINE, f"{echoed}\nagt-shell|/bin/sh|sh|agterm-linux.bi|5.3.20(1)-release\n$ ")
+    found = re.search(spike.PROBE_LINE, f"{echoed}\nagt-shell|-/bin/sh|-/bin/sh|/usr/bin/login|3.2.57(1)-release\n$ ")
     assert found is not None
-    assert found.groups() == ("/bin/sh", "sh", "agterm-linux.bi", "5.3.20(1)-release")
+    assert found.groups() == ("-/bin/sh", "-/bin/sh", "/usr/bin/login", "3.2.57(1)-release")
 
 
 class FakeAdapter:
@@ -86,7 +85,7 @@ def test_launch_and_stop_failures_still_write_the_report(
     monkeypatch.setattr(spike, "make", lambda args: adapter)
     monkeypatch.setattr(spike, "probe", lambda instance, timeout: {"argv0": "sh", "isSh": True})
     out = tmp_path / "report.json"
-    assert spike.main(["--impl", "swift-linux", "--bin", str(tmp_path / "agterm-linux"), "--out", str(out)]) == 1
+    assert spike.main(["--impl", "swift-macos", "--bin", str(tmp_path / "agterm.app"), "--out", str(out)]) == 1
     report = json.loads(out.read_text())
     assert report[field] == message
     assert ("argv0" in report) == probed and ("logTail" in report) == probed
@@ -95,4 +94,4 @@ def test_launch_and_stop_failures_still_write_the_report(
 def test_a_clean_stop_after_a_sh_probe_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spike, "make", lambda args: FakeAdapter())
     monkeypatch.setattr(spike, "probe", lambda instance, timeout: {"isSh": True})
-    assert spike.main(["--impl", "swift-linux", "--bin", str(tmp_path / "agterm-linux")]) == 0
+    assert spike.main(["--impl", "swift-macos", "--bin", str(tmp_path / "agterm.app")]) == 0

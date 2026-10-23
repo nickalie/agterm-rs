@@ -344,7 +344,7 @@ ghostty_terminfo_entry() {
   return 1
 }
 
-# Verify the Ghostty resources below SHARE (port of ../agterm-linux scripts/verify-linux-resources.sh): the ones
+# Verify the Ghostty resources below SHARE: the ones
 # build-ghostty-vt.sh vendors at LIBGHOSTTY_VT_REV. The terminfo source (`ghostty.terminfo`) is there on every OS; the
 # compiled entry is required, and read back with infocmp, where `tic` exists (build-ghostty-vt.sh compiles it then).
 verify_ghostty_resources() {

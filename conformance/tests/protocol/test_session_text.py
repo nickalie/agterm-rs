@@ -67,7 +67,6 @@ def test_type_then_read_the_marker_back(ctl):
     sid = _realized(ctl)
     marker, typed = _echo(ctl, sid)
     assert typed == {"id": sid, "pane": "left"}
-    # Only `text` and `pane` are compared: the Linux fork also echoes the session id, upstream does not.
     result = _text(ctl, sid)
     assert result["pane"] == "left"
     assert f"\n{marker}\n" in result["text"]
@@ -159,30 +158,21 @@ def test_type_rejects(ctl, args, error):
 @pytest.mark.covers("session.type", "session.text")
 @pytest.mark.parametrize("cmd", ["session.type", "session.text"])
 @pytest.mark.parametrize(
-    ("pane", "upstream"), [("right", "session has no split pane"), ("scratch", "session has no scratch terminal")]
+    ("pane", "error"), [("right", "session has no split pane"), ("scratch", "session has no scratch terminal")]
 )
-def test_a_missing_pane_is_refused(ctl, cmd, pane, upstream):
-    # The references disagree on the text: upstream names the missing pane, the Linux fork answers
-    # `session not realized` for both.
+def test_a_missing_pane_is_refused(ctl, cmd, pane, error):
     sid = _realized(ctl)
     args = {"text": "x"} if cmd == "session.type" else {}
-    response = ctl.request(cmd, sid, pane=pane, **args)
-    assert_error(response)
-    assert response.error in (upstream, "session not realized"), response.raw
+    assert_error(ctl.request(cmd, sid, pane=pane, **args), error)
     node = find_session(ctl.tree(), sid)
     assert_absent(node, "hasSplit")
     assert node["scratch"] is False
 
 
 @pytest.mark.covers("session.type")
-def test_type_text_carrying_a_nul(adapter, ctl):
+def test_type_text_carrying_a_nul(ctl):
     sid = _realized(ctl)
-    response = ctl.request("session.type", sid, text="a\u0000b")
-    if adapter.has("type-rejects-nul"):
-        assert_error(response, "text must not contain a NUL byte")
-    else:
-        # The Linux fork has no NUL guard and answers ok for the run libghostty types up to the NUL.
-        assert_ok(response)
+    assert_error(ctl.request("session.type", sid, text="a\u0000b"), "text must not contain a NUL byte")
     assert_ok(ctl.request("session.close", sid))
 
 
@@ -209,8 +199,8 @@ def test_search_counts_the_matches(ctl):
     assert_ok(ctl.request("session.select", sid))
     marker, _ = _echo(ctl, sid)
     _echo(ctl, sid)
-    # The command line carries the marker split in two, so only the printed line matches it. The display
-    # text differs by reference (upstream `1 of 1`, the Linux fork `0/1`), so only its presence is compared.
+    # The command line carries the marker split in two, so only the printed line matches it. Of the display
+    # text (upstream `1 of 1`) only its presence is compared.
     result = _searched(ctl, sid, marker, 1)
     assert isinstance(result["text"], str) and result["text"]
     _searched(ctl, sid, "NOT-ON-SCREEN", 0)

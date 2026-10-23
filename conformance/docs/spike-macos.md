@@ -1,14 +1,13 @@
-# Spikes on the references
+# Spikes on the reference
 
-## Spike A: launching the references
+## Spike A: launching the reference
 
-Spike A asks one question per reference.
+Spike A asks one question of the reference.
 Can the harness launch an isolated instance, talk to its socket, and get a deterministic `/bin/sh` in its pane?
 
 Run it with `conformance/tools/spike_a.py`:
 
 ```sh
-.venv/bin/python conformance/tools/spike_a.py --impl swift-linux --bin ~/.local/share/agterm-linux/bin/agterm-linux
 bundle=$(python conformance/tools/fetch_reference.py --tag v0.36.0 | sed -n 's/^bundle=//p')
 python conformance/tools/spike_a.py --impl swift-macos --bin "$bundle"
 ```
@@ -22,33 +21,6 @@ python conformance/tools/spike_a.py --impl swift-macos --bin "$bundle"
 
 The report holds the pane shell's `$0`, its `ps` comm, its parent's comm, and the shell version.
 `.github/workflows/spike-macos.yml` runs the macOS matrix.
-
-### reference-linux (confirmed 2026-10-11)
-
-The installed fork was 0.36.0, commit `8a5f58d4`.
-It ran through `SwiftLinuxAdapter` with a unique `AGTERM_APP_ID` and an isolated `/tmp/agt-*` root.
-
-| mechanism | `$0` | comm | parent | result |
-|---|---|---|---|---|
-| both | `/bin/sh` | `sh` | `agterm-linux.bin` | sh |
-| config (SHELL=/bin/bash) | `/bin/sh` | `sh` | `agterm-linux.bin` | sh |
-| env | `/bin/sh` | `sh` | `agterm-linux.bin` | sh |
-| none (SHELL=/bin/bash) | `/bin/bash` | `bash` | `agterm-linux.bin` | bash |
-
-- Either channel alone is enough.
-  Without either, the pane runs `$SHELL`, not the password-database shell (fish on this host).
-  The adapters keep both, so a reference that ignores one channel still gets `/bin/sh`.
-- The shell is the app's direct child: there is no login wrapper.
-  `/bin/sh` here is bash 5.3 in POSIX mode.
-- `session.type` to the active session was accepted as soon as `version` answered.
-  The probe line came back through `session.text` with no further wait.
-- In a fresh state dir the restore mode is `none`, so no zmx daemon starts and `stop` found no leftovers.
-- Live sessions are gated on the account's login shell.
-  `ZmxSupport.configuration` refuses any login shell but zsh (`unsupportedLoginShell`).
-  This host's login shell is fish, so a Live-mode request on reference-linux falls back to fresh shells here.
-  The adapter's static `live-sessions` capability does not hold on this host; Task 17 has to account for it.
-  A zmx-wrapped pane also runs the login zsh rather than `/bin/sh`.
-  Both points come from static reading and are unverified at runtime.
 
 ### reference-macos (confirmed 2026-10-12)
 

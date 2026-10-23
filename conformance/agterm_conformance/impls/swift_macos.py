@@ -25,26 +25,7 @@ from agterm_conformance.impls.base import (
 from agterm_conformance.wait import WaitTimeout, wait_until
 
 PARITY_LEVEL = "0.36.0"
-BASE_CAPABILITIES = frozenset(
-    {
-        "posix-shell",
-        "window-geometry",
-        "window-minimize",
-        "select-takes-frontmost",
-        "status-shape",
-        "type-rejects-nul",
-        "resize-echoes-ratio",
-        "drop-placement",
-        "overlay-size-validated",
-        "modal-blocks-covers",
-        "pick-names-pending-ask",
-        "quick-validates-input",
-        "theme-slots-by-sync",
-        "sidebar-min-width",
-        "keymap-menu",
-        "config-reload-counts",
-    }
-)
+BASE_CAPABILITIES = frozenset({"posix-shell", "window-geometry", "window-minimize", "sidebar-min-width"})
 LAUNCH_MODES = ("uitest", "plain")
 BUNDLE_DIR = "app"
 

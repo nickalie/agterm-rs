@@ -1,20 +1,17 @@
-//! The GPUI build as a process: single instance over a private session bus (both forwarding directions, with a GTK
-//! build of ngterm where one is given), the activation token reaching the primary and raising its window (Xvfb; a niri
-//! nested in a headless weston), the SIGTERM quit and its exit status, and the app id fallback. Every process runs in a
-//! [`Sandbox`]: nothing here can reach the user's session bus, desktop or live ngterm.
+//! The GPUI build as a process: single instance over a private session bus, the activation token reaching the
+//! primary and raising its window (Xvfb; a niri nested in a headless weston), the SIGTERM quit and its exit status,
+//! and the app id fallback. Every process runs in a [`Sandbox`]: nothing here can reach the user's session bus,
+//! desktop or live ngterm.
 //!
 //! A test that needs a tool this machine lacks (weston, Xvfb, lavapipe) prints `SKIPPED:` with the reason (seen with
-//! `--nocapture`) and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it: then it fails. The GTK
-//! forwarding checks need a GTK build of agterm (the Linux fork, or this repository's before the switch to GPUI) named
-//! by `AGTERM_GTK_BIN`, which nothing here builds: without one they skip, required or not. The nested-niri check is
-//! `#[ignore]`d (CI has no niri): run it with `--ignored`.
+//! `--nocapture`) and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it: then it fails. The
+//! nested-niri check is `#[ignore]`d (CI has no niri): run it with `--ignored`.
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]
 mod support;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use support::{
@@ -27,17 +24,6 @@ const TOKEN: &str = "ngterm-test-token";
 const STARTUP_ID: &str = "ngterm-test-launch_TIME4242";
 /// The startup id of a primary's own launch.
 const PRIMARY_STARTUP_ID: &str = "ngterm-test-primary_TIME777";
-
-/// A GTK build of agterm sharing the app id's protocol (`org.gtk.Application` on the bus name): `AGTERM_GTK_BIN`.
-fn gtk_build() -> Option<PathBuf> {
-    std::env::var_os("AGTERM_GTK_BIN")
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-}
-
-/// Why a GTK forwarding check did not run: no GTK build is a choice of the run, never a missing tool, so it skips even
-/// where the display tests are required.
-const NO_GTK_BUILD: &str = "no GTK build of agterm (AGTERM_GTK_BIN)";
 
 /// Starts the primary on the sandbox's display (none: headless) and waits until it owns its name and serves.
 fn start_primary(sandbox: &mut Sandbox) -> TestResult<usize> {
@@ -183,69 +169,6 @@ fn without_a_session_bus_the_launch_runs_alone() -> TestResult {
     sandbox.terminate(primary)?;
     let (status, _) = sandbox.wait_exit(primary, Duration::from_secs(10))?;
     assert_eq!(status.code(), Some(0));
-    Ok(())
-}
-
-#[test]
-fn a_gtk_build_launch_forwards_to_the_gpui_primary() -> TestResult {
-    let Some(gtk) = gtk_build() else {
-        eprintln!("SKIPPED: {NO_GTK_BUILD}");
-        return Ok(());
-    };
-    let mut sandbox = Sandbox::new()?;
-    let primary = start_primary(&mut sandbox)?;
-    let activations = sandbox.monitor_activations()?;
-    let before = sandbox.settled_state(Duration::from_secs(1))?;
-    let mut command = sandbox.command(&gtk);
-    command.env("DESKTOP_STARTUP_ID", STARTUP_ID);
-    let second = sandbox.spawn(command, "gtk-second.log")?;
-    let (status, _) = sandbox.wait_exit(second, DEADLINE)?;
-    assert!(status.success(), "{status:?}\n{}", sandbox.log("gtk-second.log"));
-    let (member, data) = activations.recv_timeout(DEADLINE)?;
-    assert_eq!(member, "Activate", "{data:?}");
-    // a non-primary GApplication registers through DescribeAll first; it got past it, so the primary served it
-    sandbox.wait_log("primary.log", "activation requested over the bus")?;
-    assert_eq!(sandbox.state_snapshot(), before, "the GTK launch wrote no state");
-    assert!(sandbox.child(primary).try_wait()?.is_none());
-    Ok(())
-}
-
-#[test]
-fn a_gpui_launch_forwards_to_a_gtk_primary() -> TestResult {
-    let Some(gtk) = gtk_build() else {
-        eprintln!("SKIPPED: {NO_GTK_BUILD}");
-        return Ok(());
-    };
-    if seated_weston().is_none() {
-        skip!("{NO_SEATED_WESTON}, for the GTK primary");
-    }
-    let mut sandbox = Sandbox::new()?;
-    sandbox.start_weston()?;
-    let mut command = sandbox.command(&gtk);
-    command.env("GDK_BACKEND", "wayland");
-    if let Some(vendor) = support::mesa_egl_vendor() {
-        command.env("__EGL_VENDOR_LIBRARY_FILENAMES", vendor);
-    }
-    let primary = sandbox.spawn(command, "gtk-primary.log")?;
-    wait_for_socket(&sandbox.path("state/ngterm.sock"))?;
-    sandbox.wait_owner(&sandbox.app_id.clone())?;
-    let activations = sandbox.monitor_activations()?;
-    let before = sandbox.settled_state(Duration::from_secs(1))?;
-    let second = sandbox.spawn_gpui(
-        &[("XDG_ACTIVATION_TOKEN", TOKEN), ("DESKTOP_STARTUP_ID", STARTUP_ID)],
-        "second.log",
-    )?;
-    let (status, _) = sandbox.wait_exit(second, DEADLINE)?;
-    assert!(status.success(), "{status:?}\n{}", sandbox.log("second.log"));
-    let (member, data) = activations.recv_timeout(DEADLINE)?;
-    assert_eq!(member, "Activate");
-    assert_eq!(data.get("activation-token").map(String::as_str), Some(TOKEN));
-    assert!(sandbox.log("second.log").contains("forwarded to the running instance"));
-    assert_eq!(sandbox.state_snapshot(), before, "the forwarding launch wrote no state");
-    assert!(sandbox.child(primary).try_wait()?.is_none(), "the GTK primary runs on");
-    sandbox.terminate(primary)?;
-    let (status, _) = sandbox.wait_exit(primary, Duration::from_secs(10))?;
-    assert!(status.success(), "{status:?}");
     Ok(())
 }
 
@@ -403,20 +326,6 @@ fn x11_launches_carry_their_startup_time_and_end_their_sequences() -> TestResult
     assert!(sandbox.wait_exit(second, DEADLINE)?.0.success());
     assert_x11_activation(&root, &app_id)?;
 
-    if let Some(gtk) = gtk_build() {
-        let root = x11::Root::watch(&sandbox)?;
-        let mut command = sandbox.command(&gtk);
-        command.env("GDK_BACKEND", "x11").env("DESKTOP_STARTUP_ID", STARTUP_ID);
-        let second = sandbox.spawn(command, "gtk-second.log")?;
-        assert!(
-            sandbox.wait_exit(second, DEADLINE)?.0.success(),
-            "{}",
-            sandbox.log("gtk-second.log")
-        );
-        assert_x11_activation(&root, &app_id)?;
-    } else {
-        eprintln!("SKIPPED (part): {NO_GTK_BUILD}");
-    }
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
     Ok(())
@@ -431,21 +340,6 @@ fn niri_focused(sandbox: &Sandbox) -> Option<String> {
         .ok()?;
     let window: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     window.get("app_id")?.as_str().map(str::to_owned)
-}
-
-/// The nested niri's window id of the window with `app_id`.
-fn niri_window(sandbox: &Sandbox, app_id: &str) -> Option<u64> {
-    let output = sandbox
-        .command("niri")
-        .args(["msg", "--json", "windows"])
-        .output()
-        .ok()?;
-    let windows: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
-    windows
-        .iter()
-        .find(|window| window.get("app_id").and_then(serde_json::Value::as_str) == Some(app_id))?
-        .get("id")?
-        .as_u64()
 }
 
 /// Waits until niri focuses the window of `app_id`.
@@ -498,20 +392,5 @@ fn a_launchers_token_raises_the_primary_under_a_nested_niri() -> TestResult {
     wait_focused(&sandbox, &app_id)?;
     let log = sandbox.wait_log("primary.log", "activation: window raised")?;
     assert!(log.contains("token=true"), "the token arrived: {log}");
-
-    if let Some(gtk) = gtk_build() {
-        let decoy = niri_window(&sandbox, &decoy_id).ok_or("no decoy window")?;
-        let status = sandbox
-            .command("niri")
-            .args(["msg", "action", "focus-window", "--id", &decoy.to_string()])
-            .status()?;
-        assert!(status.success());
-        wait_focused(&sandbox, &decoy_id)?;
-        let gtk = gtk.to_string_lossy().into_owned();
-        niri_spawn(&sandbox, &["/usr/bin/env", "GDK_BACKEND=wayland", &gtk])?;
-        wait_focused(&sandbox, &app_id)?;
-    } else {
-        eprintln!("SKIPPED (part): {NO_GTK_BUILD}");
-    }
     Ok(())
 }

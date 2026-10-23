@@ -74,8 +74,7 @@ fn a_plain_create_joins_an_applied_filter_and_becomes_current() {
     assert_eq!(fixture.focus_state(), ([current, plain].into(), true));
 }
 
-/// `test_background_create_keeps_the_current_workspace[collapsed]`: upstream's contract, which the Swift/GTK fork
-/// breaks (`conformance/docs/fork-bugs.md`).
+/// `test_background_create_keeps_the_current_workspace[collapsed]`: upstream's contract.
 #[test]
 fn the_background_create_keeps_the_current_workspace() {
     let mut fixture = Fixture::new(0);

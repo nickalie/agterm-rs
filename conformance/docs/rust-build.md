@@ -3,7 +3,7 @@
 ## `version` extension
 
 `version` is the harness's readiness probe: it is polled until it answers, and an error reply fails the launch.
-Its result is the references' `app` block plus a `conformance` block only the Rust build reports, and no other key
+Its result is the reference's `app` block plus a `conformance` block only the Rust build reports, and no other key
 (`assert_version_result` in `agterm_conformance/match.py`):
 
 ```json
@@ -47,64 +47,44 @@ The Rust build (GPUI) gets, on top of that:
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
 the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
-upstream's and the fork's zmx sockets in `/tmp/agterm-zmx-<hash>` (`upstream_socket_directory` in
+upstream's zmx sockets in `/tmp/agterm-zmx-<hash>` (`upstream_socket_directory` in
 `agterm_conformance/vocabulary.py`), the Rust build's session server in `/tmp/ngterm-live-<hash>`
 (`live_socket_directory`); the adapter's vocabulary names it, prefixed with the adapter's `app_dir_name` (the
-instance's `live_dir`). Every zmx or session-host process of a reference carries `ZMX_DIR=<that dir>`; the Rust
+instance's `live_dir`). Every zmx or session-host process of the reference carries `ZMX_DIR=<that dir>`; the Rust
 build's one server per instance runs as `ngterm-session server <that dir>`, and its sessions' programs and their
 attach clients carry `NGTERM_LIVE_DIR=<that dir>`. One left running after the stop fails it (the server gets its idle
 grace to stop by itself once its sessions are reaped).
-The CLI (`agtermctl` for the Swift builds, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
+The CLI (`agtermctl` for the Swift build, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
 else from beside `--bin`.
 
 ## Capability vocabulary
 
 Source of truth: `CAPABILITIES` in `agterm_conformance/impls/base.py`; `selftests/test_docs.py` keeps this table equal
-to it and to the references' profiles. `host`: claimed only where the account's login shell is zsh (on Linux, also with zmx staged).
-A row with both reference columns empty and a meaning starting `Rust-only` is an extension of the Rust build, see
+to it and to the reference's profile. `host`: claimed only where the account's login shell is zsh.
+A row with the reference column empty and a meaning starting `Rust-only` is an extension of the Rust build, see
 Rust-only extensions below.
+A capability names a divergence the platforms legitimately differ in; behavior both the reference and the Rust build
+share is asserted directly, with no capability.
 
-| capability | swift-macos | swift-linux | meaning |
-|---|---|---|---|
-| `posix-shell` | yes | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
-| `live-sessions` | host | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, ngterm-session) |
-| `live-any-shell` |  |  | Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
-| `window-geometry` | yes |  | window x/y position is settable through `window.move`, read back as `geometry` and restored |
-| `window-minimize` | yes |  | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
-| `select-takes-frontmost` | yes |  | `window.select`/`window.go` make their window `active` without waiting on window focus |
-| `status-shape` | yes |  | `session.status` validates `shape` and reads it back as `statusShape` |
-| `type-rejects-nul` | yes |  | `session.type` refuses text carrying a NUL rather than typing the run before it |
-| `resize-echoes-ratio` | yes |  | `session.resize` answers with the applied ratio in `result.ratio` |
-| `drop-placement` | yes |  | `session.move --after/--before` places like a sidebar drop, also above its own anchor |
-| `overlay-size-validated` | yes |  | `session.overlay.open` refuses a `sizePercent` outside 1...100 rather than clamping it |
-| `modal-blocks-covers` | yes |  | a pending GUI ask refuses control-driven covers such as `session.search` with `ask pending` |
-| `pick-names-pending-ask` | yes |  | `pick.open` under a pending GUI ask answers `ask already pending`, naming the ask |
-| `quick-validates-input` | yes |  | `quick.type` refuses a NUL, `quick.text` `--all` with `--lines` and a `--lines` below 1 |
-| `sidebar-min-width` | yes |  | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
-| `theme-slots-by-sync` | yes |  | `theme.set`/`theme.list` report `theme` only while not following the system appearance, `light`/`dark` only while following |
-| `keymap-menu` | yes |  | `keymap.list` reports the menu bar's live key equivalents in `menu` |
-| `config-reload-counts` | yes |  | `config.reload` answers with the ghostty config's diagnostic count in `result.count` |
-| `hidden-split-holds-focus` |  | yes | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
-| `capture-reads-command-panes` |  | yes | `restore.capture` records a `--command` session's program; upstream reads only the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read |
+| capability | swift-macos | meaning |
+|---|---|---|
+| `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
+| `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, ngterm-session) |
+| `live-any-shell` |  | Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
+| `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
+| `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
+| `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
+| `hidden-split-holds-focus` |  | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
 
 ## Rust target profile
 
 The capabilities the Rust build claims are held to upstream's contract: the build takes upstream's branch of every
 capability whose behavior lives in upstream's own code, and claims each one in the task that implements its command,
-never ahead of it. Since the implementation plan (`docs/plans/completed/20261012-rust-linux-implementation.md`) it
-claims:
+never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus the live ones by host):
 
-- `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as both references;
-- `status-shape`, `type-rejects-nul`: upstream validates both in `session.status` and `session.type`;
-- `drop-placement`: upstream's `session.move` places like a sidebar drop;
-- `select-takes-frontmost`: upstream's `windowSelect` calls `takeFrontmost` itself, a model change, not a compositor
-  focus;
-- `resize-echoes-ratio`, `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works
-  shown or hidden; read `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder
-  effect;
-- `quick-validates-input`, `modal-blocks-covers`, `pick-names-pending-ask`, `overlay-size-validated`,
-  `sidebar-min-width`, `theme-slots-by-sync`, `config-reload-counts`: upstream's validation and read-back;
-- `keymap-menu`: the app menu (`ngterm-gpui`'s `app_menu.rs`) carries the actions' live accelerators;
+- `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as the reference;
+- `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
+  `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
 - `live-sessions`: by host, where the login shell is zsh and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash, fish and PowerShell login shells too, the one Rust-only
   extension (below): claimed together with `live-sessions` for a zsh login shell, alone for the others.
@@ -113,22 +93,19 @@ It does not claim:
 
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
   tests branch, and the Rust build passes the other branch;
-- `capture-reads-command-panes`: it contradicts upstream's intent, `ForegroundProcess.command` reads only the
-  foreground group's leader, so a `--command` pane's creation command keeps the exec path, `--wait` and
-  close-on-exit.
+- `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
 
-The table above stays the references' profiles; this list is the Rust build's.
+The table above stays the reference's profile; this list is the Rust build's.
 
-Restore is lazy, as in the GTK fork and unlike upstream's eager deck (the user's call, 2026-10-19): only each
-window's selected restored session spawns at launch, the others once shown or once a command needs their terminal.
-No capability marks it: the suite already waits for a restored session only once it is selected, since the fork
-mounts a pane only on screen.
+Restore is lazy, unlike upstream's eager deck (the user's call, 2026-10-19): only each window's selected restored
+session spawns at launch, the others once shown or once a command needs their terminal. No capability marks it: the
+suite already waits for a restored session only once it is selected.
 
 ## Rust-only extensions
 
-A Rust-only extension is a capability no reference claims, so its tests (`requires` on it) skip as `unsupported` on
-both references and the reference discipline holds them to nothing there: the Rust CI validates them instead, with
-`--must-pass` on the capability in every job whose host can claim it.
+A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
+`unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
+instead, with `--must-pass` on the capability in every job whose host can claim it.
 Today there is one, `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
 as upstream, bash, fish and PowerShell as well, each started with its shell integration the way libghostty starts a
 shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish; ngterm's own
@@ -193,11 +170,11 @@ path and a terminal outside the app run the attach line. `clipboard set` prints 
 above with the print's own complaint after `the live-session print exited N: ` (the session gone, or no server:
 `ngterm-session print: no live session named NAME`) where upstream shows zmx's.
 
-The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift references
-answer to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
+The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift reference
+answers to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
 (`agterm_conformance/vocabulary.py`) for every value that depends on it: command names, the result and tree keys, the
 CLI argv, the error-text templates, the environment names, the socket directory and the leading client. The Swift
-adapters' is upstream's own (`UPSTREAM`), the Rust adapter's renames the group (`LIVE`); `base.py`, `cli_format.py`
+adapter's is upstream's own (`UPSTREAM`), the Rust adapter's renames the group (`LIVE`); `base.py`, `cli_format.py`
 and the shared tests read every such value through `ctl.vocabulary`, `cli.vocabulary` or the instance's. `LIVE`
 refuses an upstream text that names zmx and that it does not list, and `selftests/test_vocabulary.py` checks each
 listed text against the Rust sources.
@@ -211,7 +188,7 @@ patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned t
 ## Ratchet
 
 `conformance/tools/run-rust-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` and runs the
-protocol, cli and behaviors layers with `--impl rust` under run-reference-linux.sh's isolation.
+protocol, cli and behaviors layers with `--impl rust`, each instance on its own headless weston and session bus.
 pytest writes each test's merged outcome with `--nodeid-report` next to the report in
 `conformance/reports/rust-linux/`, and `conformance/tools/check_ratchet.py` holds `conformance/rust-passing.txt`
 against it: one pytest node id per line, verbatim and sorted.
@@ -242,11 +219,11 @@ app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is
 runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
-`bin/ngterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's and the fork's CLI is `agtermctl`,
+`bin/ngterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's CLI is `agtermctl`,
 and the CLI tests expect the adapter's name in usage lines) and `bin/ngterm-session` with
 `share/ngterm/session-BUILD` (the staged server's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and
-`share/ghostty` (themes, shell integration) from the libghostty-vt prefix, and the agent integrations' payloads under `share/ngterm` (not upstream's `share/agterm`: installed at prefix `~/.local`,
-that would be the fork's state dir). There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK,
+`share/ghostty` (themes, shell integration) from the libghostty-vt prefix, and the agent integrations' payloads under `share/ngterm` (this build's own name, not upstream's `share/agterm`).
+There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK,
 libghostty or layer-shell is linked at all.
 
 Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lavapipe, from

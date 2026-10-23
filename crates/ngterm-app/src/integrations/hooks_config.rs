@@ -31,8 +31,8 @@ pub const NGTERMCTL_MARKER: &str = "# >>> ngterm ngtermctl path (installer-baked
 pub const RC_MARKER_BEGIN: &str = "# >>> ngterm agent-status >>>";
 pub const RC_MARKER_END: &str = "# <<< ngterm agent-status <<<";
 
-/// The markers, wrappers and Pi extension an install made before the build took its own name wrote (the fork's
-/// install wrote the same markers): a reinstall takes their blocks and entries over under the current names and
+/// The markers, wrappers and Pi extension an install made before the build took its own name wrote (upstream's
+/// install writes the same markers): a reinstall takes their blocks and entries over under the current names and
 /// removes the old Pi extension and `OpenCode` plugins that are this build's; the old wrappers stay for the shells and
 /// configs that still call them (`hooks::LEGACY_PACKAGE_ENTRIES`). A one-time migration: remove these, and what reads
 /// them, once no install from before the rename is left to migrate (the first reinstall past it has run) and no shell
@@ -46,8 +46,8 @@ pub const LEGACY_PI_EXTENSION_NAME: &str = "agterm-status.ts";
 pub const LEGACY_PI_EXTENSION_MARKER: &str = "// agterm-pi-status-extension";
 
 /// How the Pi extension and the `OpenCode` plugins this build installed before the rename name its script directory,
-/// `~/.config/ngterm/agent-status`: as the segments of their `join(homedir(), …)` call, or as one path. Upstream's and
-/// the fork's, under the same names and markers, name their own directory, so this tells ours from theirs.
+/// `~/.config/ngterm/agent-status`: as the segments of their `join(homedir(), …)` call, or as one path. Upstream's,
+/// under the same names and markers, name its own directory, so this tells ours from upstream's.
 pub const LEGACY_PLUGIN_SCRIPT_DIRS: [&str; 2] = [
     "\".config\", \"ngterm\", \"agent-status\"",
     ".config/ngterm/agent-status",
@@ -72,7 +72,7 @@ const CLAUDE_HOOKS: [(&str, Option<&str>, &str); 6] = [
     ("SessionEnd", None, "completed --auto-reset"),
 ];
 
-/// Whether an earlier installer (this build's before `SessionEnd`, the fork's, upstream's) wrote `event`: only those
+/// Whether an earlier installer (this build's before `SessionEnd`, upstream's) wrote `event`: only those
 /// entries are its own to migrate, so a `SessionEnd` entry naming a wrapper is always the user's.
 fn written_by_earlier_installs(event: &str) -> bool {
     event != "SessionEnd"
@@ -116,8 +116,8 @@ pub fn may_overwrite_pi_extension(file_exists: bool, existing: Option<&str>) -> 
 /// `None` or blank starts a fresh object. Idempotent: hooks already present (either wrapper named) leave the input
 /// unchanged. Entries an earlier install pointed straight at the generic wrapper move onto the Claude adapter first.
 ///
-/// `legacy_dirs` are script directories an earlier install used (the fork's, and this build's before it took a
-/// directory of its own, `hooks::legacy_script_dir`): an entry calling one of our wrappers there is repointed at
+/// `legacy_dirs` are script directories an earlier install used (this build's before it took a directory of its own,
+/// `hooks::legacy_script_dir`): an entry calling one of our wrappers there is repointed at
 /// `script_dir`, or dropped when it is exactly what that install generated and its event already calls `script_dir`, so
 /// a reinstall moves the hooks instead of doubling them (Linux glue: upstream has one directory).
 ///
@@ -155,7 +155,7 @@ pub fn merge_claude_settings(
 
 /// Appends the marker-guarded `source` line for the shell integration to a shell rc file (upstream's
 /// `appendShellRC`). Idempotent: a begin marker already present keeps `existing`, except that a managed block sourcing
-/// `script_name` from another directory (an earlier install's, the fork's) is rewritten in place to source it from
+/// `script_name` from another directory (an earlier install's) is rewritten in place to source it from
 /// `script_dir` (Linux glue: upstream has one directory, so it never rewrites).
 #[must_use]
 pub fn append_shell_rc(existing: &str, script_dir: &str, script_name: &str) -> (String, bool) {

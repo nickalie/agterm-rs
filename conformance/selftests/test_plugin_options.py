@@ -21,9 +21,9 @@ def bin_path(tmp_path: Path) -> Path:
 
 def test_options_parse(pytester: pytest.Pytester, bin_path: Path) -> None:
     config = pytester.parseconfigure(
-        "--impl", "swift-linux", "--bin", str(bin_path), "--ctl", str(bin_path), "--coverage-gate"
+        "--impl", "swift-macos", "--bin", str(bin_path), "--ctl", str(bin_path), "--coverage-gate"
     )
-    assert get_impl_options(config) == ImplOptions(impl="swift-linux", bin=bin_path, ctl=bin_path, coverage_gate=True)
+    assert get_impl_options(config) == ImplOptions(impl="swift-macos", bin=bin_path, ctl=bin_path, coverage_gate=True)
 
 
 def test_options_default(pytester: pytest.Pytester) -> None:
@@ -68,7 +68,7 @@ def test_missing_impl(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(USES_IMPL)
     result = pytester.runpytest()
     assert result.ret == pytest.ExitCode.USAGE_ERROR
-    result.stderr.fnmatch_lines(["*--impl is required*swift-macos, swift-linux, rust*"])
+    result.stderr.fnmatch_lines(["*--impl is required*(one of: swift-macos, rust)*"])
 
 
 def test_missing_impl_ignored_without_impl_fixture(pytester: pytest.Pytester) -> None:
@@ -81,12 +81,11 @@ def test_missing_impl_ignored_when_deselected(pytester: pytest.Pytester) -> None
     pytester.runpytest("-k", "plain").assert_outcomes(passed=1, deselected=1)
 
 
-@pytest.mark.parametrize("impl", ["swift-macos", "swift-linux"])
-def test_missing_bin_for_swift(pytester: pytest.Pytester, impl: str) -> None:
+def test_missing_bin_for_swift(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(USES_IMPL)
-    result = pytester.runpytest("--impl", impl)
+    result = pytester.runpytest("--impl", "swift-macos")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
-    result.stderr.fnmatch_lines([f"*--bin is required for --impl={impl}*"])
+    result.stderr.fnmatch_lines(["*--bin is required for --impl=swift-macos*"])
 
 
 def test_rust_runs_without_bin(pytester: pytest.Pytester) -> None:
@@ -126,7 +125,7 @@ def test_markers_pass_strict(pytester: pytest.Pytester) -> None:
         import pytest
 
         @pytest.mark.since("0.36.0")
-        @pytest.mark.requires("window-geometry", reason="GTK4 cannot restore x/y")
+        @pytest.mark.requires("window-geometry", reason="no window position on Wayland")
         @pytest.mark.covers("session.resize", "event:pane.split")
         def test_marked():
             pass

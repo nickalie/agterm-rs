@@ -1,6 +1,6 @@
 The bundled skill under this build's own identity (CLAUDE.md > Reference rule): it installs as `ngterm`, its
 frontmatter `name` and description name ngterm, and every command it runs is `ngtermctl`, the far side of a remote
-attach included (upstream's and the fork's CLI is `agtermctl`). Applied after 0001-live-group.patch; sync-resources.sh
+attach included (upstream's CLI is `agtermctl`). Applied after 0001-live-group.patch; sync-resources.sh
 reapplies both to upstream's plugins/agterm/skills/agterm after every sync, and an upstream change that brings new
 `agtermctl` calls is renamed here the same way.
 

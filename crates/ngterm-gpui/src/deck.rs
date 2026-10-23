@@ -1,8 +1,8 @@
 //! The detail deck: every session of the window holds one page with its terminals, all mounted at once, and only the
 //! selected one visible, hit-testable and focused (upstream's eager deck, `WindowContentView+Detail.swift`
 //! `detailPane`; ported from the GTK build's `deck.rs`). A session made at runtime spawns its shell as soon as its
-//! terminal is laid out; a restored one waits until it is first shown, as the GTK fork's deck does (the core's lazy
-//! restore, `ngterm_core::commands::relaunch`).
+//! terminal is laid out; a restored one waits until it is first shown (the core's lazy restore,
+//! `ngterm_core::commands::relaunch`).
 //!
 //! A page is created once and keeps its terminals' views: switching sessions is a visibility flip. A hidden page is
 //! laid out under the shown one but not drawn ([`TerminalView::set_shown`]), so its terminals still start at their

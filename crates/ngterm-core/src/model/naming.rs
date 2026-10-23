@@ -52,12 +52,12 @@ thread_local! {
 
 /// Whether a pane's terminal title may stand in for an unnamed session's name (the `sessionNameFromTerminalTitle`
 /// setting, off by default: the cwd basename names the session, so a TUI or agent that titles the terminal after its
-/// own state cannot rename the row out from under the user). The GTK fork's `SessionNaming.usesTerminalTitle`;
-/// upstream always lets the title name the session.
+/// own state cannot rename the row out from under the user). This build's setting; upstream always lets the title
+/// name the session.
 ///
 /// A mirror of the setting rather than a [`Session`](super::Session) field, because
 /// [`Session::display_name`](super::Session::display_name) is read from dozens of sites that hold no settings. It is
-/// per thread, as the fork's is main-actor isolated: the thread that owns the model (the main thread) is the only one
+/// per thread: the thread that owns the model (the main thread) is the only one
 /// that renders a name, and parallel tests each get their own. [`Core`](crate::Core) pushes it whenever its settings
 /// change; nothing else writes it outside tests.
 #[must_use]

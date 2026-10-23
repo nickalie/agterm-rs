@@ -4,7 +4,7 @@
 //! `~/.claude/settings.json`, the Codex hooks into `~/.codex/config.toml`, and, where each agent is set up, Pi's
 //! extension and `OpenCode`'s plugin. Claude and Codex configs get a `.bak` first; every rewrite keeps a symlinked file's
 //! link and its target's mode. Idempotent: a second run refreshes the baked path and changes nothing else. An install
-//! over one in [`legacy_script_dir`] (the fork's, or this build's before it had its own) moves every reference onto
+//! over one in [`legacy_script_dir`] (this build's before it had its own) moves every reference onto
 //! the new directory instead of adding a second set.
 //!
 //! [`plan`] reads the home and decides every step (what each agent has, what is current, what is the user's) without
@@ -24,9 +24,9 @@ pub fn script_dir(home: &Path) -> PathBuf {
     home.join(".config/ngterm/agent-status")
 }
 
-/// Where an earlier install put the package: the GTK fork's directory, which this build also used before it took one
-/// of its own. A reinstall repoints what still calls it (the rc blocks, the Claude Code hooks, the Codex block, the
-/// Pi and `OpenCode` plugins) at [`script_dir`]; the directory itself is left for the fork.
+/// Where an earlier install put the package: upstream's directory (`AgentHooksInstaller.swift`), which this build
+/// also used before it took one of its own. A reinstall repoints what still calls it (the rc blocks, the Claude Code
+/// hooks, the Codex block, the Pi and `OpenCode` plugins) at [`script_dir`]; the directory itself is left in place.
 #[must_use]
 pub fn legacy_script_dir(home: &Path) -> PathBuf {
     home.join(".config/agterm/agent-status")
@@ -566,9 +566,8 @@ fn legacy_opencode_plugins(home: &Path, configuration_directory: &Path) -> Vec<P
 }
 
 /// Whether the old Pi extension or `OpenCode` plugin at `path` is this build's: it reads, carries `marker` and calls
-/// the wrapper in this build's script directory ([`config::LEGACY_PLUGIN_SCRIPT_DIRS`]). Upstream and the fork install
-/// the same files under the same names and markers for their own app, calling their own wrapper: those are theirs and
-/// stay.
+/// the wrapper in this build's script directory ([`config::LEGACY_PLUGIN_SCRIPT_DIRS`]). Upstream installs the same
+/// files under the same names and markers for its own app, calling its own wrapper: those are upstream's and stay.
 fn ours(path: &Path, marker: &str) -> bool {
     fs::read_to_string(path).is_ok_and(|text| {
         text.contains(marker) && config::LEGACY_PLUGIN_SCRIPT_DIRS.iter().any(|dir| text.contains(dir))

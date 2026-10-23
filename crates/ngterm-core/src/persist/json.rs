@@ -5,7 +5,7 @@
 //! array or object as an opening bracket, a blank line and the closing bracket, escapes `/` as `\/`, prints a
 //! `Double` with an integral value without its `.0`, and sorts keys case-insensitively (`[.numeric,
 //! .caseInsensitive, .forcedOrdering]`). Writing the same bytes keeps a file this build saved indistinguishable from
-//! one upstream or the Linux fork saved; reading never depends on any of it.
+//! one upstream saved; reading never depends on any of it.
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;

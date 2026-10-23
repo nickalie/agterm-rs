@@ -179,7 +179,7 @@ def test_fresh_window_node(ctl):
 
 @pytest.mark.covers("field:tree.idleMs")
 def test_idle_ms_stays_off_for_control_input(app, ctl):
-    # Only user input starts the idle clock; both references keep scripted typing and navigation off it.
+    # Only user input starts the idle clock; upstream keeps scripted typing and navigation off it.
     (first,) = session_ids(ctl.tree())
     ctl.wait_mounted(first, "left")
     second = assert_ok(ctl.request("session.new"))["id"]

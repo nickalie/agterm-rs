@@ -186,19 +186,13 @@ def test_overlay_size_and_resize(ctl):
     _closed(ctl, sid)
 
 
-@pytest.mark.covers("session.overlay.open", "field:tree.session.overlaySizePercent")
-@pytest.mark.parametrize(("requested", "clamped"), [(0, 1), (101, 100)])
-def test_overlay_open_size_outside_its_range(ctl, adapter, requested, clamped):
+@pytest.mark.covers("session.overlay.open")
+@pytest.mark.parametrize("requested", [0, 101])
+def test_overlay_open_size_outside_its_range(ctl, requested):
     sid = _new(ctl)
     response = ctl.request("session.overlay.open", sid, command=HOLD, sizePercent=requested)
-    if adapter.has("overlay-size-validated"):
-        assert_error(response, "session.overlay.open: --size-percent must be 1...100")
-        assert _node(ctl, sid)["overlay"] is False
-    else:
-        # The Linux fork's dispatcher skips the range check and the store clamps the percent instead.
-        assert_ok(response)
-        assert _node(ctl, sid)["overlaySizePercent"] == clamped
-        _closed(ctl, sid)
+    assert_error(response, "session.overlay.open: --size-percent must be 1...100")
+    assert _node(ctl, sid)["overlay"] is False
 
 
 @pytest.mark.covers("session.overlay.open", "field:tree.session.active")

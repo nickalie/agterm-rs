@@ -73,7 +73,7 @@ def test_seeded_live_mode_is_requested_at_launch(launch, adapter):
     assert_subset(status, {"configured": "live", "requestedAtLaunch": "live", "restartRequired": False})
     (session,) = [s for w in live.tree()["tree"]["workspaces"] for s in w["sessions"]]
     live.wait_mounted(session["id"], "left")
-    # The Rust build's `live-any-shell` runs Live in a bash or fish login shell too; the references claim neither.
+    # The Rust build's `live-any-shell` runs Live in a bash or fish login shell too; the reference claims neither.
     if adapter.has("live-sessions") or adapter.has("live-any-shell"):
         assert status["active"] == "live"
         assert_absent(status, "unavailableReason")
@@ -106,7 +106,7 @@ def test_capture_needs_rerun_mode(ctl):
 
 @POSIX_SHELL
 @pytest.mark.covers("restore.capture", "restore.clear", "field:result.count", "field:result.text")
-def test_capture_counts_the_panes_running_a_program_and_clear_drops_them(ctl, adapter, mode_none):
+def test_capture_counts_the_panes_running_a_program_and_clear_drops_them(ctl, mode_none):
     typed = [_new(ctl) for _ in range(2)]
     for sid in typed:
         assert_ok(ctl.request("session.type", sid, text="cat\n"))
@@ -114,9 +114,9 @@ def test_capture_counts_the_panes_running_a_program_and_clear_drops_them(ctl, ad
     for sid in (*typed, command):
         _node_when(ctl, sid, foreground=["cat"])
     _status(ctl, mode="rerun")
-    # Every other pane sits at its shell prompt, which is not a command to restore.
-    count = 3 if adapter.has("capture-reads-command-panes") else 2
-    assert assert_ok(ctl.request("restore.capture")) == {"count": count, "text": f"captured {count} panes"}
+    # Every other pane sits at its shell prompt, which is not a command to restore, and the `--command` session keeps
+    # its creation command: upstream reads only the foreground group's leader, there the setuid `login` wrapper.
+    assert assert_ok(ctl.request("restore.capture")) == {"count": 2, "text": "captured 2 panes"}
     assert assert_ok(ctl.request("restore.clear")) == {}
     for sid in (*typed, command):
         assert_ok(ctl.request("session.close", sid))

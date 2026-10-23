@@ -101,8 +101,9 @@ def test_tree_window_argument(ctl):
     ],
 )
 def test_undecodable_request_is_refused(ctl, line):
-    # Text shares nothing: upstream `invalid request: <DecodingError context>`, fork `could not decode request`.
+    # Upstream answers `invalid request: <DecodingError context>`; only the prefix is shared, the context is the
+    # decoder's own.
     response = ctl.instance.client().send_line(line)
     assert response.ok is False, response.raw
-    assert isinstance(response.error, str) and response.error, response.raw
+    assert isinstance(response.error, str) and response.error.startswith("invalid request: "), response.raw
     assert_ok(ctl.request("version"))

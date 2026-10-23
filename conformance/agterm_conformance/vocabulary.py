@@ -1,11 +1,11 @@
 """What each implementation calls the live-session control group, so the shared tests can keep upstream's names.
 
 The tests, the catalog and the `covers(...)` markers speak upstream's vocabulary (`zmx.list`, `result.zmx`,
-`backedByZmx`, `agtermctl zmx`), because the Swift references answer to it. Each adapter carries a `Vocabulary` that
-translates every vocabulary-dependent value a test or the harness sends or reads: the Swift references' is upstream's
+`backedByZmx`, `agtermctl zmx`), because the Swift reference answers to it. Each adapter carries a `Vocabulary` that
+translates every vocabulary-dependent value a test or the harness sends or reads: the Swift reference's is upstream's
 own, and the Rust build's renames the group to `live` (conformance/docs/rust-build.md > The `live` group).
 
-The live sessions' host differs too: the Swift references run upstream's zmx, a daemon per session under `ZMX_*`
+The live sessions' host differs too: the Swift reference runs upstream's zmx, a daemon per session under `ZMX_*`
 variables in `/tmp/<name>-zmx-<hash>`, named `agterm-<pane>`; the Rust build runs one session server per instance
 (`ngterm-session`) under its attach contract's `NGTERM_LIVE_*` variables in `/tmp/ngterm-live-<hash>`, its sessions
 named `ngterm-<pane>`. Each vocabulary carries its host's environment names, socket directory, daemon names, leading
@@ -49,8 +49,7 @@ def _foundation_resolved(path: str) -> str:
 
 def upstream_socket_directory(state_dir: str | os.PathLike[str], name: str = "agterm") -> str:
     """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`, prefixed with the
-    implementation's directory name (`Adapter.app_dir_name`: upstream's and the fork's `agterm`, the Rust build's
-    `ngterm`)."""
+    implementation's directory name (`Adapter.app_dir_name`: upstream's `agterm`, the Rust build's `ngterm`)."""
     return f"/tmp/{name}-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
 
 

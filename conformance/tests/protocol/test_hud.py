@@ -239,8 +239,6 @@ def test_page_replaces_a_hud(app, ctl):
     node = _node(ctl, sid)
     assert node["overlay"] is True and len(node["htmlOverlays"]) == 1
     assert_absent(node, "hud")
-    # Left open on an instance of its own: the installed Linux fork keeps the replaced HUD's surface and
-    # segfaults when this page closes.
 
 
 @pytest.mark.covers("session.hud.open", "field:tree.session.hud")

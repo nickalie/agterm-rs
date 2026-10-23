@@ -6,7 +6,7 @@ use super::*;
 
 const SCRIPT_DIR: &str = "/home/me/.config/ngterm/agent-status";
 
-/// The directory an earlier install (the fork's, or this build's before it had its own) used.
+/// The directory an earlier install (this build's before it had its own) used.
 const LEGACY_DIR: &str = "/home/me/.config/agterm/agent-status";
 
 fn events(json: &str) -> Map<String, Value> {
@@ -300,11 +300,11 @@ fn an_install_in_the_legacy_dir_is_repointed_not_doubled() {
 
 #[test]
 fn legacy_entries_beside_current_ones_are_dropped() {
-    // the fork reinstalled over this build's install: both sets, every event doubled
+    // an earlier install's entries beside the current ones: both sets, every event doubled
     let mut root: Value = serde_json::from_str(&adapter_settings(SCRIPT_DIR)).unwrap();
     let legacy: Value = serde_json::from_str(&adapter_settings(LEGACY_DIR)).unwrap();
     for (event, entries) in legacy["hooks"].as_object().unwrap() {
-        // the fork wires no SessionEnd
+        // the earlier install wired no SessionEnd
         if event != "SessionStart" && event != "SessionEnd" {
             root["hooks"][event]
                 .as_array_mut()
@@ -352,8 +352,8 @@ fn a_users_command_calling_the_legacy_wrapper_is_repointed_and_kept() {
 
 #[test]
 fn a_users_legacy_command_beside_a_current_entry_is_repointed_not_dropped() {
-    // both installers ran (every event has a current entry), then the user chained and edited hooks against the
-    // fork's wrapper: only the stock legacy entries go, the user's survive repointed
+    // both installs ran (every event has a current entry), then the user chained and edited hooks against the
+    // legacy wrapper: only the stock legacy entries go, the user's survive repointed
     let mut root: Value = serde_json::from_str(&adapter_settings(SCRIPT_DIR)).unwrap();
     let chained = format!("my-notifier.sh && '{LEGACY_DIR}/{WRAPPER_NAME}' active --blink");
     let edited = format!("'{LEGACY_DIR}/{CLAUDE_WRAPPER_NAME}' completed --auto-reset; paplay ~/done.oga");
@@ -431,7 +431,7 @@ fn a_stock_legacy_command_under_another_matcher_event_or_key_is_kept() {
 
 #[test]
 fn a_stock_legacy_entry_is_kept_when_only_another_matcher_calls_the_new_dir() {
-    // the user's own idle_prompt hook on the new install, the stock permission_prompt one left in the fork's dir: the
+    // the user's own idle_prompt hook on the new install, the stock permission_prompt one left in the legacy dir: the
     // stock one is repointed and kept, not dropped for a current entry that covers other notifications
     let idle = format!("'{SCRIPT_DIR}/{CLAUDE_WRAPPER_NAME}' blocked");
     let stock = format!("'{LEGACY_DIR}/{CLAUDE_WRAPPER_NAME}' blocked");

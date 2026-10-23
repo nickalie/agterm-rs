@@ -79,11 +79,10 @@ def test_agterm_socket_variable_is_not_read(cli, empty_state, adapter):
 
 def _default_socket(env, name):
     """The platform default the CLI resolves without the state directory variable, or None when unknown here:
-    `<base>/<name>/<name>.sock`, the name being the implementation's (`agterm` upstream and in the fork, `ngterm` in
-    the Rust build).
+    `<base>/<name>/<name>.sock`, the name being the implementation's (`agterm` upstream, `ngterm` in the Rust build).
 
-    Linux (the fork): Foundation's application support directory, `$XDG_DATA_HOME` when it is absolute.
-    macOS (upstream): `$HOME/Library/Application Support`.
+    Linux: the XDG data home, `$XDG_DATA_HOME` when it is absolute.
+    macOS: `$HOME/Library/Application Support`.
     """
     if sys.platform.startswith("linux"):
         data = env.get("XDG_DATA_HOME", "")

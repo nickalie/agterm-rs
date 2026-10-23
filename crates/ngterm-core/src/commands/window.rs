@@ -24,8 +24,7 @@ use crate::windows::{MIN_WINDOW_SIZE, WindowRequest, WindowSize, clamp_size};
 /// The capability of a host whose windowing system lets a client place its window and read its frame back.
 const WINDOW_GEOMETRY: &str = "window-geometry";
 
-/// `window.move` on a host without [`WINDOW_GEOMETRY`] (the Linux fork's wording; Wayland gives a client no window
-/// position).
+/// `window.move` on a host without [`WINDOW_GEOMETRY`] (Wayland gives a client no window position).
 const MOVE_UNSUPPORTED: &str =
     "window.move is not supported on this platform (the compositor controls window position)";
 

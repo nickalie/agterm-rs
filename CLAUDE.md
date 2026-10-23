@@ -73,20 +73,18 @@ toolkit-neutral, so another frontend can drive them.
   `HERDR_REV`). herdr is the source of the server's design and code, not of what the app shows: the `live.*` group,
   its error strings and the attach contract follow upstream, and none of herdr's names, paths or sockets reach the
   build.
-- The Linux fork (`../agterm-linux`) is consulted only for Linux glue upstream has no counterpart for: XDG paths, and
-  what its GTK build expects of another instance (single-instance forwarding). Never port from it.
-- Where upstream and the fork differ, upstream wins (`conformance/docs/fork-bugs.md` lists the cases the suite pins).
-  A capability the fork claims is not a target by itself; the build claims the list in rust-build.md > Rust target
-  profile.
-- Upstream and the fork are references for behavior, not for identity. The build is ngterm and shares nothing with
-  them at runtime: its application id, state and config dirs, sockets, binaries, crates, environment variables, CLI,
-  skill and install paths are its own (README holds them), and nothing falls back to, runs or reads an agterm or
-  `agtermctl` path or name. Those names
-  appear only where code and docs cite upstream or the fork, and in the harness adapters that drive the reference
-  builds. A link the app or its skill shows its own users (website, docs, bug tracker, discussions) is identity too and
-  points at ngterm's own (the Help menu and the bundled skill hold them), even where the upstream text it was ported
-  from links upstream's; a citation is a comment or doc naming upstream's source. A rename or a new path covers every
-  place at once; keeping one on the old name "for compatibility" is not a choice to make alone.
+- Linux glue upstream has no counterpart for (paths, single-instance forwarding) follows the platform's own specs
+  (the XDG Base Directory spec, GApplication's D-Bus protocol), never another app's build. The build claims the
+  capabilities listed in rust-build.md > Rust target profile.
+- Upstream is the reference for behavior, not for identity. The build is ngterm and shares nothing with it at
+  runtime: its application id, state and config dirs, sockets, binaries, crates, environment variables, CLI, skill
+  and install paths are its own (README holds them), and nothing falls back to, runs or reads an agterm or
+  `agtermctl` path or name. Those names appear only where code and docs cite upstream, and in the harness adapter
+  that drives the reference build. A link the app or its skill shows its own users (website, docs, bug tracker,
+  discussions) is identity too and points at ngterm's own (the Help menu and the bundled skill hold them), even where
+  the upstream text it was ported from links upstream's; a citation is a comment or doc naming upstream's source. A
+  rename or a new path covers every place at once; keeping one on the old name "for compatibility" is not a choice to
+  make alone.
 
 ## Plans
 
@@ -100,7 +98,7 @@ toolkit-neutral, so another frontend can drive them.
    calls, the app side in `agterm/Control/ControlServer+*.swift`), its unit tests (error strings, edge cases, field
    order), `site/commands.html` and the matching `.claude/rules/*.md`.
 2. Implement in `ngterm-core` against the `ngterm-host` traits, with unit tests on the fakes; assert the full upstream
-   error string on the dispatcher's output (the suite asserts only the part both Swift references share).
+   error string on the dispatcher's output.
 3. Wire the frontend side in `ngterm-gpui` (terminal behavior in `ngterm-term`), following upstream's UI
    (`agterm/Views`, `agterm/Ghostty`, the rules files) in GPUI/gpui-kit idioms.
 4. Add the `ngtermctl` subcommands, ported from upstream's `agtermctlKit`.

@@ -24,7 +24,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - Upstream range: `.upstream/agterm` at <new tag> (`<sha>`); diff `git -C .upstream/agterm diff <old>..<new>`.
   Changelog of the range: <summary, a bullet per feature/fix with its PR number>.
 - Reference rule (CLAUDE.md): upstream is the reference for protocol, semantics, error strings, `agtermctl`,
-  on-disk formats, model and UI; the fork `../agterm-linux` only for Linux glue upstream lacks.
+  on-disk formats, model and UI.
 - Baseline after the mechanical commit:
   - `cargo fmt --check`: <ok | ...>; clippy: <ok | ...>; `scripts/lint-report.sh`: <ok | ...>
   - `cargo test --workspace` (under xvfb): <ok | the failing tests, each with the task that turns it green>
@@ -46,9 +46,8 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   `ngterm-core` against the `ngterm-host` fakes with unit tests asserting upstream's full error string; wire the
   app side (`ngterm-gpui`); add the `agtermctl` part from `agtermctlKit`; claim a capability only once its commands implement it.
 - New conformance tests follow conformance/README.md > Reference discipline: a test is accepted only when green on
-  its references. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
-  marks "green on reference-macos" as a manual check for the user, and runs `run-reference-linux.sh` locally when
-  the installed fork has the feature.
+  the reference. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
+  marks "green on reference-macos" as a manual check for the user.
 - Gate of every task: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `scripts/lint-report.sh`, `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`,
   `.venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the last uncovered key, only
@@ -105,8 +104,6 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
       `claim`: the version.rs test, `ngterm-core/src/dispatch.rs` and `ngterm-server/tests/server.rs` expectations,
       `conformance/agterm_conformance/impls/rust.py`, `conformance/docs/rust-build.md`), only once every task above is
       done
-- [ ] `conformance/docs/fork-bugs.md` citations re-checked against <new tag> (bump the tag only where the cited
-      contract still says the same)
 - [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new
       capabilities, commands, on-disk files); `tag-mentions.sh <old>` lists no `review` or stale `claim` line
 - [ ] gate passes

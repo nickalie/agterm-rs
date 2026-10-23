@@ -3,12 +3,11 @@
 //! recorded in the plan's Technical Details):
 //!
 //! - Ctrl+Shift+<letter> is the base, as Linux terminals and this build's Edit chords (`ctrl+shift+key_c/v/a`) use;
-//!   the letters are those of the Linux fork this build replaces, so a chord a user already presses keeps its
-//!   meaning; the chords upstream spells without ⌘ (`` ctrl+` ``, `ctrl+p`, `ctrl+shift+p`, `ctrl+shift+i`) stay;
+//!   the chords upstream spells without ⌘ (`` ctrl+` ``, `ctrl+p`, `ctrl+shift+p`, `ctrl+shift+i`) stay;
 //! - font sizes on Ctrl+=, Ctrl+-, Ctrl+0 and full screen on F11, as GTK apps do; Alt joins as a second tier where a
 //!   letter is taken; the arrows avoid the Ctrl+Alt(+Shift) chords GNOME uses to switch and move workspaces;
-//! - the defaults the fork did not ship (or shipped only as fixed, non-rebindable keys) give way to an explicit
-//!   binding of the same chord in an existing file, as upstream does for every new default.
+//! - the defaults added after the table's first letters (or fixed, non-rebindable keys before) give way to an
+//!   explicit binding of the same chord in an existing file, as upstream does for every new default.
 //!
 //! The grammar is upstream's: `cmd` is the Super key and `opt` is Alt.
 
@@ -64,7 +63,7 @@ fn linux_table() -> Vec<(BuiltinAction, Chord)> {
     ]
 }
 
-/// The defaults new relative to the Linux fork (or fixed there), plus the fork's own `attach_remote` exception.
+/// The defaults added after the table's first letters (or fixed keys before), plus the `attach_remote` exception.
 fn linux_vacated() -> [BuiltinAction; 15] {
     use BuiltinAction as A;
     [
@@ -152,12 +151,12 @@ mod tests {
 
     #[test]
     fn a_file_using_a_new_default_keeps_its_binding() {
-        // the fork shipped no undo_close default, so a custom command there keeps the chord
+        // undo_close is a vacated default, so a custom command on its chord keeps the chord
         let (keymap, diagnostics) = parse_keymap("command \"mark\" ctrl+shift+z true\n", &linux_defaults());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(keymap.equivalent(BuiltinAction::UndoClose), None);
         assert_eq!(keymap.commands()[0].shortcut, "ctrl+shift+z");
-        // a default the fork already shipped still wins over a custom command
+        // a default that is not vacated still wins over a custom command
         let (keymap, diagnostics) = parse_keymap("command \"mark\" ctrl+shift+t true\n", &linux_defaults());
         assert_eq!(diagnostics.len(), 1);
         assert!(keymap.commands()[0].shortcut.is_empty());
@@ -165,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn the_users_fork_keymap_parses_clean() {
+    fn custom_commands_on_free_letters_parse_clean() {
         let text = "command \"Open in Zed\" ctrl+shift+b /usr/bin/zeditor \"$AGT_SESSION_PWD\"\n\
                     command \"Open in Thunar\" ctrl+shift+e /usr/bin/thunar \"$AGT_SESSION_PWD\"\n";
         let (keymap, diagnostics) = parse_keymap(text, &linux_defaults());

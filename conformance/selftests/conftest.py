@@ -5,7 +5,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from agterm_conformance import impls, plugin
 from agterm_conformance.impls import base
+from upstream_adapter import UpstreamVocabularyAdapter
 
 FAKE_APP = Path(__file__).with_name("fake_app.py")
 FAKE_COMPOSITOR = Path(__file__).with_name("fake_compositor.py")
@@ -57,8 +59,17 @@ def roots(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Path]]:
 
 
 @pytest.fixture
+def upstream_impl(monkeypatch: pytest.MonkeyPatch) -> str:
+    """`--impl upstream` for the in-process suite runs a self-test starts: the self-test double in upstream's
+    vocabulary (upstream_adapter.py), with its static profile, registered beside the real adapters."""
+    monkeypatch.setattr(plugin, "IMPLS", (*plugin.IMPLS, UpstreamVocabularyAdapter.name))
+    monkeypatch.setitem(impls.ADAPTERS, UpstreamVocabularyAdapter.name, UpstreamVocabularyAdapter)
+    return UpstreamVocabularyAdapter.name
+
+
+@pytest.fixture
 def fake_bin(tmp_path: Path) -> Path:
-    launcher = tmp_path / "install" / "bin" / "agterm-linux"
+    launcher = tmp_path / "install" / "bin" / "fake-app"
     launcher.parent.mkdir(parents=True)
     launcher.write_text(f"#!{sys.executable}\n" + FAKE_APP.read_text())
     launcher.chmod(0o755)

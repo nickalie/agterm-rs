@@ -91,9 +91,8 @@ jobs:
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
       # fish is installed above so the fish replay script's unit test runs against a real fish parser
       # ngterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
-      # (mesa-vulkan-drivers): none may skip here (only the nested-niri check is #[ignore]d, no niri on Ubuntu, and the
-      # GTK forwarding checks, which need a GTK build of agterm that nothing here builds). They run without the HTML
-      # overlays here; the bash conformance job runs the instance tests again with them, on Arch.
+      # (mesa-vulkan-drivers): none may skip here (only the nested-niri check is #[ignore]d, no niri on Ubuntu). They
+      # run without the HTML overlays here; the bash conformance job runs the instance tests again with them, on Arch.
       # ngterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
       # the display tests, so the device must be there. udmabuf is a bool in the kernel's Kconfig, built in or absent
       # and never a module, so there is nothing to modprobe or install: the runner's kernel has it or the job fails.
@@ -216,8 +215,8 @@ jobs:
   # - bash: the build claims `live-any-shell` (Live sessions in bash, a Rust-only extension) and every test requiring
   #   it must pass; the process tests (single instance, activation, the quit save on SIGTERM, privileges) run here
   #   again with the HTML overlays on.
-  # - zsh: Live sessions run only for a zsh login shell (the references wrap a pane in zmx only then), so the build
-  #   claims `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test the references hold
+  # - zsh: Live sessions run only for a zsh login shell (upstream wraps a pane in zmx only then), so the build
+  #   claims `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds
   #   to Live sessions) and `--must-pass live-any-shell`.
   # - fish: the other half of the Rust-only `live-any-shell` extension.
   conformance:

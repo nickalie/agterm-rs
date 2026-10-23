@@ -135,18 +135,14 @@ def test_closing_the_session_cancels_its_ask(ctl):
 
 
 @pytest.mark.covers("ask.open", "ask.cancel", "field:tree.askPending", "field:tree.pickPending")
-def test_gui_ask_holds_the_window_slot(ctl, adapter):
+def test_gui_ask_holds_the_window_slot(ctl):
     sid = _new(ctl)
     with _cancelled(ctl, "ask.cancel", _ask(ctl, style="gui", destructiveButton="no")["id"]) as ask_id:
         assert _top(ctl)["askPending"] == ask_id
         assert_absent(_node(ctl, sid), "ask")
         assert _ask_result(ctl, ask_id) == {"result": "pending"}
         assert_error(ctl.request("ask.open", title="Second?", style="gui", buttons=YES_NO), "ask already pending")
-        refused = ctl.request("pick.open", items=ITEMS)
-        # The Linux fork's picker answers without looking at the ask that holds the slot.
-        assert_error(
-            refused, "ask already pending" if adapter.has("pick-names-pending-ask") else "pick already pending"
-        )
+        assert_error(ctl.request("pick.open", items=ITEMS), "ask already pending")
         assert_absent(_top(ctl), "pickPending")
         # A terminal ask has a slot of its own on its session.
         with _cancelled(ctl, "ask.cancel", _ask(ctl, sid)["id"]) as terminal_id:
@@ -174,17 +170,11 @@ def test_gui_ask_target_must_be_on_screen(ctl):
 
 
 @pytest.mark.covers("ask.open", "field:tree.askPending")
-def test_gui_ask_and_control_driven_covers(ctl, adapter):
+def test_gui_ask_and_control_driven_covers(ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("session.select", sid))
     with _cancelled(ctl, "ask.cancel", _ask(ctl, style="gui")["id"]) as ask_id:
-        response = ctl.request("session.search", sid, text="needle")
-        if adapter.has("modal-blocks-covers"):
-            assert_error(response, "ask pending")
-        else:
-            # The Linux fork has no modal gate on control commands: the search runs under the dialog.
-            assert assert_ok(response)["id"] == sid
-            assert_ok(ctl.request("session.search", sid, to="close"))
+        assert_error(ctl.request("session.search", sid, text="needle"), "ask pending")
         assert _top(ctl)["askPending"] == ask_id
 
 

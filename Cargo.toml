@@ -105,7 +105,7 @@ cosmic-text = "0.19"
 # `background-image` file decoded as Ghostty reads it (PNG or JPEG only). The version GPUI already links.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 # ngterm-gpui's single instance: GApplication's own D-Bus protocol (`org.gtk.Application`, `org.gtk.Actions`) on the
-# app id's bus name, so a second launch forwards to the running one (a GTK-fork launch too, given this build's id);
+# app id's bus name, so a second launch forwards to the running one;
 # its desktop notifications, banners on the freedesktop notification server posted, clicked (with the server's
 # activation token) and withdrawn on one connection.
 zbus = "5.19"

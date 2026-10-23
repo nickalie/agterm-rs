@@ -9,8 +9,8 @@
 //!
 //! # Lazy restore
 //!
-//! A restored session spawns nothing until it is first shown (the GTK fork's deck, whose page realizes only while it
-//! is visible; upstream mounts every restored pane at launch and paces their spawns): its panes stay dormant, their
+//! A restored session spawns nothing until it is first shown (this build's choice; upstream mounts every restored
+//! pane at launch and paces their spawns): its panes stay dormant, their
 //! seeds and captured commands on the session, so a quit still saves them for the next launch and a live pane's
 //! daemon runs on unattached. [`Core::wake_session`] wakes a session: it is on screen ([`Core::wake_shown_sessions`],
 //! the selected session, a zoom, a dashboard cell) or a command needs its terminal. A session made at runtime spawns

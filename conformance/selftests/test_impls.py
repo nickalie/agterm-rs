@@ -20,7 +20,6 @@ from agterm_conformance.impls import ADAPTERS, base, make_adapter, swift_macos
 from agterm_conformance.impls.base import (
     CAPABILITIES,
     DEFAULT_APP_ID,
-    FORK_APP_ID,
     NO_PROFILE,
     NOOP_DESKTOP_ID,
     NOOP_MIME_TYPES,
@@ -44,7 +43,7 @@ from agterm_conformance.impls.base import (
     version_tuple,
 )
 from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
-from agterm_conformance.impls.swift_linux import SwiftLinuxAdapter
+from upstream_adapter import UpstreamVocabularyAdapter
 from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
 from agterm_conformance.plugin import ImplOptions
 from agterm_conformance.vocabulary import LIVE, UPSTREAM, Vocabulary, fnv1a64, upstream_socket_directory
@@ -135,7 +134,6 @@ def test_socket_path_at_cap_is_refused_and_one_under_is_accepted() -> None:
         (None, "required"),
         ("", "required"),
         (DEFAULT_APP_ID, "installed app"),
-        (FORK_APP_ID, "installed app"),
         ("agterm", "not a valid"),
         ("io.github.1agterm", "not a valid"),
         ("io..agterm", "not a valid"),
@@ -169,7 +167,7 @@ def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkey
     for name in (*inherited, "AGTERM_STATE_DIR", "NGTERM_STATE_DIR"):
         monkeypatch.setenv(name, "/live")
     monkeypatch.setenv("CONFORMANCE_KEEP", "1")
-    env = SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
+    env = UpstreamVocabularyAdapter(tmp_path / "fake-app").build_env(tmp_path)
     assert not {*inherited, "NGTERM_STATE_DIR"} & env.keys()
     assert env["AGTERM_STATE_DIR"] == str(tmp_path / "state")
     assert env["CONFORMANCE_KEEP"] == "1"
@@ -182,7 +180,7 @@ def test_build_env_drops_inherited_live_session_variables(tmp_path: Path, monkey
 def test_build_env_drops_the_callers_zsh_startup_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ZDOTDIR", "/home/user/.config/zsh")
     monkeypatch.setenv("GHOSTTY_ZSH_ZDOTDIR", "/home/user/.config/zsh")
-    for adapter in (SwiftLinuxAdapter(tmp_path / "agterm-linux"), SwiftMacosAdapter(tmp_path / "agterm.app")):
+    for adapter in (UpstreamVocabularyAdapter(tmp_path / "fake-app"), SwiftMacosAdapter(tmp_path / "agterm.app")):
         assert not {"ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR"} & adapter.build_env(tmp_path).keys()
 
 
@@ -238,7 +236,7 @@ def test_linux_adapters_get_a_private_runtime_dir(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
-    linux = SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
+    linux = UpstreamVocabularyAdapter(tmp_path / "fake-app").build_env(tmp_path)
     assert linux["XDG_RUNTIME_DIR"] == str(tmp_path / "run")
     assert linux["WAYLAND_DISPLAY"] == "/run/user/7/wayland-1" and linux["DISPLAY"] == ":0"
     check_launch_env(linux, tmp_path, needs_app_id=True, needs_runtime_dir=True)
@@ -246,7 +244,7 @@ def test_linux_adapters_get_a_private_runtime_dir(tmp_path: Path, monkeypatch: p
     assert RustAdapter.needs_runtime_dir is RustAdapter.needs_app_id
 
 
-@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+@pytest.mark.parametrize("adapter_class", [UpstreamVocabularyAdapter, RustAdapter])
 def test_linux_adapters_draw_headless_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter_class: type[Adapter]
 ) -> None:
@@ -258,7 +256,7 @@ def test_linux_adapters_draw_headless_by_default(
     monkeypatch.setenv("GDK_BACKEND", "x11")
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/7/bus")
     monkeypatch.setenv("AT_SPI_BUS_ADDRESS", "unix:path=/run/user/7/at-spi/bus")
-    adapter = adapter_class(tmp_path / "agterm-linux")
+    adapter = adapter_class(tmp_path / "fake-app")
     assert adapter.headless
     env = adapter.build_env(tmp_path)
     assert env["WAYLAND_DISPLAY"] == str(tmp_path / "run" / "wayland-0")
@@ -298,7 +296,7 @@ def test_headless_launch_env_refuses_the_users_display(tmp_path: Path, overrides
 def test_unknown_display_mode_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "niri")
     with pytest.raises(LaunchRefused, match="CONFORMANCE_LINUX_DISPLAY='niri'"):
-        SwiftLinuxAdapter(tmp_path / "agterm-linux").build_env(tmp_path)
+        UpstreamVocabularyAdapter(tmp_path / "fake-app").build_env(tmp_path)
 
 
 def test_weston_argv(tmp_path: Path) -> None:
@@ -317,12 +315,12 @@ def test_weston_argv(tmp_path: Path) -> None:
 
 
 def test_each_build_env_gets_a_fresh_app_id(tmp_path: Path) -> None:
-    adapter = SwiftLinuxAdapter(tmp_path / "agterm-linux")
+    adapter = UpstreamVocabularyAdapter(tmp_path / "fake-app")
     assert adapter.build_env(tmp_path)["AGTERM_APP_ID"] != adapter.build_env(tmp_path)["AGTERM_APP_ID"]
 
 
 def test_refused_launch_spawns_nothing_and_removes_its_root(roots: list[Path], tmp_path: Path) -> None:
-    adapter = SwiftLinuxAdapter(tmp_path / "never-run")
+    adapter = UpstreamVocabularyAdapter(tmp_path / "never-run")
     with pytest.raises(LaunchRefused, match="installed app"):
         adapter.launch(app_id=DEFAULT_APP_ID)
     assert len(roots) == 1 and not roots[0].exists()
@@ -334,7 +332,7 @@ def test_refused_launch_spawns_nothing_and_removes_its_root(roots: list[Path], t
 def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGTERM_SOCKET", "/live/agterm.sock")
     monkeypatch.setenv("ZMX_DIR", "/tmp/live-zmx")
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
         assert instance.version == {"app": {"version": "0.0.1"}}
@@ -392,7 +390,7 @@ def test_stop_keeps_a_zmx_dir_holding_anything_else(tmp_path: Path, extra: str) 
 
 
 def test_first_run_launch_leaves_out_the_prior_state_marker(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch(first_run=True)
     try:
         assert not (instance.state_dir / "windows").exists()
@@ -413,7 +411,7 @@ def compositor_record(instance: Instance) -> dict[str, Any]:
 def test_headless_launch_draws_into_its_own_compositor(
     roots: list[Path], fake_bin: Path, fake_compositor: Path
 ) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     compositor = instance.compositor
     assert compositor is not None
@@ -434,7 +432,7 @@ def test_headless_launch_draws_into_its_own_compositor(
 
 
 def test_headless_launch_talks_to_its_own_session_bus(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     bus = instance.session_bus
     assert bus is not None
@@ -466,7 +464,7 @@ def test_compositor_runs_on_mesa_where_installed(
         (vendors / "50_mesa.json").write_text("{}")
     monkeypatch.setattr(base, "GLVND_VENDOR_DIRS", (str(tmp_path / "absent"), str(vendors)))
     monkeypatch.delenv("__EGL_VENDOR_LIBRARY_FILENAMES", raising=False)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
         compositor_env = compositor_record(instance)["env"]
@@ -483,7 +481,7 @@ def test_session_display_starts_no_compositor(
     monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/7")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
         assert instance.compositor is None and not (instance.root / "fake-compositor.json").exists()
@@ -508,7 +506,7 @@ def test_compositor_failing_to_serve_fails_the_launch_before_the_app(
         return spawn(command, *args)
 
     monkeypatch.setattr(base, "_spawn", recording)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     with pytest.raises(LaunchError, match=failure):
         adapter.launch(timeout=0.5)
     assert [command[0] for command in spawned] == [str(base.session_bus_program()), str(base.compositor_program())]
@@ -529,7 +527,7 @@ def test_session_bus_failing_to_start_fails_the_launch_before_weston(
 
     monkeypatch.setattr(base, "_spawn", recording)
     with pytest.raises(LaunchError, match="dbus-daemon exited with 3"):
-        SwiftLinuxAdapter(fake_bin).launch(timeout=0.5)
+        UpstreamVocabularyAdapter(fake_bin).launch(timeout=0.5)
     assert [command[0] for command in spawned] == [str(base.session_bus_program())]
     assert len(roots) == 1 and not roots[0].exists()
 
@@ -545,7 +543,7 @@ def test_missing_weston_names_the_opt_out(
 
 
 def test_relaunch_keeps_the_compositor(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     first = adapter.launch()
     second = adapter.relaunch(first)
     try:
@@ -560,7 +558,7 @@ def test_relaunch_keeps_the_compositor(roots: list[Path], fake_bin: Path) -> Non
 def test_failed_relaunch_stops_the_compositor(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
 
     def unspawnable(*args: object) -> subprocess.Popen[bytes]:
@@ -581,7 +579,7 @@ def test_stop_reports_a_compositor_client_left_behind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     program = tmp_path / "clients" / "weston-desktop-shell"
     program.parent.mkdir()
@@ -595,7 +593,7 @@ def test_stop_reports_a_compositor_client_left_behind(
 
 
 def test_stop_reports_a_compositor_that_died_under_the_app(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     assert instance.compositor is not None
     instance.compositor.send_signal(signal.SIGKILL)
@@ -606,7 +604,7 @@ def test_stop_reports_a_compositor_that_died_under_the_app(roots: list[Path], fa
 
 
 def test_stop_reports_a_session_bus_that_died_under_the_app(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     assert instance.session_bus is not None and instance.compositor is not None
     instance.session_bus.send_signal(signal.SIGKILL)
@@ -618,7 +616,7 @@ def test_stop_reports_a_session_bus_that_died_under_the_app(roots: list[Path], f
 
 @pytest.mark.skipif(not (shutil.which("weston") and shutil.which("dbus-daemon")), reason="weston or dbus is missing")
 def test_real_weston_serves_and_leaves_nothing(roots: list[Path], fake_bin: Path, real_compositor: None) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     compositor = instance.compositor
     assert compositor is not None
@@ -670,7 +668,7 @@ def test_real_weston_gives_gpui_a_seat_or_a_clear_refusal(
     assert compositor.returncode == 0 and not instance.root.exists()
 
 
-@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+@pytest.mark.parametrize("adapter_class", [UpstreamVocabularyAdapter, RustAdapter])
 def test_launch_seeds_settings(roots: list[Path], fake_bin: Path, adapter_class: type[Adapter]) -> None:
     adapter = adapter_class(fake_bin)
     instance = adapter.launch(settings={"restoreMode": "live", "autoFollowAttention": "s30"})
@@ -681,7 +679,7 @@ def test_launch_seeds_settings(roots: list[Path], fake_bin: Path, adapter_class:
         adapter.stop(instance)
 
 
-@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+@pytest.mark.parametrize("adapter_class", [UpstreamVocabularyAdapter, RustAdapter])
 def test_linux_launch_sends_every_uri_to_a_noop(
     roots: list[Path], fake_bin: Path, adapter_class: type[Adapter], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -719,7 +717,7 @@ def test_linux_launch_sends_every_uri_to_a_noop(
         adapter.stop(instance)
 
 
-@pytest.mark.parametrize("adapter_class", [SwiftLinuxAdapter, RustAdapter])
+@pytest.mark.parametrize("adapter_class", [UpstreamVocabularyAdapter, RustAdapter])
 def test_relaunch_starts_the_binary_again_on_the_same_root(
     roots: list[Path], fake_bin: Path, adapter_class: type[Adapter]
 ) -> None:
@@ -744,7 +742,7 @@ def test_relaunch_of_an_app_ignoring_sigterm_fails_and_frees_its_app_id(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     app_id = f"{DEFAULT_APP_ID}.conformance.relaunch"
     instance = adapter.launch(app_id=app_id)
     with pytest.raises(StopError, match=rf"pid {instance.pid} did not exit within 0.5s of SIGTERM"):
@@ -765,7 +763,7 @@ def test_relaunch_killing_the_app_reports_the_daemons_it_left(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     with pytest.raises(LeftoverProcesses, match=rf"{pid} ") as raised:
@@ -781,7 +779,7 @@ def test_relaunch_failing_to_spawn_reports_the_daemons_left_and_frees_its_app_id
     daemons: list[subprocess.Popen[bytes]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     app_id = f"{DEFAULT_APP_ID}.conformance.respawn"
     instance = adapter.launch(app_id=app_id)
     pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
@@ -798,7 +796,7 @@ def test_relaunch_failing_to_spawn_reports_the_daemons_left_and_frees_its_app_id
 
 
 def test_duplicate_app_id_is_refused_until_the_owner_stops(roots: list[Path], fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     app_id = f"{DEFAULT_APP_ID}.conformance.dup"
     first = adapter.launch(app_id=app_id)
     try:
@@ -813,15 +811,15 @@ def test_relative_bin_is_resolved_before_the_child_moves_to_its_home(
     roots: list[Path], fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    adapter = SwiftLinuxAdapter(fake_bin.relative_to(tmp_path), ctl=Path("install/bin/agtermctl"))
+    adapter = UpstreamVocabularyAdapter(fake_bin.relative_to(tmp_path), ctl=Path("install/bin/agtermctl"))
     assert adapter.bin == fake_bin and adapter.ctl_path == tmp_path / "install" / "bin" / "agtermctl"
     adapter.stop(adapter.launch())
 
 
 def test_unexecutable_bin_fails_the_launch_and_removes_its_root(roots: list[Path], tmp_path: Path) -> None:
-    program = tmp_path / "agterm-linux"
+    program = tmp_path / "fake-app"
     program.write_text("not a program\n")
-    adapter = SwiftLinuxAdapter(program)
+    adapter = UpstreamVocabularyAdapter(program)
     with pytest.raises(PermissionError):
         adapter.launch()
     assert len(roots) == 1 and not roots[0].exists()
@@ -832,7 +830,7 @@ def test_app_exiting_before_serving_fails_the_launch(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "exit")
     with pytest.raises(LaunchError, match=r"exited with 3(.|\n)*refusing to start"):
-        SwiftLinuxAdapter(fake_bin).launch()
+        UpstreamVocabularyAdapter(fake_bin).launch()
 
 
 def test_app_never_serving_times_out_and_is_stopped(
@@ -848,7 +846,7 @@ def test_app_never_serving_times_out_and_is_stopped(
 
     monkeypatch.setattr(base.subprocess, "Popen", recording)
     with pytest.raises(LaunchError, match="not serving after"):
-        SwiftLinuxAdapter(fake_bin).launch(timeout=1.0)
+        UpstreamVocabularyAdapter(fake_bin).launch(timeout=1.0)
     assert spawned[0].returncode is not None
 
 
@@ -857,7 +855,7 @@ def test_version_refused_during_launch_fails_the_launch(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "refuse")
     with pytest.raises(LaunchError, match="not ready"):
-        SwiftLinuxAdapter(fake_bin).launch()
+        UpstreamVocabularyAdapter(fake_bin).launch()
 
 
 def test_app_ignoring_sigterm_is_killed_and_reported(
@@ -865,7 +863,7 @@ def test_app_ignoring_sigterm_is_killed_and_reported(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     hint = (
         f"a crash report for pid {instance.pid} in ~/Library/Logs/DiagnosticReports"
@@ -885,7 +883,7 @@ def test_app_ignoring_sigterm_is_killed_and_reported(
     if sys.platform == "linux":
         log = instance.log.read_text()
         assert f"--- conformance: pid {instance.pid} outlived SIGTERM by 0.5s; its threads:\n" in log
-        assert re.search(rf"^  tid={instance.pid} comm=agterm-linux state=\S.* wchan=\S+$", log, re.MULTILINE), log
+        assert re.search(rf"^  tid={instance.pid} comm=fake-app state=\S.* wchan=\S+$", log, re.MULTILINE), log
 
 
 def test_app_ending_on_sigabrt_is_not_killed_and_still_reported(
@@ -895,7 +893,7 @@ def test_app_ending_on_sigabrt_is_not_killed_and_still_reported(
     monkeypatch.setenv("FAKE_ABORT", "exit")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
     monkeypatch.setattr(base, "ABORT_GRACE", 30.0)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     started = time.monotonic()
     with pytest.raises(StopError, match=r"did not exit within 0.5s of SIGTERM; .*; core requested"):
@@ -911,7 +909,7 @@ def test_a_failed_thread_snapshot_still_aborts_kills_and_reports(
     monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
     monkeypatch.setattr(base, "PROC_ROOT", tmp_path / "no-proc")
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     with pytest.raises(StopError, match=r"thread snapshot in .*; core requested"):
         adapter.stop(instance)
@@ -926,7 +924,7 @@ def test_an_unwritable_log_still_aborts_kills_and_reports(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     instance.log.unlink()
     instance.log.mkdir()
@@ -946,7 +944,7 @@ def test_an_app_outliving_sigkill_is_still_reported_with_its_snapshot(
 ) -> None:
     monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
     monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     # Stands in for uninterruptible sleep: the SIGKILL never lands
     monkeypatch.setattr(instance.process, "kill", lambda: None)
@@ -974,7 +972,7 @@ def test_an_app_quitting_on_sigterm_gets_no_sigabrt(
         sent.append(signum)
         send_signal(process, signum)
 
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     monkeypatch.setattr(subprocess.Popen, "send_signal", recording)
     adapter.stop(instance)
@@ -984,7 +982,7 @@ def test_an_app_quitting_on_sigterm_gets_no_sigabrt(
 def test_stop_reaps_claimed_daemons_over_the_protocol(
     roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
 ) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     assert instance.request("fake.adopt", pid=pid).ok
@@ -997,7 +995,7 @@ def test_stop_reaps_claimed_daemons_over_the_protocol(
 def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
     roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
 ) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     for name, pane in (("a-left", "left"), ("b-right", "right")):
         pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
@@ -1009,7 +1007,7 @@ def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
 def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left"}
     monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     base.reap_live_sessions(instance)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
@@ -1017,7 +1015,7 @@ def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkey
     adapter.stop(instance)
 
 
-class LiveVocabularyAdapter(SwiftLinuxAdapter):
+class LiveVocabularyAdapter(UpstreamVocabularyAdapter):
     """The fake app driven by the Rust build's names for the live-session group."""
 
     vocabulary = LIVE
@@ -1050,7 +1048,7 @@ def test_an_upstream_adapter_lists_nothing_under_the_live_names(
 ) -> None:
     # The reverse: an app answering `live.*` refuses upstream's `zmx.list`, so nothing reads as listed.
     monkeypatch.setenv("FAKE_LIVE_GROUP", "live")
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     assert instance.vocabulary is UPSTREAM
     assert base.reap_live_sessions(instance, settle=0)[0] == "listed: no inventory (unknown command: zmx.list)"
@@ -1067,7 +1065,7 @@ def test_malformed_zmx_list_still_terminates_the_app(
     listing: str,
 ) -> None:
     monkeypatch.setenv("FAKE_ZMX_LIST", listing)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     with pytest.raises(LeftoverProcesses):
@@ -1078,7 +1076,7 @@ def test_malformed_zmx_list_still_terminates_the_app(
 def test_stop_reports_daemons_left_under_the_instance_zmx_dir(
     roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
 ) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "agterm-session-host", instance.live_dir, daemons)
     with pytest.raises(LeftoverProcesses, match=rf"{pid} .*agterm-session-host"):
@@ -1345,28 +1343,6 @@ def _passwd_shell(monkeypatch: pytest.MonkeyPatch, shell: str) -> None:
     monkeypatch.setattr(base.pwd, "getpwuid", lambda uid: fake)
 
 
-def _staged_zmx(launcher: Path) -> Path:
-    zmx = launcher.parent.parent / "libexec" / "zmx"
-    zmx.parent.mkdir()
-    zmx.write_text("#!/bin/sh\n")
-    zmx.chmod(0o755)
-    return zmx
-
-
-def test_swift_linux_profile(zsh_login: Path, fake_bin: Path) -> None:
-    _staged_zmx(fake_bin)
-    adapter = SwiftLinuxAdapter(fake_bin)
-    assert adapter.parity_level == "0.36.0"
-    assert adapter.capabilities == {
-        "posix-shell",
-        "capture-reads-command-panes",
-        "hidden-split-holds-focus",
-        "live-sessions",
-    }
-    assert "window-geometry" not in adapter.capabilities
-    assert adapter.profile.absent == {}
-
-
 @pytest.mark.parametrize(
     ("shell", "reason"),
     [
@@ -1376,19 +1352,12 @@ def test_swift_linux_profile(zsh_login: Path, fake_bin: Path) -> None:
     ],
 )
 def test_live_sessions_need_an_executable_zsh_login_shell(
-    monkeypatch: pytest.MonkeyPatch, fake_bin: Path, shell: str, reason: str
+    monkeypatch: pytest.MonkeyPatch, shell: str, reason: str
 ) -> None:
     _passwd_shell(monkeypatch, shell)
-    _staged_zmx(fake_bin)
-    for adapter in (SwiftLinuxAdapter(fake_bin), SwiftMacosAdapter(None, launch_mode="plain")):
-        assert "live-sessions" not in adapter.capabilities
-        assert adapter.profile.absent == {"live-sessions": reason}
-
-
-def test_swift_linux_live_sessions_need_the_staged_zmx(zsh_login: Path, fake_bin: Path) -> None:
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = SwiftMacosAdapter(None, launch_mode="plain")
     assert "live-sessions" not in adapter.capabilities
-    assert adapter.profile.absent["live-sessions"].startswith("no executable zmx at ")
+    assert adapter.profile.absent == {"live-sessions": reason}
 
 
 @pytest.mark.parametrize(
@@ -1402,15 +1371,15 @@ def test_swift_macos_profile_follows_launch_mode(zsh_login: Path, mode: str, zmx
 
 
 def test_static_capabilities_come_from_the_vocabulary() -> None:
-    for adapter in (SwiftLinuxAdapter(None), SwiftMacosAdapter(None), SwiftMacosAdapter(None, launch_mode="uitest")):
+    for adapter in (UpstreamVocabularyAdapter(None), SwiftMacosAdapter(None), SwiftMacosAdapter(None, launch_mode="uitest")):
         assert adapter.capabilities <= CAPABILITIES.keys()
 
 
 def test_has_refuses_a_name_outside_the_vocabulary() -> None:
-    adapter = SwiftLinuxAdapter(None)
-    assert adapter.has("posix-shell") and not adapter.has("drop-placement")
-    with pytest.raises(ValueError, match="unknown capability 'drop-placment'"):
-        adapter.has("drop-placment")
+    adapter = UpstreamVocabularyAdapter(None)
+    assert adapter.has("posix-shell") and not adapter.has("window-geometry")
+    with pytest.raises(ValueError, match="unknown capability 'window-geometri'"):
+        adapter.has("window-geometri")
 
 
 def test_rust_without_a_binary_reports_nothing() -> None:
@@ -1504,27 +1473,10 @@ def test_rust_drives_the_ngtermctl_beside_its_binary(fake_bin: Path) -> None:
     adapter = RustAdapter(fake_bin)
     assert RustAdapter.ctl_name == "ngtermctl" and adapter.ctl_path is None
     (fake_bin.parent / "agtermctl").touch()
-    assert adapter.ctl_path is None, "never the fork's or upstream's name"
+    assert adapter.ctl_path is None, "never upstream's name"
     (fake_bin.parent / "ngtermctl").touch()
     assert adapter.ctl_path == fake_bin.parent / "ngtermctl"
-    assert SwiftLinuxAdapter.ctl_name == "agtermctl"
-
-
-def test_swift_linux_wires_the_install_layout(fake_bin: Path) -> None:
-    install = fake_bin.parent.parent
-    (install / "share" / "agterm").mkdir(parents=True)
-    (fake_bin.parent / "agtermctl").touch()
-    adapter = SwiftLinuxAdapter(fake_bin)
-    assert adapter.ctl_path == fake_bin.parent / "agtermctl"
-    env = adapter.build_env(Path("/tmp/agt-x"))
-    assert env["AGTERM_RESOURCE_ROOT"] == str(install / "share" / "agterm")
-
-
-def test_swift_linux_without_share_sets_no_resource_root(fake_bin: Path, tmp_path: Path) -> None:
-    assert "AGTERM_RESOURCE_ROOT" not in SwiftLinuxAdapter(fake_bin).build_env(tmp_path)
-    explicit = tmp_path / "resources"
-    env = SwiftLinuxAdapter(fake_bin, resource_root=explicit).build_env(tmp_path)
-    assert env["AGTERM_RESOURCE_ROOT"] == str(explicit)
+    assert UpstreamVocabularyAdapter.ctl_name == "agtermctl"
 
 
 def test_swift_macos_instance_runs_its_own_copy_of_the_bundle(tmp_path: Path) -> None:
@@ -1595,7 +1547,7 @@ def test_reaping_waits_for_a_daemon_zmx_does_not_list_yet_and_reports_refusals(
 ) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "absent"}
     monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
         assert base.reap_live_sessions(instance, settle=0.2) == [
@@ -1616,7 +1568,7 @@ def test_reaping_waits_out_a_closed_session_daemon(
 ) -> None:
     row = {"daemon": "d1", "state": "pendingClose", "sessionID": "s1", "pane": "left", "observation": "running"}
     monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
         assert base.reap_live_sessions(instance, settle=0.2) == [
@@ -1636,7 +1588,7 @@ def test_stop_reaps_a_listed_daemon_that_has_no_process_yet(
 ) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "running"}
     monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     requests_file = instance.state_dir / "fake-requests.jsonl"
     adapter.stop(instance, cleanup=False)
@@ -1653,7 +1605,7 @@ def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(base, "LEFTOVER_GRACE", 5.0)
-    adapter = SwiftLinuxAdapter(fake_bin)
+    adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     exiting = daemons[-1]
@@ -1695,7 +1647,7 @@ def test_only_the_rust_build_gets_a_fake_seat(monkeypatch: pytest.MonkeyPatch) -
     # after an adapter's own compositor arguments (chrome_probe.py's --debug)
     monkeypatch.setattr(RustAdapter, "compositor_args", ("--debug",))
     assert RustAdapter(None).weston_args() == ("--debug", "--fake-seat")
-    assert SwiftLinuxAdapter(None).weston_args() == ()
+    assert UpstreamVocabularyAdapter(None).weston_args() == ()
 
 
 def test_gpui_renders_on_lavapipe_alone(
@@ -1728,22 +1680,15 @@ def test_each_implementation_gets_its_own_variables(tmp_path: Path, lavapipe: Pa
     assert rust["NGTERM_CONTROL_SOCKET"] == str(tmp_path / "state" / "ngterm.sock")
     assert rust["NGTERM_APP_ID"].startswith(DEFAULT_APP_ID + ".")
     assert not [name for name in rust if name.startswith("AGTERM_")]
-    fork = SwiftLinuxAdapter(None).build_env(tmp_path)
-    assert fork["AGTERM_STATE_DIR"] == str(tmp_path / "state")
-    assert not [name for name in fork if name.startswith("NGTERM_")]
+    upstream = UpstreamVocabularyAdapter(None).build_env(tmp_path)
+    assert upstream["AGTERM_STATE_DIR"] == str(tmp_path / "state")
+    assert not [name for name in upstream if name.startswith("NGTERM_")]
     # an implementation's launch carries none of another's variables
     check_launch_env(rust, tmp_path, needs_app_id=True, needs_runtime_dir=True, prefix="NGTERM_")
     with pytest.raises(LaunchRefused, match="AGTERM_STATE_DIR would leak.*only harness-set NGTERM_"):
         check_launch_env({**rust, "AGTERM_STATE_DIR": rust["NGTERM_STATE_DIR"]}, tmp_path, True, True, prefix="NGTERM_")
     with pytest.raises(LaunchRefused, match="NGTERM_APP_ID is required"):
         check_launch_env({**rust, "NGTERM_APP_ID": ""}, tmp_path, True, True, prefix="NGTERM_")
-
-
-def test_the_fork_keeps_its_environment(tmp_path: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("VK_ICD_FILENAMES", "/somewhere/icd.json")
-    env = SwiftLinuxAdapter(None).build_env(tmp_path)
-    assert env["VK_ICD_FILENAMES"] == "/somewhere/icd.json"
-    assert not {"VK_DRIVER_FILES", "LIBGL_ALWAYS_SOFTWARE"} & env.keys()
 
 
 def test_gpui_without_lavapipe_spawns_nothing(

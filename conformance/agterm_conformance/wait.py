@@ -160,7 +160,7 @@ def wait_frame(
 ) -> dict[str, Any]:
     """The next presentation frame of `kind`; pings are acked through `send` on the way, other frames skipped.
 
-    One deadline for the whole wait: the references ping every 10s, so a per-read timeout never expires.
+    One deadline for the whole wait: upstream pings every 10s, so a per-read timeout never expires.
     `read(seconds)` returns the next frame or raises once none came in time.
     """
     deadline = time.monotonic() + timeout

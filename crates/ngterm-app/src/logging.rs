@@ -6,7 +6,7 @@
 //! (`SessionHost.paths` in `agtermCore/Sources/agtermCore/SessionHost.swift`), which the host opens append-only,
 //! owner-only and without following a symlink (`Host.redirectStandardIO` in
 //! `agtermCore/Sources/SessionHostRuntime/Host.swift`) and never rotates; upstream's app itself logs to the unified
-//! log and the Linux fork to stderr only. Appending matters here too: a second `ngterm` launch runs this before
+//! log. Appending matters here too: a second `ngterm` launch runs this before
 //! `GApplication` forwards it to the running instance, so a truncation at startup would wipe the live instance's log.
 //! The one addition is a bound: a file past [`ROTATE_BYTES`] at startup moves to [`ROTATED_FILE_NAME`], replacing
 //! the previous one. That too must spare a running instance, whose log may have grown past the bound since its own

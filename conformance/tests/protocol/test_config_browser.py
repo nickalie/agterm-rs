@@ -2,14 +2,13 @@
 with its `linkOpenMode` read-back, and `browser.clear` against the saved store persistent URL pages share.
 
 Config and browser-store tests each take a pristine instance: a reload re-applies the config to every mounted
-surface (on the Linux fork that path stops answering once about seven sessions are mounted), and the saved
-store must start out never created. Every page is served by this process on 127.0.0.1."""
+surface, and the saved store must start out never created. Every page is served by this process on 127.0.0.1."""
 
 from http.server import BaseHTTPRequestHandler
 
 import pytest
 from agterm_conformance.loopback import serve
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session, session_ids
+from agterm_conformance.match import assert_error, assert_ok, find_session, session_ids
 
 UNKNOWN = "zzz"
 COOKIE = "agt=kept"
@@ -27,35 +26,30 @@ def _font_size(ctl, sid, size):
     ctl.wait_tree(reads)
 
 
-def _reload(ctl, adapter, diagnostics):
-    result = assert_ok(ctl.request("config.reload"))
-    if adapter.has("config-reload-counts"):
-        assert result == {"count": diagnostics}
-    else:
-        # The Linux fork reloads without counting libghostty's diagnostics.
-        assert_absent(result, "count")
+def _reload(ctl, diagnostics):
+    assert assert_ok(ctl.request("config.reload")) == {"count": diagnostics}
 
 
 @pytest.mark.covers("config.reload", "field:result.count", "field:tree.session.fontSize")
-def test_reload_applies_the_edited_config_to_open_and_new_sessions(app, ctl, adapter):
+def test_reload_applies_the_edited_config_to_open_and_new_sessions(app, ctl):
     (first,) = session_ids(ctl.tree())
     ctl.wait_mounted(first, "left")
     config = app.state_dir / "config" / "ghostty.conf"
     original = config.read_text()
 
     config.write_text(original + "font-size = 17\n")
-    _reload(ctl, adapter, 0)
+    _reload(ctl, 0)
     _font_size(ctl, first, 17)
     second = assert_ok(ctl.request("session.new"))["id"]
     ctl.wait_mounted(second, "left")
     _font_size(ctl, second, 17)
 
     config.write_text(original + "font-size = 15\nno-such-key = 1\n")
-    _reload(ctl, adapter, 1)
+    _reload(ctl, 1)
     _font_size(ctl, first, 15)
 
     config.write_text(original)
-    _reload(ctl, adapter, 0)
+    _reload(ctl, 0)
 
 
 # -- browser.links

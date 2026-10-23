@@ -5,7 +5,7 @@ Every group command, result key, tree key and error text goes through the instan
 
 The module's shared instance runs without Live, so its daemons are only claimed, never observed: the inventory,
 prune, the hostless `zmx.tree` and every refusal are checked there. The Live tests share one instance launched with
-`restoreMode: live` seeded; a pane in it runs the account's zsh inside a live session (a zmx daemon in the references,
+`restoreMode: live` seeded; a pane in it runs the account's zsh inside a live session (a zmx daemon upstream,
 a session of the Rust build's server), so a line typed there only prints a marker. Each test ends the sessions it
 opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
 vocabulary's directory variable, or the session server of the namespace).
@@ -23,7 +23,7 @@ from agterm_conformance.wait import wait_frame, wait_until
 
 UNKNOWN = "zzz"
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which the references create only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
 )
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
@@ -178,10 +178,8 @@ def test_restart_rejects(ctl, args, error):
 
 @pytest.mark.covers("zmx.present")
 def test_present_refuses_without_a_session(ctl):
-    # Upstream answers `zmx.present requires a session`; the Linux fork resolves the active session instead and
-    # refuses it here as not live-backed.
     with ctl.stream(ctl.vocabulary.command("zmx.present")) as stream:
-        assert_error(stream.reply)
+        assert_error(stream.reply, ctl.vocabulary.text("zmx.present requires a session"))
 
 
 @pytest.mark.covers("zmx.present", "session.overlay.job.run")
@@ -462,7 +460,7 @@ def test_present_mirrors_a_live_session(live):
 def test_job_run_serves_an_overlay_a_presenter_shows(live):
     sid = _live_session(live)
     endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
-    # Both references hand an overlay to the presenter only while the pane's own client follows, and open it
+    # Upstream hands an overlay to the presenter only while the pane's own client follows, and open it
     # locally otherwise; a viewer's client claiming the lead makes it follow.
     daemon = _entries(live, sid)["left"]["daemon"]
     with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:

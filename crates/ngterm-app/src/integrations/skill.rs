@@ -3,9 +3,9 @@
 //! (`~/.codex/skills/ngterm`), Claude Code's when neither is. Idempotent, and a same-named skill the user wrote (its
 //! `SKILL.md` absent, unreadable or unmarked) is never overwritten.
 //!
-//! The skill is named `ngterm`, not upstream's `agterm`: the GTK fork installs its own `agterm` skill into the same
-//! agents' directories, and that one drives the fork through its `agtermctl`. This build's skill drives it through
-//! `ngtermctl` (`cli::TOOL_NAME`) and leaves the fork's alone.
+//! The skill is named `ngterm`, not upstream's `agterm`: upstream installs its own `agterm` skill into the same agents'
+//! directories, and that one drives agterm through its `agtermctl`. This build's skill drives it through `ngtermctl`
+//! (`cli::TOOL_NAME`) and leaves an `agterm` skill alone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ pub const SKILL_NAME: &str = "ngterm";
 /// The sentinel in the bundled `SKILL.md` telling an ngterm-installed skill from the user's own.
 pub const MARKER: &str = "<!-- ngterm-skill -->";
 
-/// The sentinel this build's skill carried before the build took its own name, the one the fork's `agterm` skill
+/// The sentinel this build's skill carried before the build took its own name, the one upstream's `agterm` skill
 /// carries too: in a `SKILL.md` whose frontmatter names [`SKILL_NAME`], it marks an install of ours. A one-time
 /// migration: remove it once no install from before the rename is left to migrate (the first reinstall past it has
 /// run).
@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn an_install_from_before_the_rename_is_ours_and_the_forks_skill_is_not() {
+    fn an_install_from_before_the_rename_is_ours_and_an_agterm_skill_is_not() {
         assert!(may_overwrite(
             true,
             Some("---\nname: ngterm\ndescription: x\n---\n<!-- agterm-skill -->\n")

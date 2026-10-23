@@ -165,8 +165,7 @@ because every plan task's subagent starts from this branch and must be able to r
    (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml) and lists the rest with its class. Then by hand:
    `reference` (swift_macos.py's `PARITY_LEVEL` with its assert in `conformance/selftests/test_impls.py`); `pins` and
    `resources` were handled above. Leave `claim` (the Rust build's `PARITY_LEVEL` and its mirrors: it states a parity
-   not reached yet and unlocks `since(V)` tests, so it moves in the plan's last task), `cite` (fork-bugs.md citations,
-   re-checked in the last task) and `keep`. A `review` line has no rule: decide it, and name it in the report so the
+   not reached yet and unlocks `since(V)` tests, so it moves in the plan's last task) and `keep`. A `review` line has no rule: decide it, and name it in the report so the
    rule table in `tag-mentions.sh` gets a line.
 5. **Commit** the files explicitly (never `git add -A`: `.claude/`, a `.venv` symlink and scratch stay out):
    `git add -- <files> && git commit -m "chore: mechanical sync to upstream TARGET" -- <files>` (`git add` first:

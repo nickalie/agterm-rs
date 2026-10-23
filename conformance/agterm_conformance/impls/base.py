@@ -41,10 +41,10 @@ from agterm_conformance.vocabulary import (
     Vocabulary,
 )
 
-# Both references refuse to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
+# Upstream refuses to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104
 # `/tmp`, not `$TMPDIR`: a macOS runner's `/var/folders/...` temp dir eats most of the socket cap.
-# `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-reference-linux.sh its own
+# `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-rust-linux.sh its own
 # parent.
 TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
@@ -52,16 +52,14 @@ MINIMAL_PATH = "/usr/bin:/bin"
 # HISTFILE), which would point the pane at the user's real startup and history files.
 SHELL_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR", "ENV", "BASH_ENV", "GHOSTTY_BASH_ENV", "HISTFILE")
 DEFAULT_APP_ID = "com.nickalie.ngterm"
-# The Linux fork's id, which its installed GTK build (and an older install of this one) still holds.
-FORK_APP_ID = "io.github.melonamin.agterm"
 SESSION_HOST = "agterm-session-host"
-# The references' live-session processes: upstream's zmx daemons and the macOS session host. A vocabulary with a
+# The reference's live-session processes: upstream's zmx daemons and the macOS session host. A vocabulary with a
 # session server (the Rust build's) names its own leftovers instead (`find_leftovers`).
 LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
 # What a session server leaves in its namespace directory once it stopped: the lock file it held (kept on purpose,
 # crates/ngterm-session/src/endpoint/unix.rs) and, should it have stopped unclean, its socket.
 SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
-# With SHELL=/bin/sh this is belt and braces: either alone gives a reference-linux pane /bin/sh
+# With SHELL=/bin/sh this is belt and braces on Linux; on macOS only this one gives the pane /bin/sh
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
 # A macOS pane runs a login /bin/sh, which reads this after /etc/profile: that prompt carries the host name, long
@@ -70,12 +68,12 @@ SHELL_PROFILE = "PS1='$ '\n"
 # A selection (`session.selectall`) would otherwise land in the desktop's own primary selection, and an OSC 52 write
 # (`agtermctl clipboard set` in a Live pane) in the desktop clipboard the user's session shares.
 GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\nclipboard-write = deny\n"
-# The private `XDG_RUNTIME_DIR` under the root: the Linux fork writes its ghostty config layers there
-# (`GhosttyApp.writeTempConf`/`writeDefaultsConf`), which in the shared one are the live app's own files.
+# The private `XDG_RUNTIME_DIR` under the root: the instance's weston and bus sockets live there, and nothing the app
+# writes into its runtime dir lands beside the live app's own files.
 RUNTIME_DIR_NAME = "run"
 # Every URI or file the instance hands the desktop (`session.reveal`, a clicked link, a page's browser hand-off) goes to
 # `true`: the system defaults resolve through XDG_DATA_DIRS, which the isolated XDG_DATA_HOME does not replace, and
-# opened real windows on the user's desktop. GTK's Show in Files (`session.overlay.navigate` finder) asks the session
+# opened real windows on the user's desktop. Show in Files (`session.overlay.navigate` finder) asks the session
 # bus's FileManager1 instead, which no mimeapps entry reaches: no test may drive it under the `session` display.
 NOOP_DESKTOP_ID = "agterm-conformance-noop.desktop"
 NOOP_MIME_TYPES = (
@@ -93,10 +91,10 @@ NOOP_MIME_TYPES = (
 DISPLAY_MODE_VARIABLE = "CONFORMANCE_LINUX_DISPLAY"
 DISPLAY_MODES = ("headless", "session")
 WESTON_SOCKET = "wayland-0"
-# GL: under the no-op renderer the fork dies with SIGSEGV before serving.
+# weston's GL renderer, on the Mesa vendor below.
 WESTON_RENDERER = "gl"
-# weston runs on glvnd's Mesa vendor where one is installed, and its clients follow it onto that device. Through
-# NVIDIA's EGL GDK settles on a GLES context while the fork's GtkGLArea allows desktop GL only, so no pane realizes.
+# weston runs on glvnd's Mesa vendor where one is installed, and its clients follow it onto that device, never onto
+# another vendor's EGL.
 GLVND_VENDOR_DIRS = ("/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d")
 EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
 # The Rust build's GPUI frontend renders through wgpu on Vulkan, with GL beside it, and in this harness on
@@ -115,7 +113,7 @@ WESTON_SIZE = (1920, 1080)
 WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
 DBUS_SOCKET = "bus"
 # No service directories: nothing is activated, so a notification, Show in Files or the AT-SPI bus lookup finds no
-# owner instead of starting a desktop service. The fork's GApplication still registers its unique id here.
+# owner instead of starting a desktop service. The instance's single-instance server still owns its app id here.
 DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
@@ -150,24 +148,9 @@ CAPABILITIES: Mapping[str, str] = {
     "one of them and ngterm-session is staged",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
-    "select-takes-frontmost": "`window.select`/`window.go` make their window `active` without waiting on window focus",
-    "status-shape": "`session.status` validates `shape` and reads it back as `statusShape`",
-    "type-rejects-nul": "`session.type` refuses text carrying a NUL rather than typing the run before it",
-    "resize-echoes-ratio": "`session.resize` answers with the applied ratio in `result.ratio`",
-    "drop-placement": "`session.move --after/--before` places like a sidebar drop, also above its own anchor",
-    "overlay-size-validated": "`session.overlay.open` refuses a `sizePercent` outside 1...100 rather than clamping it",
-    "modal-blocks-covers": "a pending GUI ask refuses control-driven covers such as `session.search` with `ask pending`",
-    "pick-names-pending-ask": "`pick.open` under a pending GUI ask answers `ask already pending`, naming the ask",
-    "quick-validates-input": "`quick.type` refuses a NUL, `quick.text` `--all` with `--lines` and a `--lines` below 1",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
-    "theme-slots-by-sync": "`theme.set`/`theme.list` report `theme` only while not following the system appearance, "
-    "`light`/`dark` only while following",
-    "keymap-menu": "`keymap.list` reports the menu bar's live key equivalents in `menu`",
-    "config-reload-counts": "`config.reload` answers with the ghostty config's diagnostic count in `result.count`",
     "hidden-split-holds-focus": "`session.focus` on a hidden split reads back as `splitFocused`; upstream's shown "
     "left pane takes the focus back while its window is key",
-    "capture-reads-command-panes": "`restore.capture` records a `--command` session's program; upstream reads only "
-    "the foreground group's leader, there the setuid `login` wrapper whose argv a user cannot read",
 }
 
 
@@ -216,7 +199,7 @@ def version_tuple(version: str) -> tuple[int, ...]:
 
 
 def login_shell_blocker() -> str | None:
-    """Why Live sessions cannot run for this account, or None: both references wrap a pane in zmx only when
+    """Why Live sessions cannot run for this account, or None: upstream wraps a pane in zmx only when
     the password-database login shell is zsh (`ZmxSupport.configuration`), and the pane then execs it."""
     shell = pwd.getpwuid(os.getuid()).pw_shell
     if os.path.basename(shell) != "zsh":
@@ -242,7 +225,7 @@ def check_app_id(app_id: str | None, prefix: str = UPSTREAM_PREFIX) -> str:
     variable = f"{prefix}APP_ID"
     if not app_id:
         raise LaunchRefused(f"{variable} is required: without it the launch is forwarded to the running app")
-    if app_id in (DEFAULT_APP_ID, FORK_APP_ID):
+    if app_id == DEFAULT_APP_ID:
         raise LaunchRefused(f"{variable} {app_id} is the installed app's id")
     elements = app_id.split(".")
     if len(app_id) > 255 or len(elements) < 2 or not all(_APP_ID_ELEMENT.fullmatch(e) for e in elements):
@@ -254,13 +237,12 @@ def unique_app_id() -> str:
     return f"{DEFAULT_APP_ID}.conformance.i{uuid.uuid4().hex[:12]}"
 
 
-# The harness-owned variables, after the implementation's prefix (`Adapter.env_prefix`: upstream's and the fork's
-# `AGTERM_`, the Rust build's `NGTERM_`); everything else under a scrubbed prefix is inherited and refused.
+# The harness-owned variables, after the implementation's prefix (`Adapter.env_prefix`: upstream's `AGTERM_`, the
+# Rust build's `NGTERM_`); everything else under a scrubbed prefix is inherited and refused.
 OWN_VARIABLE_NAMES = (
     "STATE_DIR",
     "CONTROL_SOCKET",
     "APP_ID",
-    "RESOURCE_ROOT",
     "UITEST_FORCE_SIDEBAR_VISIBLE",
     "UITEST_SHOW_WELCOME",
     # The Rust build's log filter, set only by tools/ghostty_probe.py and tools/chrome_probe.py; an inherited one is
@@ -271,7 +253,7 @@ OWN_VARIABLE_NAMES = (
 
 def own_variables(prefix: str) -> frozenset[str]:
     """The harness-owned variables of an implementation whose variables start with `prefix`, with each vocabulary's
-    UI-test opt-in (set only for the references that read one, swift_macos.py)."""
+    UI-test opt-in (set only for the reference, which reads one, swift_macos.py)."""
     return frozenset({*(prefix + name for name in OWN_VARIABLE_NAMES), UPSTREAM.ui_test_opt_in, LIVE.ui_test_opt_in})
 
 
@@ -293,7 +275,7 @@ def isolated_runtime_env(
 
     Wayland accepts an absolute `WAYLAND_DISPLAY`; D-Bus (and through it the AT-SPI bus) takes an explicit
     address. X11 and an inherited `XAUTHORITY` are absolute already. `headless` points Wayland and D-Bus at the
-    instance's own weston and bus instead and drops X11, so GTK cannot fall back to the user's Xwayland.
+    instance's own weston and bus instead and drops X11, so nothing it starts falls back to the user's Xwayland.
     """
     parent_runtime = parent.get("XDG_RUNTIME_DIR")
     env["XDG_RUNTIME_DIR"] = runtime_dir
@@ -303,7 +285,7 @@ def isolated_runtime_env(
         env["GDK_BACKEND"] = "wayland"
         env.pop("DISPLAY", None)
         env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={os.path.join(runtime_dir, DBUS_SOCKET)}"
-        env.pop("AT_SPI_BUS_ADDRESS", None)  # GTK would reach the user's accessibility bus directly
+        env.pop("AT_SPI_BUS_ADDRESS", None)  # an AT-SPI client would reach the user's bus directly
         return
     if not os.path.isabs(display):
         if parent_runtime:
@@ -407,13 +389,13 @@ class Adapter:
 
     name: ClassVar[str] = ""
     # The name the implementation gives its state directory under the platform's application support directory, its
-    # control socket (`<name>.sock`) and its live-session socket directories (`/tmp/<name>-zmx-*` for upstream and the
-    # fork, `/tmp/<name>-live-*` for the Rust build: the vocabulary's).
+    # control socket (`<name>.sock`) and its live-session socket directories (`/tmp/<name>-zmx-*` for upstream,
+    # `/tmp/<name>-live-*` for the Rust build: the vocabulary's).
     app_dir_name: ClassVar[str] = "agterm"
     # The implementation's CLI: the executable beside its binary and the name its usage lines and help print.
     ctl_name: ClassVar[str] = "agtermctl"
     # The prefix of the implementation's own variables, the ones the harness sets (`STATE_DIR`, `CONTROL_SOCKET`,
-    # `APP_ID`, ...) and the ones its panes carry: upstream's and the fork's `AGTERM_`, the Rust build's `NGTERM_`.
+    # `APP_ID`, ...) and the ones its panes carry: upstream's `AGTERM_`, the Rust build's `NGTERM_`.
     env_prefix: ClassVar[str] = UPSTREAM_PREFIX
     needs_app_id: ClassVar[bool] = False
     # A Linux desktop app: its runtime dir is the live session's, so the instance gets a private one.
@@ -530,7 +512,7 @@ class Adapter:
         settings: Mapping[str, Any] | None = None,
         first_run: bool = False,
     ) -> Instance:
-        """`settings` seeds `<state>/settings.json`, which both references read at launch (`restoreMode`, ...).
+        """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
 
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
         The dialog is modal and holds the socket unanswered, so such a launch returns without waiting for it: the

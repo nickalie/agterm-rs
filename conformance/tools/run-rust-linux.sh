@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Build the Rust workspace, stage it and run the protocol, cli and behaviors layers against it, then hold the
-# ratchet: every id in conformance/rust-passing.txt must still pass. The isolation is run-reference-linux.sh's:
-# every instance comes from the harness (unique NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
+# ratchet: every id in conformance/rust-passing.txt must still pass. Every instance comes from the harness (unique NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
 # parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
 #
 #   conformance/tools/run-rust-linux.sh [--stage DIR] [--out DIR] [--tests DIR]

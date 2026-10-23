@@ -15,10 +15,7 @@
 #   claim      what the Rust build *claims* to implement: PARITY_LEVEL in ngterm-proto, the tests and docs that
 #              mirror it. Bumped in the plan's last task, after the port, never in
 #              the mechanical bump: parityLevel unlocks `since(V)` tests and states a parity not yet reached
-#   cite       a citation of what upstream said at that release (fork-bugs.md): re-check it against the new
-#              release before bumping, or keep it
-#   keep       history and fixtures: spike-macos.md, the installed fork's level (swift_linux.py), selftests and
-#              their fixtures, example values in --help texts and tests (quick.rs)
+#   keep       history and fixtures: spike-macos.md, selftests and their fixtures, example values in --help texts and tests (quick.rs)
 #   review     no rule knows this path: decide, then add a rule here
 # With NEW_TAG --apply, rewrites the `bump` lines in place (vX.Y.Z and X.Y.Z forms) and lists the rest.
 set -euo pipefail
@@ -39,8 +36,7 @@ classify() {
     crates/ngterm-app/src/integrations/mod.rs) echo resources ;;
     crates/ngterm-proto/src/version.rs|crates/ngterm-core/src/dispatch.rs|crates/ngterm-server/tests/server.rs) echo claim ;;
     conformance/agterm_conformance/impls/rust.py|conformance/docs/rust-build.md) echo claim ;;
-    conformance/docs/fork-bugs.md) echo cite ;;
-    conformance/docs/spike-macos.md|conformance/agterm_conformance/impls/swift_linux.py) echo keep ;;
+    conformance/docs/spike-macos.md) echo keep ;;
     conformance/selftests/*|conformance/tools/*.py|crates/ngterm-gpui/src/quick/tests.rs) echo keep ;;
     *) echo review ;;
   esac

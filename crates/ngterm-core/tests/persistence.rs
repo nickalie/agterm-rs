@@ -1,17 +1,15 @@
-//! The state files on disk: fixtures in upstream's format and in the format the installed Linux fork writes, the
-//! launch bootstrap's recovery matrix, the saves the model asks for, and Open Recent's `recent-closed.json` (ported
-//! from upstream's `WindowLibraryTests`, `WindowLibraryIndexTests`, `SettingsStoreTests` and `RecentClosedTests`).
+//! The state files on disk: fixtures in upstream's format, current and with its legacy fields, the launch bootstrap's
+//! recovery matrix, the saves the model asks for, and Open Recent's `recent-closed.json` (ported from upstream's
+//! `WindowLibraryTests`, `WindowLibraryIndexTests`, `SettingsStoreTests` and `RecentClosedTests`).
 //!
 //! Fixtures (`tests/fixtures/`) are hand-written from upstream's `Snapshot.swift`, `WindowLibrary.swift`,
 //! `AppSettings.swift` and Foundation's `JSONEncoder` output rules (`[.prettyPrinted, .sortedKeys]`):
 //! - `upstream/`: a state dir as upstream writes it: an index with an open and a closed window, a window with every
 //!   snapshot field the model writes, a closed window carrying a captured command and a font size, settings, and an
 //!   Open Recent list with a closed workspace (collapsed, a focus member, its selection) and a closed split session;
-//! - `fork/`: files the Linux fork writes. It keeps upstream's `agtermCore` (its `Snapshot.swift`,
-//!   `PersistenceStore.swift`, `SettingsStore.swift` and the index types are identical), so the format is the same;
-//!   the fixture carries what older fork builds left behind: the legacy single focus key, sessions without pane
-//!   identities, a split recorded only as `isSplit`, the legacy `restoreRunningCommand`, and the fork-only
-//!   `sessionNameFromTerminalTitle` setting, which upstream does not know and this build adopts.
+//! - `legacy/`: upstream's format with what older builds left behind, which upstream's lossy decoding migrates: the
+//!   legacy single focus key, sessions without pane identities, a split recorded only as `isSplit`, the legacy
+//!   `restoreRunningCommand`, plus this build's `sessionNameFromTerminalTitle` setting, which upstream does not know.
 
 use std::fs;
 use std::io;
@@ -37,7 +35,7 @@ use uuid::Uuid;
 const HOME: &str = "/home/user";
 const WINDOW_A: &str = "0A11AAAA-1111-4111-8111-00000000000A";
 const WINDOW_B: &str = "0B22BBBB-2222-4222-8222-00000000000B";
-const FORK_WINDOW: &str = "7C33CCCC-3333-4333-8333-00000000000C";
+const LEGACY_WINDOW: &str = "7C33CCCC-3333-4333-8333-00000000000C";
 
 /// One of the constant ids above; the nil id for a typo, which then fails the test's assertions.
 fn id(text: &str) -> Uuid {
@@ -282,13 +280,13 @@ fn reopening_a_closed_upstream_window_scrubs_its_capture_and_announces_its_sessi
     assert!(index.windows.iter().all(|entry| entry.is_open));
 }
 
-// MARK: - Files the installed fork wrote
+// MARK: - Files with the legacy fields
 
 #[test]
-fn a_fork_state_dir_launches_with_its_legacy_fields_migrated() {
-    let dir = state_from("fork").unwrap();
+fn a_legacy_state_dir_launches_with_its_legacy_fields_migrated() {
+    let dir = state_from("legacy").unwrap();
     let (_persistence, library) = launch(dir.path());
-    let window = id(FORK_WINDOW);
+    let window = id(LEGACY_WINDOW);
     assert_eq!(library.open_ids(), [window]);
     let store = library.store(window).unwrap();
     assert_eq!(workspace_names(&library, window), ["linux", "other"]);
@@ -317,10 +315,10 @@ fn a_fork_state_dir_launches_with_its_legacy_fields_migrated() {
 }
 
 #[test]
-fn a_fork_window_saved_again_drops_its_legacy_keys_and_keeps_the_tree() {
-    let dir = state_from("fork").unwrap();
+fn a_legacy_window_saved_again_drops_its_legacy_keys_and_keeps_the_tree() {
+    let dir = state_from("legacy").unwrap();
     let (mut persistence, library) = launch(dir.path());
-    let window = id(FORK_WINDOW);
+    let window = id(LEGACY_WINDOW);
     assert!(persistence.save_window(&library, window));
     let text = fs::read_to_string(window_store(dir.path(), window).path()).unwrap();
     assert!(!text.contains("\"focusedWorkspaceID\""), "{text}");
@@ -336,8 +334,8 @@ fn a_fork_window_saved_again_drops_its_legacy_keys_and_keeps_the_tree() {
 }
 
 #[test]
-fn fork_settings_load_migrated_keeping_the_fork_only_key() {
-    let dir = state_from("fork").unwrap();
+fn legacy_settings_load_migrated_keeping_the_title_naming_key() {
+    let dir = state_from("legacy").unwrap();
     let store = SettingsStore::new(dir.path());
     let settings = store.load();
     assert_eq!(

@@ -8,37 +8,30 @@ Linux; the terminal core, the pane core and the live-session server under it (li
 
 - The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
   `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
-  (keymap, hooks, ngterm-scoped ghostty config). All three differ from the Swift/GTK fork's (`agterm-linux`:
-  `io.github.melonamin.agterm`, `~/.local/share/agterm`, `~/.config/agterm`), so the two run side by side without
-  sharing windows, settings, config or Live sessions. To carry the fork's state and config over, quit it and copy both
-  directories to the new ones before the first launch. Live sessions do not carry over: the fork's are zmx daemons
-  this build does not run, so end them in the fork first, or they restore here as fresh shells while the fork's
-  daemons keep running. Leave out `~/.config/agterm/agent-status`: run Help ▸ Install Agent Status Hooks… again instead,
-  which installs into `~/.config/ngterm/agent-status` and moves the rc files, Claude Code, Codex, Pi and OpenCode
-  hooks the old install wired over to it.
+  (keymap, hooks, ngterm-scoped ghostty config).
   One instance runs per application id: the first owns the id's name on the session bus and serves `GApplication`'s
   D-Bus protocol there (through `zbus`), and a later launch of this build forwards its activation to it and exits
   before touching the state.
 - The binaries are `ngterm`, `ngtermctl` and `ngterm-session`, the crates `ngterm-*`, and every variable the app sets
   or reads is `NGTERM_*` (a pane's `NGTERM_SESSION_ID`, `NGTERM_SOCKET`, `NGTERM_PANE_ID`, the attach contract's
-  `NGTERM_LIVE_*`; upstream's and the fork's are `AGTERM_*`). A reinstall of the agent-status hooks or the skill over
-  one made before the build took these names moves it onto them: the rc and Codex blocks, the Claude hooks, this
-  build's old Pi and OpenCode plugins (the fork's, at the same paths, stay) and the skill's marker. The old
+  `NGTERM_LIVE_*`; upstream's are `AGTERM_*`). A reinstall of the agent-status hooks or the skill over one made
+  before the build took these names (in `~/.config/agterm/agent-status`) moves it onto them, into
+  `~/.config/ngterm/agent-status`: the rc and Codex blocks, the Claude hooks, this build's old Pi and OpenCode plugins
+  (agterm's own, at the same paths, stay) and the skill's marker. The old
   `agterm-*` wrappers stay in the package: shells started before the update keep reporting through them, and a config
   the merge could not repoint (a hand-written Codex block) finds them but reports nothing from a new pane until it
   names the `ngterm-*` ones.
-- The CLI is `ngtermctl` (upstream's and the fork's is `agtermctl`), and the Help menu's installers use this build's
-  names too: Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (the fork's
-  `~/.local/bin/agtermctl` is left alone, and it resolves the fork's socket), and Install Agent Skill… installs the
-  `ngterm` skill, which drives the app through `ngtermctl`, into `~/.claude/skills/ngterm` and `~/.codex/skills/ngterm`
-  beside the fork's `agterm` skill.
+- The CLI is `ngtermctl` (upstream's is `agtermctl`), and the Help menu's installers use this build's names too:
+  Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (an `agtermctl` there is left alone),
+  and Install Agent Skill… installs the `ngterm` skill, which drives the app through `ngtermctl`, into
+  `~/.claude/skills/ngterm` and `~/.codex/skills/ngterm` (an `agterm` skill there is left alone).
 - One extension beyond upstream: Live sessions in bash, fish and PowerShell login shells too (upstream: zsh only),
   under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
   (`resources/shell-integration/pwsh`), since Ghostty has none.
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.
-- One behavior taken from the GTK fork instead of upstream: restore is lazy. A launch (or a window reopened from its
+- One behavior differs from upstream by choice: restore is lazy. A launch (or a window reopened from its
   file) spawns only each window's selected session; every other restored session starts its shell, re-runs its
   command or attaches to its live session once it is first shown (selected, zoomed, in the dashboard) or a command
   needs its terminal (`session.type`, `paste`, `selectall`, `font.*`, `session.search`, `session.restart`,
@@ -71,8 +64,7 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
   `NGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
   (`SKIPPED:`, shown with `--nocapture`) unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it
-  instead. The single-instance checks against a GTK build of agterm (the Linux fork) take its binary from
-  `AGTERM_GTK_BIN` and skip without one, required or not. The nested-niri activation check (niri inside a headless
+  instead. The nested-niri activation check (niri inside a headless
   weston) is `#[ignore]`d, since CI has no niri: `cargo test -p ngterm-gpui --test instance -- --ignored`. The external texture
   test (`--test external_texture`, dmabufs drawn by GPUI's headless renderer) runs on lavapipe and on the first render
   node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (a kernel built with

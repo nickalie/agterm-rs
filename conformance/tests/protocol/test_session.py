@@ -316,14 +316,10 @@ def test_move_next_to_an_anchor(ctl):
 
 
 @pytest.mark.covers("session.move")
-def test_move_after_an_anchor_below_it(adapter, ctl):
+def test_move_after_an_anchor_below_it(ctl):
     wid, (moving, anchor, last) = _new_workspace(ctl, sessions=3)
     assert assert_ok(ctl.request("session.move", moving, after=anchor))["id"] == moving
-    if adapter.has("drop-placement"):
-        assert session_ids(ctl.tree(), wid) == [anchor, moving, last]
-    else:
-        # The Linux fork inserts at the anchor's index before the move took the session out, one slot low.
-        assert session_ids(ctl.tree(), wid) == [anchor, last, moving]
+    assert session_ids(ctl.tree(), wid) == [anchor, moving, last]
 
 
 @pytest.mark.covers("session.move", "field:result.affected")
@@ -510,19 +506,12 @@ def test_status_records_the_pane(ctl):
 
 
 @pytest.mark.covers("session.status", "field:tree.session.statusShape")
-def test_status_shape(adapter, ctl):
+def test_status_shape(ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("session.status", sid, status="active", shape="star"))
     rejected = ctl.request("session.status", sid, status="blocked", shape="hexagon")
-    node = _node(ctl, sid)
-    if adapter.has("status-shape"):
-        assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|diamond|capsule|star)")
-        assert_subset(node, {"status": "active", "statusShape": "star"})
-    else:
-        # The Linux fork's dispatcher never reads `shape`: any value is accepted and none is reported.
-        assert_ok(rejected)
-        assert node["status"] == "blocked"
-        assert_absent(node, "statusShape")
+    assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|diamond|capsule|star)")
+    assert_subset(_node(ctl, sid), {"status": "active", "statusShape": "star"})
 
 
 @pytest.mark.covers("session.status")

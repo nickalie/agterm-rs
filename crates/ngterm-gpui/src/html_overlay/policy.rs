@@ -5,7 +5,7 @@
 //! strip's buttons (upstream's `HtmlOverlayView.strip`), and how a page follows a changed theme (upstream's
 //! `applyTheme`).
 //!
-//! `WebKit`'s `GLib` ports differ from `WKWebView` in two ways that shape this (the Linux fork met both): a navigation
+//! `WebKit`'s `GLib` ports differ from `WKWebView` in two ways that shape this: a navigation
 //! action names no target frame, so the main frame's origin is checked again on its response, which does say whether
 //! it is the main frame's; and they have no `loadFileURL(_:allowingReadAccessTo:)`, so a granted file page loads
 //! through [`GRANT_SCHEME`], whose handler serves only files inside the grant.
@@ -23,7 +23,7 @@ use url::Url;
 pub const GRANT_SCHEME: &str = "ngterm-file";
 
 /// What `WebKitGTK` tells about a decision: a frame navigation (no target frame named), a new window, or the response
-/// of the main frame or a subframe (the fork's `LinuxHtmlTarget`).
+/// of the main frame or a subframe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionTarget {
     Frame,

@@ -2,8 +2,7 @@
 `hooks.list` read-back, plus `keymap.run`. The module shares one instance and every test leaves both files absent.
 
 Both files live in `<state>/config`, never the account's. Every custom command and hook here only writes into the
-instance root, by absolute path: a command runs in the session's directory, which on the Linux fork is the
-account's real home, and a hook in the app's."""
+instance root, by absolute path: a command runs in the session's directory, and a hook in the app's."""
 
 import json
 import os
@@ -66,7 +65,7 @@ def _marker_command(name, marker):
 
 
 @pytest.mark.covers("keymap.list", "keymap.reload", "field:result.keymap", "field:result.count")
-def test_list_without_a_file_reports_the_builtins_alone(ctl, adapter, keymap):
+def test_list_without_a_file_reports_the_builtins_alone(ctl, keymap):
     assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
     listing = _listed(ctl)
     assert listing["path"] == os.fspath(keymap)
@@ -76,11 +75,7 @@ def test_list_without_a_file_reports_the_builtins_alone(ctl, adapter, keymap):
     assert len(names) == len(set(names))
     for action in listing["actions"]:
         assert_absent(action, "overridden", "repeats")
-    if adapter.has("keymap-menu"):
-        assert listing["menu"] and all({"menu", "title", "chord"} <= set(item) for item in listing["menu"])
-    else:
-        # The GTK fork has no menu bar to report.
-        assert_absent(listing, "menu")
+    assert listing["menu"] and all({"menu", "title", "chord"} <= set(item) for item in listing["menu"])
 
 
 @pytest.mark.covers("keymap.reload", "keymap.list", "field:result.keymap", "field:result.count")

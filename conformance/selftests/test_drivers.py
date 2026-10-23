@@ -21,6 +21,7 @@ from agterm_conformance.drivers.base import (
     make_driver,
     parse_chord,
 )
+from upstream_adapter import UpstreamVocabularyAdapter
 
 spec = importlib.util.spec_from_file_location(
     "spike_b", Path(__file__).resolve().parent.parent / "tools" / "spike_b.py"
@@ -407,7 +408,7 @@ def test_ax_reads_a_failing_display_attribute_as_no_value_but_not_a_failing_iden
     ("impl", "platform", "name"),
     [
         ("swift-macos", "linux", "ax"),
-        ("swift-linux", "darwin", "atspi"),
+        ("swift-macos", "win32", "ax"),
         ("rust", "darwin", "ax"),
         ("rust", "linux", "atspi"),
         ("rust", "win32", "uia"),
@@ -425,7 +426,7 @@ def test_driver_name_refuses_an_unknown_platform() -> None:
 @pytest.mark.parametrize(
     ("impl", "platform", "message"),
     [
-        ("swift-linux", "linux", "atspi ui driver is not written yet"),
+        ("rust", "linux", "atspi ui driver is not written yet"),
         ("rust", "win32", "uia ui driver is not written yet"),
         ("swift-macos", "linux", "needs darwin, this host is linux"),
     ],
@@ -526,9 +527,15 @@ def test_spike_b_ancestry_starts_at_this_process() -> None:
 # -- the `ui` fixture
 
 
+@pytest.fixture(autouse=True)
+def _upstream_impl(upstream_impl: str) -> str:
+    """The ui fixture's suite runs go through the self-test double, which names no platform of its own."""
+    return upstream_impl
+
+
 def run_ui_suite(pytester: pytest.Pytester, fake_bin: Path, *args: str) -> pytest.RunResult:
     return pytester.runpytest(
-        "-p", "no:cacheprovider", "-rs", "--impl", "swift-linux", "--bin", str(fake_bin), *args
+        "-p", "no:cacheprovider", "-rs", "--impl", UpstreamVocabularyAdapter.name, "--bin", str(fake_bin), *args
     )  # fmt: skip
 
 

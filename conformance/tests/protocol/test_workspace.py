@@ -134,17 +134,7 @@ def _create_by_background_session(ctl):
 @pytest.mark.parametrize(
     "create",
     [
-        pytest.param(
-            _create_collapsed,
-            id="collapsed",
-            marks=pytest.mark.xfail(
-                "config.getoption('impl') == 'swift-linux'",
-                reason="swift-linux bug: a collapsed create becomes current and joins the focus set "
-                "(upstream commands.html: a background create never takes the active workspace)",
-                raises=AssertionError,
-                strict=True,
-            ),
-        ),
+        pytest.param(_create_collapsed, id="collapsed"),
         pytest.param(_create_by_background_session, id="session-no-select"),
     ],
 )
@@ -350,10 +340,7 @@ def test_focus_modes(ctl):
 @pytest.mark.covers("workspace.focus")
 def test_focus_rejects_an_unknown_mode(ctl):
     before = ctl.tree()
-    response = ctl.request("workspace.focus", "active", mode="pin")
-    assert_error(response)
-    # Text differs: upstream `invalid focus mode: pin (on|off|toggle|add)`, fork `invalid workspace.focus mode: pin`.
-    assert response.error.startswith("invalid ") and "mode: pin" in response.error, response.raw
+    assert_error(ctl.request("workspace.focus", "active", mode="pin"), "invalid focus mode: pin (on|off|toggle|add)")
     assert ctl.tree()["tree"]["workspaceFilter"] == before["tree"]["workspaceFilter"]
 
 

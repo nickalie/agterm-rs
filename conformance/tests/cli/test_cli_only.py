@@ -73,7 +73,7 @@ def test_clipboard_set_checks_the_text_before_the_pane(cli):
 
 
 @pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which the references create only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
 )
 @pytest.mark.covers("cli:clipboard set")
 def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):

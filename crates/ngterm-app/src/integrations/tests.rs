@@ -217,7 +217,7 @@ fn before_the_rename(text: &str) -> String {
         .replace("// ngterm-", "// agterm-")
 }
 
-/// What an install from before the rename left in `home` with its package in `dir` (the legacy directory, as the fork
+/// What an install from before the rename left in `home` with its package in `dir` (the legacy directory, as upstream
 /// installs, or this build's own): every agent's config calling `dir` under the old names, the plugins under their old
 /// names and markers, and its package there.
 fn install_before_the_rename(home: &Home, dir: &Path) {
@@ -281,7 +281,7 @@ const OLD_PLUGINS: [&str; 2] = [
 
 /// A reinstall over an install from before the rename, in the legacy directory or in this build's, moves every
 /// reference onto the current names and directory, adds no second set, removes the old plugins that call this build's
-/// directory and its old plugin copies, keeps its old wrappers, leaves the fork's package and plugins alone, and a run
+/// directory and its old plugin copies, keeps its old wrappers, leaves agterm's package and plugins alone, and a run
 /// after it changes nothing.
 #[test]
 fn an_install_from_before_the_rename_moves_every_reference() {
@@ -307,7 +307,7 @@ fn an_install_from_before_the_rename_moves_every_reference() {
             home.path(".config/agterm/agent-status/opencode/agterm-v2/tui.js")
                 .exists(),
             !ours,
-            "the fork's package stays"
+            "agterm's package stays"
         );
         assert!(
             !home.path(".config/ngterm/agent-status/opencode/agterm-v2").exists(),
@@ -318,7 +318,7 @@ fn an_install_from_before_the_rename_moves_every_reference() {
 }
 
 /// Every agent's config calls the current names once, the old plugins are gone when `ours` (they call this build's
-/// directory) and stay otherwise (the fork's), and nothing else names agterm.
+/// directory) and stay otherwise (agterm's), and nothing else names agterm.
 fn assert_moved_onto_the_current_names(home: &Home, ours: bool) {
     let kept: &[&str] = if ours { &[] } else { &OLD_PLUGINS };
     assert_nothing_calls_the_old_names(home, kept);
@@ -349,7 +349,7 @@ fn assert_a_second_run_changes_nothing(home: &Home, start: &OpenCodeStart) {
     assert_eq!(home.snapshot(), after_first, "a second run changes nothing");
 }
 
-/// No file in `home` but the fork's package, the backups, the old wrappers and `kept` still names the legacy directory
+/// No file in `home` but agterm's package, the backups, the old wrappers and `kept` still names the legacy directory
 /// or an old name.
 fn assert_nothing_calls_the_old_names(home: &Home, kept: &[&str]) {
     let script_dir = hooks::script_dir(Path::new(""));
@@ -399,9 +399,9 @@ fn old_plugin(marker: &str, dir: &str) -> String {
     format!("{marker}\nconst wrapper = join(homedir(), {dir}, \"agterm-agent-status.sh\");\n")
 }
 
-/// This build's script directory as its plugins from before the rename named it, and the fork's (upstream's too).
+/// This build's script directory as its plugins from before the rename named it, and upstream's.
 const OUR_DIR: &str = "\".config\", \"ngterm\", \"agent-status\"";
-const FORKS_DIR: &str = "\".config\", \"agterm\", \"agent-status\"";
+const AGTERMS_DIR: &str = "\".config\", \"agterm\", \"agent-status\"";
 
 /// Probes `OpenCode` 2 with its configuration in `config`.
 fn opencode_v2(config: &Path) -> Probe {
@@ -412,11 +412,11 @@ fn opencode_v2(config: &Path) -> Probe {
 }
 
 /// A v2 install removes both old plugins that call this build's directory, the v2 one's folder with it; the same files
-/// calling the fork's directory (the fork and upstream install them under the same names and markers for their own
-/// app) are theirs and stay.
+/// calling upstream's directory (upstream installs them under the same names and markers for its own app) are
+/// upstream's and stay.
 #[test]
-fn a_v2_install_removes_our_old_plugins_of_both_versions_and_keeps_the_forks() {
-    for (dir, ours) in [(OUR_DIR, true), (FORKS_DIR, false)] {
+fn a_v2_install_removes_our_old_plugins_of_both_versions_and_keeps_agterms() {
+    for (dir, ours) in [(OUR_DIR, true), (AGTERMS_DIR, false)] {
         let home = Home::new();
         let config = home.path(".config/opencode");
         for version in Version::ALL {
@@ -443,10 +443,10 @@ fn a_v2_install_removes_our_old_plugins_of_both_versions_and_keeps_the_forks() {
 }
 
 /// The old Pi extension goes once the current one is in place when it calls this build's directory, and stays when
-/// it calls the fork's.
+/// it calls agterm's.
 #[test]
 fn the_old_pi_extension_goes_only_when_it_is_ours() {
-    for (dir, ours) in [(OUR_DIR, true), (FORKS_DIR, false)] {
+    for (dir, ours) in [(OUR_DIR, true), (AGTERMS_DIR, false)] {
         let home = Home::new();
         home.mkdir(".pi/agent");
         let old = old_plugin(config::LEGACY_PI_EXTENSION_MARKER, dir);
@@ -783,15 +783,15 @@ fn the_skill_installs_for_each_agent_and_refuses_a_users_skill() {
     );
 }
 
-/// The fork's `agterm` skill, marked as an install of its own, is a different skill: never replaced or removed.
+/// Upstream's `agterm` skill, marked as an install of its own, is a different skill: never replaced or removed.
 #[test]
-fn the_forks_agterm_skill_is_left_alone() {
+fn an_agterm_skill_is_left_alone() {
     let home = Home::new();
-    let forks = "---\nname: agterm\n---\n<!-- agterm-skill -->\nthe fork's\n";
-    home.write(".claude/skills/agterm/SKILL.md", forks);
+    let agterms = "---\nname: agterm\n---\n<!-- agterm-skill -->\nagterm's\n";
+    home.write(".claude/skills/agterm/SKILL.md", agterms);
     let report = skill::apply(&skill::plan(&home.env).unwrap());
     assert_eq!(report.installed, [("Claude Code", home.path(".claude/skills/ngterm"))]);
-    assert_eq!(home.read(".claude/skills/agterm/SKILL.md"), forks);
+    assert_eq!(home.read(".claude/skills/agterm/SKILL.md"), agterms);
 }
 
 /// Managed-marker idempotence for the skill: the marked copy is replaced by an identical one.

@@ -272,7 +272,7 @@ def test_quick_zoom_ends_with_the_panel(ctl):
 
 
 @pytest.mark.covers("quick.type", "quick.text")
-def test_quick_input_validation(app, ctl, adapter):
+def test_quick_input_validation(app, ctl):
     assert_error(ctl.request("quick.type"), "quick.type requires text")
     assert_ok(ctl.request("quick", mode="show"))
     ctl.wait_response("quick.text", None, lambda response: response.ok)
@@ -283,10 +283,4 @@ def test_quick_input_validation(app, ctl, adapter):
         (("quick.text", {"lines": -1}), "--lines must be greater than 0"),
     ]
     for (cmd, args), error in refusals:
-        response = ctl.request(cmd, **args)
-        if adapter.has("quick-validates-input"):
-            assert_error(response, error)
-        else:
-            # The Linux fork's quick arms skip the shared validation: the NUL cuts the typed run short, and the
-            # extent flags are ignored. This instance is the test's own, so the half-typed line goes with it.
-            assert_ok(response)
+        assert_error(ctl.request(cmd, **args), error)

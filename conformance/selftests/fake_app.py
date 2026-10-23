@@ -7,9 +7,9 @@ exit 134 instead, without a core). FAKE_VERSION: JSON for the `version` result. 
 replacing the `zmx.list` result. FAKE_LIVE_GROUP: the live-session group's name, `zmx` (upstream's) by default; the
 fake answers `<group>.list` under the result key `<group>`, as the Rust build answers `live.list` under `live`.
 `fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
-killing a left pane promotes the session's right pane into the left slot, as the references do.
-`tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with the
-reference's cursor semantics, appended to by `fake.emit {kind, session?, payload?, delay?}`. A delay applies the
+killing a left pane promotes the session's right pane into the left slot, as upstream does.
+`tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with
+upstream's cursor semantics, appended to by `fake.emit {kind, session?, payload?, delay?}`. A delay applies the
 change from a timer after the reply, as an app does work after acknowledging a command.
 """
 
@@ -22,7 +22,7 @@ import threading
 import uuid
 
 mode = os.environ.get("FAKE_APP_MODE", "serve")
-# The adapter's prefix: the references' AGTERM_, the Rust build's NGTERM_.
+# The adapter's prefix: upstream's AGTERM_, the Rust build's NGTERM_.
 PREFIX = "NGTERM_" if "NGTERM_STATE_DIR" in os.environ else "AGTERM_"
 state = os.environ[PREFIX + "STATE_DIR"]
 with open(os.path.join(state, "fake-env.json"), "w") as sink:

@@ -140,16 +140,12 @@ def test_focus_reaches_a_hidden_split(ctl, adapter):
 
 
 @pytest.mark.covers("session.resize", "field:tree.session.splitRatio", "field:result.ratio")
-def test_resize_sets_and_clamps_the_ratio(adapter, ctl):
+def test_resize_sets_and_clamps_the_ratio(ctl):
     sid = _split(ctl)
     for ratio, stored in [(0.3, 0.3), (0.0, MIN_RATIO), (1.5, MAX_RATIO), (0.5, 0.5)]:
         result = assert_ok(ctl.request("session.resize", sid, ratio=ratio))
         assert result["id"] == sid, ratio
-        if adapter.has("resize-echoes-ratio"):
-            assert_subset(result, {"ratio": stored})
-        else:
-            # The Linux fork answers with the id alone; `splitRatio` is its only read-back.
-            assert_absent(result, "ratio")
+        assert_subset(result, {"ratio": stored})
         assert_subset(_node(ctl, sid), {"splitRatio": stored})
 
 
@@ -311,21 +307,14 @@ def test_zoom_the_pane_under_a_running_overlay(ctl):
 @pytest.mark.covers("surface.zoom")
 @pytest.mark.parametrize("target", [UNKNOWN, f"surface:{UNKNOWN}:left"])
 def test_zoom_rejects_an_unknown_surface(ctl, target):
-    # The references disagree on the text: upstream `invalid surface: zzz` and `no such surface: surface:zzz:left`,
-    # the Linux fork `invalid surface target: <target>` for both. Both name the target.
-    response = ctl.request("surface.zoom", target, mode="show")
-    assert_error(response)
-    assert response.error.endswith(f": {target}"), response.raw
+    # Neither parses as `surface:<uuid>:<pane>` (upstream's `TerminalSurfaceID(rawValue:)`), so both are invalid.
+    assert_error(ctl.request("surface.zoom", target, mode="show"), f"invalid surface: {target}")
     assert_absent(ctl.tree()["tree"], "zoomedSurface")
 
 
 @pytest.mark.covers("surface.zoom")
 def test_zoom_rejects_an_unknown_mode(ctl):
-    # The references disagree on the text: upstream `invalid surface zoom mode: big`, the Linux fork's own
-    # dispatcher `invalid surface.zoom mode: big`. Both name the rejected mode.
-    response = ctl.request("surface.zoom", mode="big")
-    assert_error(response)
-    assert response.error.endswith(" mode: big"), response.raw
+    assert_error(ctl.request("surface.zoom", mode="big"), "invalid surface zoom mode: big")
     assert_absent(ctl.tree()["tree"], "zoomedSurface")
 
 

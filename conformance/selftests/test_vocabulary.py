@@ -21,11 +21,10 @@ REPO = Path(__file__).resolve().parents[2]
 COMMANDS = ("list", "prune", "kill", "reset", "tree", "attach", "present", "screen")
 
 
-def test_the_rust_adapter_speaks_live_and_the_references_upstream():
+def test_the_rust_adapter_speaks_live_and_the_reference_upstream():
     assert RustAdapter.vocabulary is LIVE
     assert {name: adapter.vocabulary for name, adapter in ADAPTERS.items() if adapter is not RustAdapter} == {
         "swift-macos": UPSTREAM,
-        "swift-linux": UPSTREAM,
     }
 
 
@@ -61,7 +60,7 @@ def test_keys_and_variables_per_vocabulary():
     # the same hash under the session server's prefix: ngterm_core::live::socket_directory's test pins its value
     assert live_socket_directory("/nonexistent-agterm/state") == "/tmp/ngterm-live-22c4fb0b9e3e04dc"
     assert upstream_socket_directory("/nonexistent-agterm/state").endswith("-22c4fb0b9e3e04dc")
-    # one server per namespace for the Rust build, a daemon per session for the references
+    # one server per namespace for the Rust build, a daemon per session for upstream
     assert (UPSTREAM.server, UPSTREAM.server_idle) == (None, 0.0)
     assert (LIVE.server, LIVE.server_idle) == ("ngterm-session", SERVER_IDLE_GRACE)
 

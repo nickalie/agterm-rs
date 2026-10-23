@@ -59,7 +59,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: python conformance/tools/fetch_reference.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
       - name: zsh login shell
-        # Both references wrap a pane in zmx only for a zsh login shell; the runner account starts with bash.
+        # Upstream wraps a pane in zmx only for a zsh login shell; the runner account starts with bash.
         run: |
           if [[ "$(dscl . -read "/Users/$USER" UserShell)" != "UserShell: /bin/zsh" ]]; then
             sudo dscl . -create "/Users/$USER" UserShell /bin/zsh

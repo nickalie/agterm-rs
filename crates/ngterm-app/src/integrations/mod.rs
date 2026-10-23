@@ -5,11 +5,11 @@
 //! installed, what belongs to the user), then applies the plan and reports upstream's result text. The Help menu and
 //! the first-run welcome run them from each frontend's own UI glue.
 //!
-//! Linux install paths (the fork's `LinuxIntegrations` as the hint), under this build's own names so that nothing
-//! lands on the GTK fork's: the hooks package goes to `~/.config/ngterm/agent-status` (the fork's is
-//! `~/.config/agterm/agent-status`, which a reinstall migrates away from: `hooks::legacy_script_dir`), the skill to the
-//! agents' `skills/ngterm`, and the bundled `ngtermctl` (upstream's `agtermctl`, which the fork also links there) is
-//! linked into `~/.local/bin`, the per-user executables directory instead of an admin-owned `/usr/local/bin`. The
+//! Linux install paths, under this build's own names so that nothing lands on an agterm install's: the hooks package
+//! goes to `~/.config/ngterm/agent-status` (an install from before the rename used `~/.config/agterm/agent-status`,
+//! which a reinstall migrates away from: `hooks::legacy_script_dir`), the skill to the agents' `skills/ngterm`, and
+//! the bundled `ngtermctl` (upstream's `agtermctl`) is linked into `~/.local/bin`, the per-user executables directory
+//! of the XDG Base Directory spec, instead of an admin-owned `/usr/local/bin`. The
 //! agents' own configs live where upstream puts them.
 //!
 //! The payloads under the repository's `resources/` are upstream v0.36.0's `agterm/Resources/agent-status` and
