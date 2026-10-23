@@ -344,7 +344,14 @@ impl AppSettings {
 
     /// Clears a theme slot naming [`AppSettings::LEGACY_DEFAULT_THEME`], so a file a build from before the rename
     /// seeded loads on ghostty's built-in colors instead of a theme no catalog holds; a save then writes it cleared.
-    pub fn migrate_legacy_theme(&mut self) {
+    /// A theme of that name the user put in one of `theme_dirs` (`ghostty_config::theme_dirs`) is theirs and kept.
+    pub fn migrate_legacy_theme(&mut self, theme_dirs: &[PathBuf]) {
+        if theme_dirs
+            .iter()
+            .any(|dir| dir.join(Self::LEGACY_DEFAULT_THEME).is_file())
+        {
+            return;
+        }
         for slot in [&mut self.theme, &mut self.dark_theme] {
             if slot.as_deref() == Some(Self::LEGACY_DEFAULT_THEME) {
                 *slot = None;
@@ -492,7 +499,7 @@ impl SettingsStore {
             return AppSettings::default();
         };
         settings.migrate_restore_mode();
-        settings.migrate_legacy_theme();
+        settings.migrate_legacy_theme(&crate::ghostty_config::theme_dirs(&crate::paths::ProcessEnv, None));
         settings
     }
 
@@ -562,6 +569,25 @@ mod tests {
         seed(&store, r#"{"theme": "Nord", "darkTheme": "agterm"}"#);
         let settings = store.load();
         assert_eq!((settings.theme.as_deref(), settings.dark_theme), (Some("Nord"), None));
+    }
+
+    #[test]
+    fn a_users_own_theme_of_the_legacy_name_is_kept() {
+        let themes = tempfile::tempdir().unwrap();
+        let mut settings = AppSettings {
+            theme: Some(AppSettings::LEGACY_DEFAULT_THEME.to_owned()),
+            ..AppSettings::default()
+        };
+        settings.migrate_legacy_theme(&[themes.path().to_path_buf()]);
+        assert_eq!(settings.theme, None, "no theme of that name anywhere");
+        std::fs::write(
+            themes.path().join(AppSettings::LEGACY_DEFAULT_THEME),
+            "background = 000000\n",
+        )
+        .unwrap();
+        settings.theme = Some(AppSettings::LEGACY_DEFAULT_THEME.to_owned());
+        settings.migrate_legacy_theme(&[themes.path().to_path_buf()]);
+        assert_eq!(settings.theme.as_deref(), Some(AppSettings::LEGACY_DEFAULT_THEME));
     }
 
     #[test]

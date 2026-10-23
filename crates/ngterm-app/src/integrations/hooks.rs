@@ -103,8 +103,9 @@ pub struct HooksPlan {
 }
 
 /// What an install from before the build took its own name left under the old names that would run beside the files
-/// replacing them: removed once those are written, each entry itself (never a link's target, nor anything inside a
-/// linked directory), a directory only when its files leave it empty. The old wrappers are not among them: they stay
+/// replacing them: removed once those are written, each entry itself (never a link's target; a linked v2 plugin
+/// folder, or a linked parent of a package entry, goes as the link alone), a directory only when its files leave it
+/// empty. The old wrappers are not among them: they stay
 /// for what still calls them ([`LEGACY_PACKAGE_ENTRIES`]). A one-time migration: remove it once no install from
 /// before the rename is left to migrate (the first reinstall past it has run).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -506,9 +507,11 @@ pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) 
 /// after its files and is removed only when they leave it empty. Nothing loads these copies, so they go. The old
 /// wrappers ([`config::LEGACY_WRAPPER_NAME`] and its Claude and Codex adapters) stay beside the new ones: a shell
 /// started before the update (live sessions outlive it) sourced the old integration, which fixed the old wrapper's
-/// path at source time and calls it on every prompt, and a Codex block or Claude settings file the merge could not
-/// repoint (the user's own, or one it skipped) still calls them; they work against this build for those callers.
-/// Remove them, in a change of their own, once no shell or config from before the rename can still call them.
+/// path at source time and calls it on every prompt; the wrappers serve those shells, which still carry the
+/// `AGTERM_*` variables they read. A Codex block or Claude settings file the merge could not repoint (the user's own,
+/// or one it skipped) still calls them too: kept, they spare it a missing file, but in a pane this build starts (no
+/// `AGTERM_*` there) they exit at once, so such a config reports nothing until it is repointed. Remove them, in a
+/// change of their own, once no shell or config from before the rename can still call them.
 const LEGACY_PACKAGE_ENTRIES: [&str; 4] = [
     "pi/agterm-status.ts",
     "opencode/agterm-status.js",

@@ -1,14 +1,14 @@
 The rest of the bundled skill under this build's own identity (CLAUDE.md > Reference rule), beyond the CLI and
 paths 0002-ngterm-names.patch renames: the app is ngterm in the prose too, its pane and attach-contract variables
 are `NGTERM_*`, the HTML bridge is `ngterm` (`data-ngterm`, `ngterm.request`), the installed hook and plugin files
-are `ngterm-*`, the docs are ngterm.com's, bugs go to nickalie/ngterm, and the default theme is ghostty's built-in
-(this build ships no theme of its own). What stays agterm is upstream's own: its repository and cookbook, its macOS
-bundle id and log subsystem. Applied after 0003-live-attach-contract.patch; sync-resources.sh reapplies the series to
-upstream's plugins/agterm/skills/agterm after every sync, and an upstream change that brings new agterm names is
-renamed here the same way.
+are `ngterm-*`, its macOS bundle id and log subsystem `com.nickalie.ngterm`, the docs are ngterm.com's, bugs go to
+nickalie/ngterm, and the default theme is ghostty's built-in (this build ships no theme of its own). What stays
+agterm is upstream's own: its repository and cookbook. Applied after 0003-live-attach-contract.patch;
+sync-resources.sh reapplies the series to upstream's plugins/agterm/skills/agterm after every sync, and an upstream
+change that brings new agterm names is renamed here the same way.
 
 diff --git a/SKILL.md b/SKILL.md
-index 235ec66..8be2119 100644
+index 235ec66..dbb891c 100644
 --- a/SKILL.md
 +++ b/SKILL.md
 @@ -1,20 +1,20 @@
@@ -412,6 +412,15 @@ index 235ec66..8be2119 100644
  ```
  
  - Escape any outside text you put in such a page (an issue body, a log line): the page can run commands.
+@@ -859,7 +859,7 @@ choice=$(ngtermctl session overlay open --html /tmp/branches.html --block --targ
+ When the user hits a problem (a keymap editor that will not open, a custom action that does nothing,
+ notifications missing), diagnose it from inside the session first: inspect `ngtermctl tree --json`,
+ run `ngtermctl keymap reload` for the parse-diagnostic count, and read the unified logs under
+-subsystem `com.umputun.agterm`. If it turns out to be a bug, offer to help file it.
++subsystem `com.nickalie.ngterm`. If it turns out to be a bug, offer to help file it.
+ 
+ **Filing is opt-in and draft-first.** Never run a `gh` command without the user's explicit approval.
+ Decide first whether it is a bug (a supported feature misbehaving → a GitHub **issue**) or something
 diff --git a/cookbook.md b/cookbook.md
 index 485f233..3a8d9f6 100644
 --- a/cookbook.md
@@ -1488,7 +1497,7 @@ index 0854415..3f1fdfb 100755
  # resolve absolute paths so the overlay (which runs with a different cwd) finds both this script and
  # the image regardless of where the agent invoked it from.
 diff --git a/troubleshooting.md b/troubleshooting.md
-index b9fb04c..d8a47ac 100644
+index b9fb04c..8abc4e8 100644
 --- a/troubleshooting.md
 +++ b/troubleshooting.md
 @@ -1,15 +1,15 @@
@@ -1511,7 +1520,7 @@ index b9fb04c..d8a47ac 100644
  
  - **Live state** — `ngtermctl tree --json`, `ngtermctl window list --json`.
  - **Keymap problems** — `ngtermctl keymap reload` prints the parse-diagnostic count (`0` = clean). A
-@@ -24,15 +24,15 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
+@@ -24,29 +24,29 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
  - **Ghostty settings** - `ngtermctl config reload` re-reads the ghostty config and prints the diagnostic
    count (`0` = clean). The count covers every config source, not just `ghostty.conf` (libghostty does not
    record which file a diagnostic came from), so check the Console log for the offending line. `ghostty.conf`
@@ -1531,7 +1540,13 @@ index b9fb04c..d8a47ac 100644
    after reading the config and keeps every other flag. Setting either is by design a no-op, reports no
    diagnostic, and is NOT a bug. For remote terminfo, install the entry once per host and account with
    `ngtermctl terminfo install <host>` (local-only, no socket; `-p`, `-i`, `-J`, `-F` pass through, other
-@@ -44,9 +44,9 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
+   connection settings belong in `~/.ssh/config`, and the execution settings are the installer's own). The symptom it fixes is `less`, `vim` or `apt` on the remote
+   warning that the terminal is not fully functional, because `TERM=xterm-ghostty` is unknown there.
+-- **Logs** (unified logging, subsystem `com.umputun.agterm`):
++- **Logs** (unified logging, subsystem `com.nickalie.ngterm`):
+   ```bash
+-  log show --predicate 'subsystem == "com.umputun.agterm"' --info --last 30m
++  log show --predicate 'subsystem == "com.nickalie.ngterm"' --info --last 30m
    ```
    Categories: `GhosttyApp`, `GhosttySurfaceView`, `WatermarkRenderer`, `NotificationManager`,
    `SettingsView`, `SettingsModel`, `CustomCommandRunner`, `ControlServer`.
@@ -1656,8 +1671,9 @@ index b9fb04c..d8a47ac 100644
 +requires a bare code hash, so a rebuilt or reinstalled ngterm no longer matches while the toggle still reads
  on. Confirm it before concluding anything: save the row's raw `csreq` blob from the system TCC.db to a
  file, the bytes rather than sqlite's printed output (`SELECT writefile('/tmp/ax.csreq', csreq) FROM access
- WHERE service='kTCCServiceAccessibility' AND client='com.umputun.agterm'`), then run
+-WHERE service='kTCCServiceAccessibility' AND client='com.umputun.agterm'`), then run
 -`codesign --verify -R /tmp/ax.csreq /Applications/agterm.app`. Only `code failed to satisfy specified code
++WHERE service='kTCCServiceAccessibility' AND client='com.nickalie.ngterm'`), then run
 +`codesign --verify -R /tmp/ax.csreq /Applications/ngterm.app`. Only `code failed to satisfy specified code
  requirement(s)` is the stale grant; an extraction, parsing, or signature error needs resolving first. The
  [stale-grant diagnosis](https://github.com/umputun/agterm/blob/master/docs/troubleshooting.md#an-accessibility-permission-you-granted-stops-working-after-an-update)
@@ -1818,16 +1834,17 @@ index b9fb04c..d8a47ac 100644
     `log show` excerpt.
  
  ## Issue template (bug)
-@@ -396,7 +396,7 @@ Expected vs actual: <…>
+@@ -396,15 +396,15 @@ Expected vs actual: <…>
  Steps to reproduce:
  1. …
  2. …
 -Environment: agterm <version>, macOS <version>
+-Logs: <scrubbed `log show --predicate 'subsystem == "com.umputun.agterm"'` excerpt>
 +Environment: ngterm <version>, macOS <version>
- Logs: <scrubbed `log show --predicate 'subsystem == "com.umputun.agterm"'` excerpt>
++Logs: <scrubbed `log show --predicate 'subsystem == "com.nickalie.ngterm"'` excerpt>
  Config: <scrubbed keymap.conf lines, if keymap-related>
  ```
-@@ -404,7 +404,7 @@ Config: <scrubbed keymap.conf lines, if keymap-related>
+ 
  File it (only after approval) with `--body-file -` so a multi-line body is not mangled by quoting:
  
  ```bash

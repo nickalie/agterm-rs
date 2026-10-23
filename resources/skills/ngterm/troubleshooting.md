@@ -38,9 +38,9 @@ You are inside ngterm (`NGTERM_ENABLED=1`). Use:
   `ngtermctl terminfo install <host>` (local-only, no socket; `-p`, `-i`, `-J`, `-F` pass through, other
   connection settings belong in `~/.ssh/config`, and the execution settings are the installer's own). The symptom it fixes is `less`, `vim` or `apt` on the remote
   warning that the terminal is not fully functional, because `TERM=xterm-ghostty` is unknown there.
-- **Logs** (unified logging, subsystem `com.umputun.agterm`):
+- **Logs** (unified logging, subsystem `com.nickalie.ngterm`):
   ```bash
-  log show --predicate 'subsystem == "com.umputun.agterm"' --info --last 30m
+  log show --predicate 'subsystem == "com.nickalie.ngterm"' --info --last 30m
   ```
   Categories: `GhosttyApp`, `GhosttySurfaceView`, `WatermarkRenderer`, `NotificationManager`,
   `SettingsView`, `SettingsModel`, `CustomCommandRunner`, `ControlServer`.
@@ -225,7 +225,7 @@ grant: macOS stores each grant with a code requirement, and a grant made while n
 requires a bare code hash, so a rebuilt or reinstalled ngterm no longer matches while the toggle still reads
 on. Confirm it before concluding anything: save the row's raw `csreq` blob from the system TCC.db to a
 file, the bytes rather than sqlite's printed output (`SELECT writefile('/tmp/ax.csreq', csreq) FROM access
-WHERE service='kTCCServiceAccessibility' AND client='com.umputun.agterm'`), then run
+WHERE service='kTCCServiceAccessibility' AND client='com.nickalie.ngterm'`), then run
 `codesign --verify -R /tmp/ax.csreq /Applications/ngterm.app`. Only `code failed to satisfy specified code
 requirement(s)` is the stale grant; an extraction, parsing, or signature error needs resolving first. The
 [stale-grant diagnosis](https://github.com/umputun/agterm/blob/master/docs/troubleshooting.md#an-accessibility-permission-you-granted-stops-working-after-an-update)
@@ -397,7 +397,7 @@ Steps to reproduce:
 1. …
 2. …
 Environment: ngterm <version>, macOS <version>
-Logs: <scrubbed `log show --predicate 'subsystem == "com.umputun.agterm"'` excerpt>
+Logs: <scrubbed `log show --predicate 'subsystem == "com.nickalie.ngterm"'` excerpt>
 Config: <scrubbed keymap.conf lines, if keymap-related>
 ```
 

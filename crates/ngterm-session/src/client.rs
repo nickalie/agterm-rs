@@ -238,41 +238,43 @@ impl Client {
     }
 
     /// [`Client::legacy_stand_in`] of each of `names` that has one, as `(name, old name)` pairs, over one listing (none
-    /// when no name is an app daemon's).
+    /// when no name is an app daemon's); a failed listing is logged and reads as none.
     #[must_use]
     pub fn legacy_stand_ins(&self, names: &[String]) -> Vec<(String, String)> {
+        self.try_legacy_stand_ins(names).unwrap_or_else(|error| {
+            tracing::warn!(%error, "the live sessions could not be listed for their old names");
+            Vec::new()
+        })
+    }
+
+    /// [`Client::legacy_stand_ins`], failing when the listing does.
+    fn try_legacy_stand_ins(&self, names: &[String]) -> Result<Vec<(String, String)>, ClientError> {
         if names.iter().all(|name| live::legacy_daemon(name).is_none()) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let sessions = match self.call(ApiRequest::List) {
-            Ok(Some(ApiResponse::Sessions(sessions))) => sessions,
-            Ok(None) => return Vec::new(),
-            Ok(Some(other)) => {
-                let error = unexpected("a list", &other);
-                tracing::warn!(%error, "the live sessions could not be listed for their old names");
-                return Vec::new();
-            }
-            Err(error) => {
-                tracing::warn!(%error, "the live sessions could not be listed for their old names");
-                return Vec::new();
-            }
+        let sessions = match self.call(ApiRequest::List)? {
+            Some(ApiResponse::Sessions(sessions)) => sessions,
+            None => return Ok(Vec::new()),
+            Some(other) => return Err(unexpected("a list", &other)),
         };
         let listed = || sessions.iter().map(|session| session.name.as_str());
-        names
+        Ok(names
             .iter()
             .filter_map(|name| Some((name.clone(), live::legacy_stand_in(name, listed())?)))
-            .collect()
+            .collect())
     }
 
     /// Attaches to a session as `request` says, creating it when the request carries a spec, starting the server
     /// when the client was given [`StartOptions`]. An app daemon the server holds only under its old name
     /// ([`Client::legacy_stand_in`], asked once connected: the connect may have handed the sessions over, renamed) is
-    /// attached under that name, not created anew, so the pane finds its running program.
+    /// attached under that name, not created anew, so the pane finds its running program. A request that may create
+    /// the session fails when that lookup does, rather than create a second program beside one it could not see.
     ///
     /// # Errors
     ///
     /// [`ClientError::NoServer`] without a server to attach to; [`ClientError::Refused`] for the server's refusal
-    /// (gone, the create failed, no snapshot in time); a failed connect or exchange.
+    /// (gone, the create failed, no snapshot in time); a failed connect or exchange; a failed old-name lookup for a
+    /// request carrying a spec.
     pub fn attach(&self, mut request: AttachRequest) -> Result<Attachment, ClientError> {
         let hello = self.hello(Role::Attach);
         let connected = match &self.start {
@@ -281,7 +283,13 @@ impl Client {
                 .connect_existing(Role::Attach, ATTACH_TIMEOUT)?
                 .ok_or_else(|| ClientError::NoServer(self.endpoint.to_string()))?,
         };
-        if let Some(legacy) = self.legacy_stand_in(&request.name) {
+        let names = [request.name.clone()];
+        let stand_in = if request.create.is_some() {
+            self.try_legacy_stand_ins(&names)?
+        } else {
+            self.legacy_stand_ins(&names)
+        };
+        if let Some((_, legacy)) = stand_in.into_iter().next() {
             tracing::info!(name = %request.name, %legacy, "the live session is attached under its name from before the rename");
             request.name = legacy;
         }

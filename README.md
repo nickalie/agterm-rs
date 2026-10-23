@@ -24,8 +24,9 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   `NGTERM_LIVE_*`; upstream's and the fork's are `AGTERM_*`). A reinstall of the agent-status hooks or the skill over
   one made before the build took these names moves it onto them: the rc and Codex blocks, the Claude hooks, this
   build's old Pi and OpenCode plugins (the fork's, at the same paths, stay) and the skill's marker. The old
-  `agterm-*` wrappers stay in the package, since shells started before the update and configs the merge could not
-  repoint still call them.
+  `agterm-*` wrappers stay in the package: shells started before the update keep reporting through them, and a config
+  the merge could not repoint (a hand-written Codex block) finds them but reports nothing from a new pane until it
+  names the `ngterm-*` ones.
 - The CLI is `ngtermctl` (upstream's and the fork's is `agtermctl`), and the Help menu's installers use this build's
   names too: Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (the fork's
   `~/.local/bin/agtermctl` is left alone, and it resolves the fork's socket), and Install Agent Skill… installs the
