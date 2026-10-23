@@ -20,6 +20,14 @@
 //! - the Claude adapter reads a `completed` call's payload and reports a `Stop` whose `background_tasks` lists work in
 //!   flight as `active --blink` (upstream's goes `completed` at once), and the installer adds a sixth Claude hook,
 //!   `SessionEnd` → `completed --auto-reset`, so that claim cannot outlive the agent ([`hooks_config`]);
+//! - the package adds a restore adapter, `ngterm-agent-restore.sh`, which upstream has no counterpart for (it ships the
+//!   idea as its `claude-session-resume` cookbook recipe and the `SessionStart`-pin pattern in its skill): the
+//!   installer wires it to Claude Code's `SessionStart` and `SessionEnd` only (Codex gets no restore hooks), and it
+//!   keeps the pane's `session restore` pin on the live conversation (`claude --resume <id>`), clearing it on a
+//!   deliberate exit, so a rerun launch reattaches each pane to its latest Claude Code conversation; the script's
+//!   header holds what it pins, what it skips and why (`build/patches/agent-status/0003-restore-adapter.patch`), and
+//!   the skill tells agents not to hand-write that hook for Claude Code
+//!   (`build/patches/skill-ngterm/0005-restore-adapter.patch`);
 //! - every script and plugin calls `ngtermctl` where upstream's calls `agtermctl` (the wrappers' default, their
 //!   comments and the shell integration's);
 //! - the agent-status package is under this build's names: its wrappers, Pi extension and `OpenCode` plugins are
@@ -109,5 +117,7 @@ fn resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod adapter_tests;
+#[cfg(test)]
+mod restore_tests;
 #[cfg(test)]
 mod tests;

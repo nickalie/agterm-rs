@@ -31,6 +31,18 @@ fn wrapper() -> String {
     format!("{SCRIPT_DIR}/{WRAPPER_NAME}")
 }
 
+/// The restore adapter's command for `arguments` (`claude start`, `claude end`).
+fn restore(arguments: &str) -> String {
+    format!("'{SCRIPT_DIR}/{RESTORE_WRAPPER_NAME}' {arguments}")
+}
+
+/// The commands of `event` without the restore adapter's: the status hooks and the user's own.
+fn status_commands(json: &str, event: &str) -> Vec<String> {
+    let mut found = commands(json, event);
+    found.retain(|command| !command.contains(RESTORE_WRAPPER_NAME));
+    found
+}
+
 fn merge(existing: Option<&str>) -> (String, bool) {
     merge_claude_settings(existing, SCRIPT_DIR, &[LEGACY_DIR]).unwrap()
 }
@@ -40,18 +52,41 @@ fn a_fresh_merge_adds_all_six_hooks_through_the_adapter() {
     let (json, changed) = merge(None);
     assert!(changed);
     let hooks = events(&json);
-    assert_eq!(hooks.len(), 6);
+    assert_eq!(
+        hooks.len(),
+        7,
+        "the six status events and the restore adapter's SessionStart"
+    );
     let a = adapter();
     assert_eq!(commands(&json, "UserPromptSubmit"), [format!("'{a}' active --blink")]);
     assert_eq!(commands(&json, "PostToolUse"), [format!("'{a}' active --blink")]);
     assert_eq!(commands(&json, "Stop"), [format!("'{a}' completed --auto-reset")]);
     assert_eq!(commands(&json, "Notification"), [format!("'{a}' blocked")]);
     assert_eq!(commands(&json, "PermissionRequest"), [format!("'{a}' blocked")]);
-    assert_eq!(commands(&json, "SessionEnd"), [format!("'{a}' completed --auto-reset")]);
+    assert_eq!(
+        status_commands(&json, "SessionEnd"),
+        [format!("'{a}' completed --auto-reset")]
+    );
     assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt");
     assert!(hooks["PermissionRequest"][0].get("matcher").is_none());
     assert!(hooks["SessionEnd"][0].get("matcher").is_none());
     assert!(json.ends_with("}\n"));
+}
+
+#[test]
+fn a_fresh_merge_adds_the_restore_hooks_after_the_status_ones() {
+    let (json, _) = merge(None);
+    let hooks = events(&json);
+    assert_eq!(
+        commands(&json, "SessionEnd"),
+        [format!("'{}' completed --auto-reset", adapter()), restore("claude end")]
+    );
+    assert_eq!(commands(&json, "SessionStart"), [restore("claude start")]);
+    assert!(hooks["SessionStart"][0].get("matcher").is_none(), "every start source");
+    assert!(
+        hooks["SessionEnd"][1].get("matcher").is_none(),
+        "the adapter reads the reason itself"
+    );
 }
 
 #[test]
@@ -146,7 +181,7 @@ fn a_four_event_adapter_install_gains_permission_request() {
     let (first, changed) = merge(Some(&existing));
     assert!(changed);
     let hooks = events(&first);
-    assert_eq!(hooks.len(), 6);
+    assert_eq!(hooks.len(), 7);
     for event in [
         "UserPromptSubmit",
         "PostToolUse",
@@ -154,8 +189,10 @@ fn a_four_event_adapter_install_gains_permission_request() {
         "Notification",
         "PermissionRequest",
         "SessionEnd",
+        "SessionStart",
     ] {
-        assert_eq!(hooks[event].as_array().map(Vec::len), Some(1), "{event}");
+        let expected = if event == "SessionEnd" { 2 } else { 1 };
+        assert_eq!(hooks[event].as_array().map(Vec::len), Some(expected), "{event}");
     }
     assert_eq!(commands(&first, "PermissionRequest"), [format!("'{a}' blocked")]);
     assert!(hooks["PermissionRequest"][0].get("matcher").is_none());
@@ -175,7 +212,11 @@ fn a_five_event_adapter_install_gains_session_end() {
     let a = adapter();
     assert_eq!(
         commands(&first, "SessionEnd"),
-        ["echo bye".to_owned(), format!("'{a}' completed --auto-reset")]
+        [
+            "echo bye".to_owned(),
+            format!("'{a}' completed --auto-reset"),
+            restore("claude end")
+        ]
     );
     for (event, _, state) in CLAUDE_HOOKS {
         if event != "SessionEnd" {
@@ -202,7 +243,7 @@ fn a_users_session_end_entry_naming_a_wrapper_is_never_taken_for_a_stock_one() {
     let (json, changed) = merge(Some(&root.to_string()));
     assert!(changed);
     assert_eq!(
-        commands(&json, "SessionEnd"),
+        status_commands(&json, "SessionEnd"),
         [
             format!("'{a}' completed --auto-reset"),
             format!("'{}' completed --auto-reset", wrapper())
@@ -214,7 +255,11 @@ fn a_users_session_end_entry_naming_a_wrapper_is_never_taken_for_a_stock_one() {
     let existing =
         format!(r#"{{"hooks": {{"SessionEnd": [{{"hooks": [{{"type": "command", "command": "{generic}"}}]}}]}}}}"#);
     let (json, _) = merge(Some(&existing));
-    assert_eq!(commands(&json, "SessionEnd"), [generic], "left on the generic wrapper");
+    assert_eq!(
+        commands(&json, "SessionEnd"),
+        [generic, restore("claude end")],
+        "left on the generic wrapper"
+    );
 }
 
 #[test]
@@ -283,10 +328,13 @@ fn an_install_in_the_legacy_dir_is_repointed_not_doubled() {
     let current: Value = serde_json::from_str(&merge(None).0).unwrap();
     for (event, entries) in events(&json) {
         if event == "SessionStart" {
-            assert_eq!(commands(&json, &event), ["echo mine"], "the user's own event survives");
+            assert_eq!(
+                commands(&json, &event),
+                ["echo mine".to_owned(), restore("claude start")],
+                "the user's own entry survives beside the adapter's"
+            );
             continue;
         }
-        assert_eq!(entries.as_array().map(Vec::len), Some(1), "{event}");
         assert_eq!(
             entries, current["hooks"][&event],
             "{event}: the entry a fresh install writes"
@@ -316,7 +364,11 @@ fn legacy_entries_beside_current_ones_are_dropped() {
     assert!(changed);
     assert!(!json.contains(LEGACY_DIR), "{json}");
     for (event, _, state) in CLAUDE_HOOKS {
-        assert_eq!(commands(&json, event), [format!("'{}' {state}", adapter())], "{event}");
+        assert_eq!(
+            status_commands(&json, event),
+            [format!("'{}' {state}", adapter())],
+            "{event}"
+        );
     }
     assert!(!merge(Some(&json)).1);
 }
@@ -347,7 +399,7 @@ fn a_users_command_calling_the_legacy_wrapper_is_repointed_and_kept() {
         [format!("my-notifier.sh && '{}' active --blink", wrapper())],
         "repointed in place and counted as ours: no stock entry beside it"
     );
-    assert_eq!(events(&json).len(), 6);
+    assert_eq!(events(&json).len(), 7);
 }
 
 #[test]
@@ -481,7 +533,7 @@ fn a_blank_settings_file_starts_fresh() {
     for blank in ["", "   \n\t\n"] {
         let (json, changed) = merge(Some(blank));
         assert!(changed);
-        assert_eq!(events(&json).len(), 6);
+        assert_eq!(events(&json).len(), 7);
     }
 }
 
@@ -765,7 +817,7 @@ fn claude_entries_from_before_the_rename_move_onto_the_current_wrappers() {
         assert!(changed, "{dir}");
         assert!(!json.contains("agterm-"), "{json}");
         let parsed: Value = serde_json::from_str(&json).unwrap();
-        let current: Value = serde_json::from_str(&adapter_settings(SCRIPT_DIR)).unwrap();
+        let current: Value = serde_json::from_str(&merge(Some(&adapter_settings(SCRIPT_DIR))).0).unwrap();
         assert_eq!(parsed, current, "{dir}: what an install of today's names holds");
         assert_eq!(merge(Some(&json)), (json.clone(), false));
     }
@@ -781,7 +833,10 @@ fn claude_entries_from_before_the_rename_move_onto_the_current_wrappers() {
     );
     let (json, _) = merge(Some(&settings));
     assert_eq!(commands(&json, "Stop"), [format!("'{a}' completed --auto-reset")]);
-    assert_eq!(commands(&json, "SessionStart"), [format!("'{a}' idle; echo mine")]);
+    assert_eq!(
+        commands(&json, "SessionStart"),
+        [format!("'{a}' idle; echo mine"), restore("claude start")]
+    );
 }
 
 #[test]
@@ -790,4 +845,37 @@ fn the_old_pi_extension_path() {
         legacy_pi_extension_path("/home/me"),
         "/home/me/.pi/agent/extensions/agterm-status.ts"
     );
+}
+
+/// The restore adapter is probed on its own: a status hook in `SessionEnd` does not stand in for it, a user's own
+/// entry calling it (customized) does, and the user's own `SessionStart` hooks stay beside it.
+#[test]
+fn the_restore_hooks_are_added_once_beside_the_users_own() {
+    let a = adapter();
+    let customized = format!("{} --verbose", restore("claude start"));
+    let existing = format!(
+        r#"{{"hooks": {{
+          "SessionStart": [{{"hooks": [{{"type": "command", "command": "echo mine"}}]}},
+                           {{"matcher": "startup", "hooks": [{{"type": "command", "command": "{customized}"}}]}}],
+          "SessionEnd": [{{"hooks": [{{"type": "command", "command": "'{a}' completed --auto-reset"}}]}}]
+        }}}}"#
+    );
+    let (json, changed) = merge(Some(&existing));
+    assert!(changed);
+    assert_eq!(commands(&json, "SessionStart"), ["echo mine".to_owned(), customized]);
+    assert_eq!(
+        commands(&json, "SessionEnd"),
+        [format!("'{a}' completed --auto-reset"), restore("claude end")]
+    );
+    assert_eq!(merge(Some(&json)), (json.clone(), false));
+    for malformed in [
+        r#"{"hooks": {"SessionStart": "nope"}}"#,
+        r#"{"hooks": {"SessionStart": [1]}}"#,
+    ] {
+        assert_eq!(
+            merge_claude_settings(Some(malformed), SCRIPT_DIR, &[LEGACY_DIR]),
+            Err(MalformedSettings),
+            "{malformed}"
+        );
+    }
 }

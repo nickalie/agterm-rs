@@ -1,0 +1,38 @@
+The SessionStart-pin pattern next to this build's restore adapter: the agent-status hooks install
+`ngterm-agent-restore.sh`, which keeps the pin on the live Claude Code conversation, so the skill tells agents not to
+hand-write that hook for Claude Code (a second hook pinning the same pane fights the adapter) and keeps the
+hand-written recipe for other agents and lines. Applied after 0004-ngterm-identity.patch.
+
+diff --git a/SKILL.md b/SKILL.md
+index dbb891c..c47d6b9 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -430,7 +430,8 @@ omitted when expanded).
+   `claude --resume … --fork-session` (which mints a new session on every restart), a Claude Code
+   `SessionStart` hook rewrites the override to the live id on every start so the next restart reattaches
+   instead of forking. The pinned value is shell code stored in the state file and readable via `tree`, so
+-  it must not carry secrets. See examples.md.
++  it must not carry secrets. See examples.md. For Claude Code the installed agent-status hooks already
++  keep this pin on the live conversation (`ngterm-agent-restore.sh`): don't hand-write one for it.
+ - `session background image <path> [--opacity F] [--fit contain|cover|stretch|none] [--position P] [--repeat]` ·
+   `session background text <text> [--color #rrggbb] [--opacity F] [--fit ...] [--position ...]` ·
+   `session background color <#rrggbb>` · `session background clear`, each `[--pane left|right|scratch]` — composite an
+diff --git a/examples.md b/examples.md
+index 88e4faf..5ab8826 100644
+--- a/examples.md
++++ b/examples.md
+@@ -137,6 +137,14 @@ safely-interpolated values (a UUID-shaped session id) belong in it.
+ 
+ ## Keep a forking agent session reattaching across restarts (a SessionStart hook)
+ 
++ngterm already does this for Claude Code: Help ▸ Install Agent Status Hooks installs a restore adapter
++(`~/.config/ngterm/agent-status/ngterm-agent-restore.sh`) on its `SessionStart` and `SessionEnd` hooks. On every
++start it pins `claude --resume <id> || claude` for the pane, so after /clear, /resume or a fork the next restart
++reattaches to the conversation the pane was in last; a deliberate exit (`/exit`) clears the pin, and an ngterm quit
++keeps it. It skips `claude -p`, SDK runs and subagents. Do not write the hook below by hand for Claude Code: a second
++hook pinning the same pane fights the adapter. Write it for another agent or another line; for Codex, nothing is
++installed.
++
+ `claude --resume <id> --fork-session` mints a NEW claude session on every ngterm restart, so restoring it
+ verbatim never reattaches the session you were in. Fix it by rewriting the override to the LIVE session id
+ on every start, from a Claude Code `SessionStart` hook — it runs inside the session's shell, where

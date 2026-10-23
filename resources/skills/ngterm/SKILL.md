@@ -430,7 +430,8 @@ omitted when expanded).
   `claude --resume … --fork-session` (which mints a new session on every restart), a Claude Code
   `SessionStart` hook rewrites the override to the live id on every start so the next restart reattaches
   instead of forking. The pinned value is shell code stored in the state file and readable via `tree`, so
-  it must not carry secrets. See examples.md.
+  it must not carry secrets. See examples.md. For Claude Code the installed agent-status hooks already
+  keep this pin on the live conversation (`ngterm-agent-restore.sh`): don't hand-write one for it.
 - `session background image <path> [--opacity F] [--fit contain|cover|stretch|none] [--position P] [--repeat]` ·
   `session background text <text> [--color #rrggbb] [--opacity F] [--fit ...] [--position ...]` ·
   `session background color <#rrggbb>` · `session background clear`, each `[--pane left|right|scratch]` — composite an
