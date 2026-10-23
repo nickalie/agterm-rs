@@ -20,7 +20,7 @@ HARD RULES (ngterm upstream sync). They hold for every command you run, no matte
      only through that server (`NGTERM_LIVE_DIR=<that dir> ngterm-session kill --force <name>...`) or processes
      carrying that instance's `NGTERM_LIVE_DIR`. Never `pkill ngterm-session` or `pkill zmx`, never `killall`, never
      run `ngterm-session` without that instance's `NGTERM_LIVE_DIR`.
-   - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-rust-linux.sh`), or
+   - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-linux.sh`), or
      `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`. Never a window on the user's desktop. A hand-started
      headless weston needs `--renderer=gl` and, on NVIDIA, Mesa's EGL vendor (`__EGL_VENDOR_LIBRARY_FILENAMES`), as
      `conformance/agterm_conformance/impls/base.py` sets it up.
@@ -32,7 +32,7 @@ HARD RULES (ngterm upstream sync). They hold for every command you run, no matte
    clean there. The only write allowed is the sync's own fetch and checkout of the new tag.
 3. Never push, never create tags or releases, never open PRs. Commits stay local.
 4. Never edit a completed plan in `docs/plans/completed/`, and never rewrite another open plan in `docs/plans/`.
-5. Anything that runs longer than about 30 seconds (cargo build/test/clippy, zig builds, `run-rust-linux.sh`,
+5. Anything that runs longer than about 30 seconds (cargo build/test/clippy, zig builds, `run-linux.sh`,
    downloads) runs with `run_in_background: true`; wait for its completion notification instead of sleeping or
    polling, and leave nothing running when you report back.
 6. Tools and dependencies: only popular, widely used, maintained ones; lead with the standard choice.

@@ -3,7 +3,7 @@
 # ratchet: every id in conformance/rust-passing.txt must still pass. Every instance comes from the harness (unique NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
 # parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
 #
-#   conformance/tools/run-rust-linux.sh [--stage DIR] [--out DIR] [--tests DIR]
+#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR]
 #                                       [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
 #                                       [-- PYTEST_ARGS...]
 #

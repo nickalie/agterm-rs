@@ -5,7 +5,7 @@ washes the sidebar alone. A Rust-build check outside the catalog: no reference r
 
   python conformance/tools/chrome_probe.py [--bin PATH] [--timeout SECONDS] [--keep DIR]
 
-The staged build runs under the suite's isolation (tools/run-rust-linux.sh's: a private headless weston and session
+The staged build runs under the suite's isolation (tools/run-linux.sh's: a private headless weston and session
 bus, a fresh root), the weston started with its debug protocol so `weston-screenshooter` may read the output. Each
 launch maximizes its window (`window.zoom`, read back as `zoomed`), reads the sidebar's width from `tree`, and waits
 for the terminal's first frame on screen: the cursor, in a color only the terminal draws, inside the deck. Then it
@@ -21,7 +21,7 @@ rows, the terminal below its prompt.
 The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
 finds (nothing is fetched here). It logs its terminal's first frame under the target `ngterm::surface`.
 
---bin defaults to the stage run-rust-linux.sh builds (target/conformance-stage/bin/ngterm); the themes are read from
+--bin defaults to the stage run-linux.sh builds (target/conformance-stage/bin/ngterm); the themes are read from
 its share/ghostty/themes. --keep saves every screenshot taken there. Prints a JSON report; exits 0 when every check
 holds.
 """

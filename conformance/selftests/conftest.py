@@ -104,7 +104,7 @@ def stand_in_lavapipe_icd(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(autouse=True)
 def stand_in_lavapipe(stand_in_lavapipe_icd: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The Rust build renders on lavapipe only, so every Rust launch needs its manifest: a stand-in, as run-rust-linux.sh
+    """The Rust build renders on lavapipe only, so every Rust launch needs its manifest: a stand-in, as run-linux.sh
     hands the harness the real one. A test of a missing or wrong lavapipe removes or replaces it."""
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(stand_in_lavapipe_icd))
     return stand_in_lavapipe_icd

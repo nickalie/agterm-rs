@@ -204,7 +204,7 @@ jobs:
           cargo test -p ngterm-gpui --lib
           NGTERM_REQUIRE_DISPLAY_TESTS=1 cargo test -p ngterm-gpui --test html_overlay
 
-  # The staged build under the suite (run-rust-linux.sh: each instance on its own headless weston and session bus),
+  # The staged build under the suite (run-linux.sh: each instance on its own headless weston and session bus),
   # held by conformance/rust-passing.txt, once per login shell. Its HTML overlays run on WPE WebKit, which Ubuntu does
   # not package, so the jobs run in the wpe job's Arch container (the same digest and Arch Linux Archive snapshot),
   # privileged so WebKit's bubblewrap sandbox gets its user namespaces, with an init that reaps what the suite's
@@ -273,7 +273,7 @@ jobs:
             python zsh fish
       - uses: actions/checkout@v7
       # the runner owns the workspace, the container runs as root: without this git refuses the checkout, and
-      # run-rust-linux.sh reads the build's commit from it
+      # run-linux.sh reads the build's commit from it
       - name: git trusts the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: rust toolchain (rust-toolchain.toml)
@@ -323,7 +323,7 @@ jobs:
         env:
           PYTHON: /opt/suite/bin/python
         run: >-
-          conformance/tools/run-rust-linux.sh --out conformance/reports/${{ matrix.out }} --
+          conformance/tools/run-linux.sh --out conformance/reports/${{ matrix.out }} --
           ${{ matrix.must-pass }}
       # On the stage the suite ran: the terminal surface draws its first frame, a page loads in WPE WebKit's sandbox,
       # and the title bar, the sidebar and the terminal draw one color, the theme's background, with the sidebar tint

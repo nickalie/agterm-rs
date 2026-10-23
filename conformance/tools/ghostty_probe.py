@@ -9,7 +9,7 @@ Each --arg is appended to the app's command line (write `--arg=--flag` for one s
 arguments of its own must still start and serve, as upstream's does.
 
 The build renders on lavapipe only: $CONFORMANCE_LAVAPIPE_ICD, else the ICD `scripts/fetch-lavapipe.sh --print-icd`
-finds (nothing is fetched here), else the launch fails naming the script. --bin defaults to the stage run-rust-linux.sh
+finds (nothing is fetched here), else the launch fails naming the script. --bin defaults to the stage run-linux.sh
 builds (target/conformance-stage/bin/ngterm). The app logs its terminal surface at debug level under the target
 `ngterm::surface` (NGTERM_LOG); this reads the instance's log. Prints a JSON report; exits 0 when the first frame was
 drawn.

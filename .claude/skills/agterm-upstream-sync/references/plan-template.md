@@ -29,7 +29,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   - `cargo fmt --check`: <ok | ...>; clippy: <ok | ...>; `scripts/lint-report.sh`: <ok | ...>
   - `cargo test --workspace` (under xvfb): <ok | the failing tests, each with the task that turns it green>
   - coverage gate: <ok | the uncovered keys, each with its task>
-  - `run-rust-linux.sh` (full): ratchet <holds | breaks: ids and cause>; newly green: <ids added | none>
+  - `run-linux.sh` (full): ratchet <holds | breaks: ids and cause>; newly green: <ids added | none>
 - Already in the Rust build (no task): <feature — evidence: file / ratchet id>, or "nothing".
 - Not run on this host: <the ratchet's `not run on this host` ids and why (no zsh login shell)>, or "none".
 - Upstream's pins (none is a pin here): ZMX_REV and zmx-patches <unchanged | a -> b and the changed patches, a task
@@ -51,7 +51,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - Gate of every task: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `scripts/lint-report.sh`, `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`,
   `.venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the last uncovered key, only
-  the keys listed for later tasks may stay uncovered), then a full `conformance/tools/run-rust-linux.sh` in the
+  the keys listed for later tasks may stay uncovered), then a full `conformance/tools/run-linux.sh` in the
   background with the ratchet holding, and the newly green ids added with
   `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`.
 - A ratchet id never goes red; no reruns; a function over a `clippy.toml` limit is split, not excused.
@@ -59,7 +59,7 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 ## Testing Strategy
 
 - unit: `cargo test --workspace` on the `ngterm-host` fakes; the app's tests under `xvfb-run`.
-- conformance: `run-rust-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux.
+- conformance: `run-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux.
 
 ## Progress Tracking
 

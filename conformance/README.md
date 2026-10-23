@@ -26,14 +26,14 @@ bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.36.0 | s
 
 # the Rust build of this checkout: build, stage, protocol, cli and behaviors, then the ratchet;
 # report in conformance/reports/rust-linux/
-conformance/tools/run-rust-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
+conformance/tools/run-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
 
 # whether the staged Rust build's WPE WebKit loads a page under the same headless isolation (a diagnosis of the web
 # process's bubblewrap sandbox; the report carries the frame mode from the app's log)
 .venv/bin/python conformance/tools/webkit_probe.py [--bin PATH]
 
 # whether the staged Rust build's terminal surface is created and draws a frame under the same isolation (`version`
-# alone answers while the terminal cannot render); defaults to run-rust-linux.sh's stage
+# alone answers while the terminal cannot render); defaults to run-linux.sh's stage
 .venv/bin/python conformance/tools/ghostty_probe.py [--bin PATH]
 
 # whether the staged Rust build's title bar, sidebar and terminal draw one color, the terminal theme's background, and
@@ -91,14 +91,14 @@ The Rust build is held to upstream's contract, its capability branches included:
 in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
 takes upstream's branch unless that list says otherwise.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
-`run-rust-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
+`run-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 A Rust-only extension (today `live-any-shell`, Live sessions in bash, fish and PowerShell login shells) is a
 capability the reference does not claim: its tests skip as unsupported there and are validated by the Rust CI with
 `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 
 ## Rust runner and ratchet
 
-`tools/run-rust-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
+`tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
 `target/conformance-stage` (or runs an existing stage given with `--stage DIR`) and runs the protocol, cli and
 behaviors layers with `--impl rust`, each instance on its own headless weston and session bus (Safety guards).
 It runs pytest with `$PYTHON`, else `.venv/bin/python`, else `python3`, with this checkout's harness first on
@@ -112,11 +112,11 @@ One suite run at a time per user: concurrent runs, from any checkout, queue on `
 deadlines assume one suite's load, and the lock does not hold back a stand-alone `cargo build` or `cargo test`.
 
 ```sh
-conformance/tools/run-rust-linux.sh                          # full run
-conformance/tools/run-rust-linux.sh -- -k test_version       # partial run: listed ids not selected are not judged
+conformance/tools/run-linux.sh                          # full run
+conformance/tools/run-linux.sh -- -k test_version       # partial run: listed ids not selected are not judged
 .venv/bin/python conformance/tools/check_ratchet.py \
   --report conformance/reports/rust-linux/nodeids.jsonl --add  # merge the newly green ids into rust-passing.txt
-conformance/tools/run-rust-linux.sh --ratchet-only \
+conformance/tools/run-linux.sh --ratchet-only \
   --also tests/protocol/test_split.py --also-k sidebar       # the listed ids plus what a task works on
 ```
 

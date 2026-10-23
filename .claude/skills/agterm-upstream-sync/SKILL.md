@@ -184,11 +184,11 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 scripts/lint-report.sh
 GDK_BACKEND=x11 xvfb-run -a cargo test --workspace
 PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate
-conformance/tools/run-rust-linux.sh          # full run, ~10 min: protocol, cli, behaviors, then the ratchet
+conformance/tools/run-linux.sh          # full run, ~10 min: protocol, cli, behaviors, then the ratchet
 ```
 
 The cargo commands share `target/`, so chain them in one background script (`; ` between them, recording each exit
-status), then start `run-rust-linux.sh` after it; the suite builds the release workspace and needs the vendored
+status), then start `run-linux.sh` after it; the suite builds the release workspace and needs the vendored
 prefixes (`scripts/build-*.sh --verify`; build what is missing first).
 
 Read the outcome as the plan's starting point:

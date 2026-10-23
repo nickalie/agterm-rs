@@ -1621,7 +1621,7 @@ def test_a_daemon_exiting_within_the_grace_is_not_a_leftover(
 
 @pytest.fixture
 def lavapipe(make_icd, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A lavapipe ICD manifest the harness is pointed at, as run-rust-linux.sh does."""
+    """A lavapipe ICD manifest the harness is pointed at, as run-linux.sh does."""
     icd = make_icd()
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, str(icd))
     return icd

@@ -153,7 +153,7 @@ fetching); a manifest whose driver is missing is never used. Both the suite and 
 (`tests/support/lavapipe.rs`), so they share one rule.
 They also need a headless weston with a seat, which only `--fake-seat` gives (weston 15.0 and later): where the system's
 is older, `scripts/build-weston.sh` builds the pinned weston (`WESTON_*`, with the wayland-protocols and
-libdisplay-info it needs as subprojects) into the vendored prefix; `run-rust-linux.sh` takes it when
+libdisplay-info it needs as subprojects) into the vendored prefix; `run-linux.sh` takes it when
 the weston on PATH has no `--fake-seat`, and the process tests take the first weston on PATH that has it (put the
 prefix's `bin/` first, as CI does).
 
@@ -261,7 +261,7 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   package (glibc 2.39): Ubuntu builds the workspace without what links WPE (`WORKSPACE_WITHOUT_WPE` in
   `scripts/lib/native.sh`: the WPE crates and the GPUI frontend) and the GPUI frontend without its HTML overlays
   (`GPUI_WITHOUT_HTML`: `--no-default-features`, the core then refuses every page). The app with its pages (feature
-  `html`, the default) needs a WPE WebKit: `run-rust-linux.sh` and `scripts/run-gpui-dev.sh` build it so, and fail
+  `html`, the default) needs a WPE WebKit: `run-linux.sh` and `scripts/run-gpui-dev.sh` build it so, and fail
   naming this section where there is none.
 - CI: the `wpe` job installs `wpewebkit` from a date-pinned Arch Linux Archive snapshot in a digest-pinned `archlinux`
   container, checks the WPE crates there and that the checked-in bindings equal a regeneration, then the GPUI
@@ -357,7 +357,7 @@ cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings  
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
-conformance/tools/run-rust-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
+conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
 ```
 
 A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does; one to
@@ -369,11 +369,11 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   (`tests/support/lavapipe.rs`).
 - The selftests, and the pytest runs some of them start, import the harness the venv's editable install points at: a
   venv installed from another checkout (a worktree sharing the main checkout's) needs this checkout's `conformance/`
-  first on `PYTHONPATH` (`run-rust-linux.sh` puts it there itself).
+  first on `PYTHONPATH` (`run-linux.sh` puts it there itself).
 - `--workspace` includes the WPE crates (`ngterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
   which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` and then
   `"${GPUI_WITHOUT_HTML[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
-- `run-rust-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
+- `run-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
   and behaviors layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`, else
   `.venv/bin/python`, else `python3`, with the suite installed:
   `python3 -m venv .venv && .venv/bin/pip install -e conformance`. See

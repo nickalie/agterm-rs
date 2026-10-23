@@ -11,7 +11,7 @@
 #
 # BINARY is the ngterm executable that is launched, symlinks resolved (AppArmor attaches by the real path); default:
 # the conformance stage's, bin/ngterm under ${CARGO_TARGET_DIR:-target}/conformance-stage
-# (conformance/tools/run-rust-linux.sh). It need not exist yet. Where AppArmor is off or does not restrict user
+# (conformance/tools/run-linux.sh). It need not exist yet. Where AppArmor is off or does not restrict user
 # namespaces, nothing is installed. Root is gained through sudo; running it again with the same binary changes
 # nothing.
 set -euo pipefail

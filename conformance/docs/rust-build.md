@@ -187,7 +187,7 @@ patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned t
 
 ## Ratchet
 
-`conformance/tools/run-rust-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` and runs the
+`conformance/tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` and runs the
 protocol, cli and behaviors layers with `--impl rust`, each instance on its own headless weston and session bus.
 pytest writes each test's merged outcome with `--nodeid-report` next to the report in
 `conformance/reports/rust-linux/`, and `conformance/tools/check_ratchet.py` holds `conformance/rust-passing.txt`
@@ -197,7 +197,7 @@ for a host-dependent capability (`live-sessions`, `live-any-shell`), which count
 A collection error or a `--must-pass` problem breaks it too.
 When pytest refuses its arguments (a mistyped path after `--`) no report is written and the checker exits 2.
 The checker prints the newly passing ids not yet listed; `--add` writes them into the list.
-The report's run header names its mode: `full`; `ratchet-only` (`run-rust-linux.sh --ratchet-only`, the listed ids
+The report's run header names its mode: `full`; `ratchet-only` (`run-linux.sh --ratchet-only`, the listed ids
 plus a task's `--also`/`--also-k` selections), judged like a full run, a listed id not collected warned about; or
 `partial` (any narrower selection), where only the listed ids that ran are judged. No mode removes an id.
 A ratchet-only run is a task's routine check; a full run is required at milestones: the GPUI switch, and any change to
@@ -213,7 +213,7 @@ until the switch, was folded into it).
 Build. The native inputs come first, each into its vendored prefix (README > Native dependencies):
 `scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `ngterm-ghostty-vt-sys`'s build script builds
 with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`) and `scripts/fetch-fonts.sh` (the fonts the
-terminal embeds); the live sessions' server, `ngterm-session`, is a workspace binary. `run-rust-linux.sh` then builds
+terminal embeds); the live sessions' server, `ngterm-session`, is a workspace binary. `run-linux.sh` then builds
 the release workspace without what links WPE WebKit and `ngterm-gpui` with its default `html` feature, so the staged
 app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR`
 runs a tree staged elsewhere instead.
@@ -231,12 +231,12 @@ Lavapipe. GPUI renders through Vulkan (wgpu), so every run renders on Mesa's lav
 (Ubuntu/Debian/Fedora `mesa-vulkan-drivers`, Arch `vulkan-swrast`; the CI's source); else, on a rootless host with an
 Arch-compatible userland, the pinned Arch `vulkan-swrast` package (`LAVAPIPE_*` in `build/pins.env`), checked against
 its sha256 and unpacked into `${NGTERM_VENDOR}/lavapipe-<key>/`, refused where its libraries (libLLVM, glibc) do not
-resolve. `run-rust-linux.sh` exits 2 without one and hands its manifest to the harness, which makes it the only Vulkan
+resolve. `run-linux.sh` exits 2 without one and hands its manifest to the harness, which makes it the only Vulkan
 driver of every launch (Launch contract above). No lavapipe is an error, never a fallback to a hardware driver.
 `ngterm-gpui`'s process tests take the same manifest from the same script (`tests/support/lavapipe.rs`).
 
 Seat. GPUI needs a `wl_seat`, which a headless weston offers only with `--fake-seat` (weston 15.0 and later):
-`run-rust-linux.sh` takes the system's weston when it has the flag, else the one `scripts/build-weston.sh` built into
+`run-linux.sh` takes the system's weston when it has the flag, else the one `scripts/build-weston.sh` built into
 its vendored prefix (`WESTON_*` in `build/pins.env`; Ubuntu 26.04's is 14), and stops naming that script when there is
 neither.
 

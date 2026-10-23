@@ -55,7 +55,7 @@ source "$PINS"
 # frontend, whose default `html` feature runs its HTML overlays on it), as cargo arguments, so a machine without WPE
 # WebKit (Ubuntu packages none) still builds and tests the rest; GPUI_WITHOUT_HTML adds the GPUI frontend back without
 # the feature (the core then refuses every page). The app with its pages, and its conformance, need a WPE WebKit
-# (README > WPE WebKit): run-rust-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
+# (README > WPE WebKit): run-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
 WORKSPACE_WITHOUT_WPE=(--workspace --exclude ngterm-wpe --exclude ngterm-wpe-sys --exclude ngterm-wpe-platform-sys
   --exclude ngterm-wpe-javascriptcore-sys --exclude ngterm-gpui)
 GPUI_WITHOUT_HTML=(-p ngterm-gpui --no-default-features)

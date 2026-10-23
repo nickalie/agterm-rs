@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).parents[1] / "tools" / "run-rust-linux.sh"
+SCRIPT = Path(__file__).parents[1] / "tools" / "run-linux.sh"
 # What a Rust build's `version` answers; without the conformance block every test skips as not-yet-at-level.
 AT_LEVEL = json.dumps({"app": {"version": "0.1.0"}, "conformance": {"parityLevel": "0.36.0", "capabilities": []}})
 PROBE_ID = "tests/protocol/test_probe.py::test_reports_version"

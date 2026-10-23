@@ -44,7 +44,7 @@ from agterm_conformance.vocabulary import (
 # Upstream refuses to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104
 # `/tmp`, not `$TMPDIR`: a macOS runner's `/var/folders/...` temp dir eats most of the socket cap.
-# `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-rust-linux.sh its own
+# `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-linux.sh its own
 # parent.
 TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
 MINIMAL_PATH = "/usr/bin:/bin"
@@ -99,7 +99,7 @@ GLVND_VENDOR_DIRS = ("/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d")
 EGL_VENDOR_VARIABLE = "__EGL_VENDOR_LIBRARY_FILENAMES"
 # The Rust build's GPUI frontend renders through wgpu on Vulkan, with GL beside it, and in this harness on
 # Mesa's lavapipe and llvmpipe only, never on the machine's GPU driver: the Vulkan loader gets lavapipe's ICD manifest
-# as its one driver (run-rust-linux.sh resolves it through scripts/fetch-lavapipe.sh into this variable, which is not
+# as its one driver (run-linux.sh resolves it through scripts/fetch-lavapipe.sh into this variable, which is not
 # AGTERM_- or NGTERM_-prefixed so the plugin keeps it), GL is forced onto llvmpipe, and every inherited loader or
 # driver selection is dropped. No lavapipe fails the launch; there is no fallback.
 LAVAPIPE_ICD_VARIABLE = "CONFORMANCE_LAVAPIPE_ICD"
@@ -778,7 +778,7 @@ def lavapipe_icd(environ: Mapping[str, str] | None = None) -> str:
     path = (os.environ if environ is None else environ).get(LAVAPIPE_ICD_VARIABLE)
     hint = (
         f"set {LAVAPIPE_ICD_VARIABLE} to lavapipe's ICD manifest (`scripts/fetch-lavapipe.sh` prints it; "
-        "run-rust-linux.sh sets it): the GPUI build renders on lavapipe only, "
+        "run-linux.sh sets it): the GPUI build renders on lavapipe only, "
         "never on a hardware driver"
     )
     if not path:

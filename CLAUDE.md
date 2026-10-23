@@ -105,7 +105,7 @@ toolkit-neutral, so another frontend can drive them.
 5. Claim a capability (`version` result, rust-build.md > Rust target profile) only once its commands implement it.
 6. Gate: every check README > Test lists (format, locked metadata, clippy with `-D warnings` on the workspace and on
    the frontend without its default features, the lint report, the tracing-features check, the vendored-source
-   checks, the workspace tests headless, the suite's selftests), then a full `conformance/tools/run-rust-linux.sh` in
+   checks, the workspace tests headless, the suite's selftests), then a full `conformance/tools/run-linux.sh` in
    the background; add the newly green ids to the ratchet (`check_ratchet.py`).
 
 A new upstream release moves the catalog's tag (`conformance/tools/gen_catalog.py`) and `.upstream/agterm` together. The

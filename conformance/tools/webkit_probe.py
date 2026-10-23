@@ -5,7 +5,7 @@ namespaces can stop WebKit's bubblewrap sandbox on a CI runner, and the HTML ove
 
   python conformance/tools/webkit_probe.py [--bin PATH] [--timeout SECONDS]
 
-It launches the staged build (--bin, default run-rust-linux.sh's stage) through the harness on lavapipe, opens a page
+It launches the staged build (--bin, default run-linux.sh's stage) through the harness on lavapipe, opens a page
 from a file in the instance's root over a fresh session and waits for it to read back loaded with its title; the
 report adds the host's sandbox facts and the app's web engine lines from its log (the frame mode, a start that failed,
 a fall-back to shared memory). Prints a JSON report; exits 0 when the page loaded.
