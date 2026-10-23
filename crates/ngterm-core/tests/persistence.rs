@@ -222,7 +222,10 @@ fn upstream_settings_reencode_byte_for_byte() {
     assert_eq!(settings.font_size, Some(13.5));
     assert_eq!(settings.background_blur, Some(20));
     store.save(&settings).unwrap();
-    assert_eq!(fs::read_to_string(store.path()).unwrap(), original);
+    // every byte but upstream's bundled `agterm` theme, which this build does not ship (`migrate_legacy_theme`)
+    let without_theme = original.replace("  \"theme\" : \"agterm\",\n", "");
+    assert_ne!(without_theme, original, "the fixture names upstream's bundled theme");
+    assert_eq!(fs::read_to_string(store.path()).unwrap(), without_theme);
 }
 
 #[test]

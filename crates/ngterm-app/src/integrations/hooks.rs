@@ -102,17 +102,19 @@ pub struct HooksPlan {
     pub stale: Leftovers,
 }
 
-/// What an install from before the build took its own name left under the old names: removed once the files that
-/// replace them are written, each entry itself (never a link's target), a directory only when its files leave it
-/// empty. A one-time migration: remove it once no install from before the rename is left to migrate (the first
-/// reinstall past it has run).
+/// What an install from before the build took its own name left under the old names that would run beside the files
+/// replacing them: removed once those are written, each entry itself (never a link's target, nor anything inside a
+/// linked directory), a directory only when its files leave it empty. The old wrappers are not among them: they stay
+/// for what still calls them ([`LEGACY_PACKAGE_ENTRIES`]). A one-time migration: remove it once no install from
+/// before the rename is left to migrate (the first reinstall past it has run).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Leftovers {
-    /// The old package files in the script directory: ours whatever they hold.
+    /// The old plugin copies in the script directory: ours whatever they hold.
     pub package: Vec<PathBuf>,
-    /// The Pi extension under its old name, carrying its old marker.
+    /// The Pi extension under its old name, carrying its old marker and calling this build's script directory.
     pub pi: Option<PathBuf>,
-    /// The `OpenCode` plugins of both versions under their old names, carrying their old markers.
+    /// The `OpenCode` plugins of both versions under their old names, carrying their old markers and calling this
+    /// build's script directory.
     pub opencode: Vec<PathBuf>,
 }
 
@@ -500,62 +502,79 @@ pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) 
     })
 }
 
-/// The package files an install from before the rename put in the script directory, relative to it; a directory
-/// comes after its files and is removed only when they leave it empty. A one-time migration: remove it once no install
-/// from before the rename is left to migrate (the first reinstall past it has run).
-const LEGACY_PACKAGE_ENTRIES: [&str; 7] = [
-    config::LEGACY_WRAPPER_NAME,
-    config::LEGACY_CLAUDE_WRAPPER_NAME,
-    config::LEGACY_CODEX_WRAPPER_NAME,
+/// The plugin copies an install from before the rename put in the script directory, relative to it; a directory comes
+/// after its files and is removed only when they leave it empty. Nothing loads these copies, so they go. The old
+/// wrappers ([`config::LEGACY_WRAPPER_NAME`] and its Claude and Codex adapters) stay beside the new ones: a shell
+/// started before the update (live sessions outlive it) sourced the old integration, which fixed the old wrapper's
+/// path at source time and calls it on every prompt, and a Codex block or Claude settings file the merge could not
+/// repoint (the user's own, or one it skipped) still calls them; they work against this build for those callers.
+/// Remove them, in a change of their own, once no shell or config from before the rename can still call them.
+const LEGACY_PACKAGE_ENTRIES: [&str; 4] = [
     "pi/agterm-status.ts",
     "opencode/agterm-status.js",
     "opencode/agterm-v2/tui.js",
     "opencode/agterm-v2",
 ];
 
-/// What an install from before the rename left ([`Leftovers`]): the old package files in `script_dir`; the Pi
+/// What an install from before the rename left ([`Leftovers`]): the old plugin copies in `script_dir`; the Pi
 /// extension when the current one is (or will be) in place; the `OpenCode` plugins beside the one being installed, in
-/// its configuration directory and the default one. A Pi or `OpenCode` file without its old marker, or unreadable, is
-/// the user's and stays.
+/// its configuration directory and the default one. A Pi or `OpenCode` file that is not this build's ([`ours`]), or
+/// unreadable, stays.
 fn legacy_leftovers(home: &Path, script_dir: &Path, pi: &PiPlan, opencode: &OpenCodePlan) -> Leftovers {
     let package = LEGACY_PACKAGE_ENTRIES
         .iter()
         .map(|relative| script_dir.join(relative))
-        .filter(|path| files::entry_exists(path))
+        .filter(|path| files::entry_exists(path) && !path.parent().is_some_and(is_link))
         .collect();
     let pi = matches!(pi, PiPlan::Install(_) | PiPlan::Current)
         .then(|| PathBuf::from(config::legacy_pi_extension_path(&home.to_string_lossy())))
-        .filter(|path| marked(path, config::LEGACY_PI_EXTENSION_MARKER));
+        .filter(|path| ours(path, config::LEGACY_PI_EXTENSION_MARKER));
+    let opencode = match opencode {
+        OpenCodePlan::Install {
+            configuration_directory,
+            ..
+        } => legacy_opencode_plugins(home, configuration_directory),
+        OpenCodePlan::Decided(_) => Vec::new(),
+    };
+    Leftovers { package, pi, opencode }
+}
+
+/// The old `OpenCode` plugins of both versions that are this build's ([`ours`]), in `configuration_directory` and the
+/// default one. The v2 plugin goes with its folder; a folder that is a symlink goes by itself, the link only, so
+/// nothing inside its target is touched.
+fn legacy_opencode_plugins(home: &Path, configuration_directory: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![configuration_directory.to_path_buf(), legacy_opencode_directory(home)];
+    directories.dedup();
     let mut plugins = Vec::new();
-    if let OpenCodePlan::Install {
-        configuration_directory,
-        ..
-    } = opencode
-    {
-        let mut directories = vec![configuration_directory.clone(), legacy_opencode_directory(home)];
-        directories.dedup();
-        for directory in directories {
-            for version in Version::ALL {
-                let (plugin, marker) = version.legacy_plugin(&directory);
-                if !marked(&plugin, marker) {
-                    continue;
-                }
-                let folder = (version == Version::V2).then(|| plugin.parent().map(Path::to_path_buf));
-                plugins.push(plugin);
-                plugins.extend(folder.flatten());
+    for directory in directories {
+        for version in Version::ALL {
+            let (plugin, marker) = version.legacy_plugin(&directory);
+            if !ours(&plugin, marker) {
+                continue;
+            }
+            match plugin.parent().filter(|_| version == Version::V2) {
+                Some(folder) if is_link(folder) => plugins.push(folder.to_path_buf()),
+                Some(folder) => plugins.extend([plugin.clone(), folder.to_path_buf()]),
+                None => plugins.push(plugin),
             }
         }
     }
-    Leftovers {
-        package,
-        pi,
-        opencode: plugins,
-    }
+    plugins
 }
 
-/// Whether `path` reads and carries `marker`.
-fn marked(path: &Path, marker: &str) -> bool {
-    fs::read_to_string(path).is_ok_and(|text| text.contains(marker))
+/// Whether the old Pi extension or `OpenCode` plugin at `path` is this build's: it reads, carries `marker` and calls
+/// the wrapper in this build's script directory ([`config::LEGACY_PLUGIN_SCRIPT_DIRS`]). Upstream and the fork install
+/// the same files under the same names and markers for their own app, calling their own wrapper: those are theirs and
+/// stay.
+fn ours(path: &Path, marker: &str) -> bool {
+    fs::read_to_string(path).is_ok_and(|text| {
+        text.contains(marker) && config::LEGACY_PLUGIN_SCRIPT_DIRS.iter().any(|dir| text.contains(dir))
+    })
+}
+
+/// Whether `path` is itself a symlink (lstat).
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
 }
 
 /// Removes `stale`: a file or link itself (never a link's target), a directory only when empty. A failure only logs:

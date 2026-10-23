@@ -35,6 +35,8 @@ pub trait Env {
     fn var(&self, key: &str) -> Option<OsString>;
     /// The home directory from the password database, the fallback when `HOME` is unset or empty.
     fn passwd_home(&self) -> Option<PathBuf>;
+    /// The names of every variable set, in no particular order.
+    fn names(&self) -> Vec<OsString>;
 }
 
 /// The real process environment.
@@ -48,6 +50,10 @@ impl Env for ProcessEnv {
 
     fn passwd_home(&self) -> Option<PathBuf> {
         std::env::home_dir()
+    }
+
+    fn names(&self) -> Vec<OsString> {
+        std::env::vars_os().map(|(name, _)| name).collect()
     }
 }
 
@@ -87,6 +93,10 @@ impl Env for MapEnv {
 
     fn passwd_home(&self) -> Option<PathBuf> {
         self.passwd_home.clone()
+    }
+
+    fn names(&self) -> Vec<OsString> {
+        self.vars.keys().map(OsString::from).collect()
     }
 }
 

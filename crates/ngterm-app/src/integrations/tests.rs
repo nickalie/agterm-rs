@@ -265,9 +265,24 @@ fn install_before_the_rename(home: &Home, dir: &Path) {
     }
 }
 
+/// The old wrappers, which a reinstall leaves in the script directory for the shells and configs from before the
+/// rename that still call them.
+const OLD_WRAPPERS: [&str; 3] = [
+    config::LEGACY_WRAPPER_NAME,
+    config::LEGACY_CLAUDE_WRAPPER_NAME,
+    config::LEGACY_CODEX_WRAPPER_NAME,
+];
+
+/// The Pi extension and the `OpenCode` v1 plugin under their old names.
+const OLD_PLUGINS: [&str; 2] = [
+    ".pi/agent/extensions/agterm-status.ts",
+    ".config/opencode/plugins/agterm-status.js",
+];
+
 /// A reinstall over an install from before the rename, in the legacy directory or in this build's, moves every
-/// reference onto the current names and directory, adds no second set, removes the old plugins and this build's old
-/// package files, leaves the fork's package alone, and a run after it changes nothing.
+/// reference onto the current names and directory, adds no second set, removes the old plugins that call this build's
+/// directory and its old plugin copies, keeps its old wrappers, leaves the fork's package and plugins alone, and a run
+/// after it changes nothing.
 #[test]
 fn an_install_from_before_the_rename_moves_every_reference() {
     let legacy = hooks::legacy_script_dir(Path::new(""));
@@ -275,28 +290,38 @@ fn an_install_from_before_the_rename_moves_every_reference() {
         let home = Home::new();
         install_before_the_rename(&home, &home.env.home.join(&dir));
         let start = OpenCodeStart::Install(Version::V1);
+        let ours = dir != legacy;
 
         let outcome = home.install_hooks(&start, None);
         assert_eq!(outcome.codex, CodexResult::Merged);
         assert_eq!(outcome.pi, PiResult::Installed);
         assert!(matches!(outcome.opencode, OpenCodeResult::Installed(Version::V1, _)));
-        assert_moved_onto_the_current_names(&home);
+        assert_moved_onto_the_current_names(&home, ours);
+        for name in OLD_WRAPPERS {
+            assert!(
+                home.env.home.join(&dir).join(name).is_file(),
+                "{name} stays for its callers"
+            );
+        }
         assert_eq!(
-            home.path(".config/agterm/agent-status/agterm-agent-status.sh").exists(),
-            dir == legacy,
+            home.path(".config/agterm/agent-status/opencode/agterm-v2/tui.js")
+                .exists(),
+            !ours,
             "the fork's package stays"
         );
         assert!(
             !home.path(".config/ngterm/agent-status/opencode/agterm-v2").exists(),
-            "this build's old files go, their folder with them"
+            "this build's old plugin copies go, their folder with them"
         );
         assert_a_second_run_changes_nothing(&home, &start);
     }
 }
 
-/// Every agent's config calls the current names once, the old plugins are gone and nothing else names agterm.
-fn assert_moved_onto_the_current_names(home: &Home) {
-    assert_nothing_calls_the_old_names(home);
+/// Every agent's config calls the current names once, the old plugins are gone when `ours` (they call this build's
+/// directory) and stay otherwise (the fork's), and nothing else names agterm.
+fn assert_moved_onto_the_current_names(home: &Home, ours: bool) {
+    let kept: &[&str] = if ours { &[] } else { &OLD_PLUGINS };
+    assert_nothing_calls_the_old_names(home, kept);
     let settings = home.read(".claude/settings.json");
     assert_eq!(settings.matches("ngterm-claude-status.sh").count(), 6, "{settings}");
     for rc in [".zshrc", ".bashrc", ".config/fish/config.fish", ".codex/config.toml"] {
@@ -306,8 +331,9 @@ fn assert_moved_onto_the_current_names(home: &Home) {
         home.read(".pi/agent/extensions/ngterm-status.ts"),
         fs::read_to_string(resources().join("agent-status/pi/ngterm-status.ts")).unwrap()
     );
-    assert!(!home.path(".pi/agent/extensions/agterm-status.ts").exists());
-    assert!(!home.path(".config/opencode/plugins/agterm-status.js").exists());
+    for old in OLD_PLUGINS {
+        assert_eq!(home.path(old).exists(), !ours, "{old}");
+    }
 }
 
 /// A second install over what the first left finds everything current and changes nothing.
@@ -323,11 +349,17 @@ fn assert_a_second_run_changes_nothing(home: &Home, start: &OpenCodeStart) {
     assert_eq!(home.snapshot(), after_first, "a second run changes nothing");
 }
 
-/// No file in `home` but the fork's package and the backups still names the legacy directory or an old name.
-fn assert_nothing_calls_the_old_names(home: &Home) {
+/// No file in `home` but the fork's package, the backups, the old wrappers and `kept` still names the legacy directory
+/// or an old name.
+fn assert_nothing_calls_the_old_names(home: &Home, kept: &[&str]) {
+    let script_dir = hooks::script_dir(Path::new(""));
     for (relative, bytes) in home.snapshot() {
         let text = String::from_utf8_lossy(&bytes);
-        if relative.starts_with(".config/agterm") || relative.extension().is_some_and(|ext| ext == "bak") {
+        if relative.starts_with(".config/agterm")
+            || relative.extension().is_some_and(|ext| ext == "bak")
+            || OLD_WRAPPERS.iter().any(|name| relative == script_dir.join(name))
+            || kept.iter().any(|path| relative == Path::new(path))
+        {
             continue;
         }
         assert!(!text.contains("agterm"), "{} still names agterm", relative.display());
@@ -361,34 +393,104 @@ fn unmarked_files_under_the_old_names_are_the_users() {
     assert_eq!(home.read(".config/opencode/plugins/agterm-v2/tui.js"), "// mine\n");
 }
 
-/// A v2 install removes both old plugins, the v2 one's folder with it.
-#[test]
-fn a_v2_install_removes_the_old_plugins_of_both_versions() {
-    let home = Home::new();
-    let config = home.path(".config/opencode");
-    for version in Version::ALL {
-        let (plugin, marker) = version.legacy_plugin(&config);
-        home.write(
-            plugin.strip_prefix(&home.env.home).unwrap().to_str().unwrap(),
-            &format!("{marker}\n"),
-        );
-    }
-    let probe = Probe {
+/// An old Pi extension or `OpenCode` plugin under `marker`, calling the wrapper in the script directory whose path
+/// segments `dir` lists, as the earlier packages' `join(homedir(), …)` does.
+fn old_plugin(marker: &str, dir: &str) -> String {
+    format!("{marker}\nconst wrapper = join(homedir(), {dir}, \"agterm-agent-status.sh\");\n")
+}
+
+/// This build's script directory as its plugins from before the rename named it, and the fork's (upstream's too).
+const OUR_DIR: &str = "\".config\", \"ngterm\", \"agent-status\"";
+const FORKS_DIR: &str = "\".config\", \"agterm\", \"agent-status\"";
+
+/// Probes `OpenCode` 2 with its configuration in `config`.
+fn opencode_v2(config: &Path) -> Probe {
+    Probe {
         version: Some(Version::V2),
         v2_configuration_directory: Some(config.display().to_string()),
-    };
-    let outcome = home.install_hooks(&OpenCodeStart::Install(Version::V2), Some(&probe));
-    assert!(
-        matches!(outcome.opencode, OpenCodeResult::Installed(Version::V2, _)),
-        "{:?}",
-        outcome.opencode
-    );
-    assert!(!config.join("plugins/agterm-status.js").exists());
-    assert!(
-        !config.join("plugins/agterm-v2").exists(),
-        "the emptied folder goes too"
-    );
-    assert!(config.join("plugins/ngterm-v2/tui.js").is_file());
+    }
+}
+
+/// A v2 install removes both old plugins that call this build's directory, the v2 one's folder with it; the same files
+/// calling the fork's directory (the fork and upstream install them under the same names and markers for their own
+/// app) are theirs and stay.
+#[test]
+fn a_v2_install_removes_our_old_plugins_of_both_versions_and_keeps_the_forks() {
+    for (dir, ours) in [(OUR_DIR, true), (FORKS_DIR, false)] {
+        let home = Home::new();
+        let config = home.path(".config/opencode");
+        for version in Version::ALL {
+            let (plugin, marker) = version.legacy_plugin(&config);
+            home.write(
+                plugin.strip_prefix(&home.env.home).unwrap().to_str().unwrap(),
+                &old_plugin(marker, dir),
+            );
+        }
+        let outcome = home.install_hooks(&OpenCodeStart::Install(Version::V2), Some(&opencode_v2(&config)));
+        assert!(
+            matches!(outcome.opencode, OpenCodeResult::Installed(Version::V2, _)),
+            "{:?}",
+            outcome.opencode
+        );
+        assert_eq!(config.join("plugins/agterm-status.js").exists(), !ours, "{dir}");
+        assert_eq!(
+            config.join("plugins/agterm-v2").exists(),
+            !ours,
+            "{dir}: the emptied folder goes too"
+        );
+        assert!(config.join("plugins/ngterm-v2/tui.js").is_file());
+    }
+}
+
+/// The old Pi extension goes once the current one is in place when it calls this build's directory, and stays when
+/// it calls the fork's.
+#[test]
+fn the_old_pi_extension_goes_only_when_it_is_ours() {
+    for (dir, ours) in [(OUR_DIR, true), (FORKS_DIR, false)] {
+        let home = Home::new();
+        home.mkdir(".pi/agent");
+        let old = old_plugin(config::LEGACY_PI_EXTENSION_MARKER, dir);
+        home.write(OLD_PLUGINS[0], &old);
+        let outcome = home.install_hooks(&no_opencode(&home), None);
+        assert_eq!(outcome.pi, PiResult::Installed);
+        assert_eq!(home.path(OLD_PLUGINS[0]).exists(), !ours, "{dir}");
+        if !ours {
+            assert_eq!(home.read(OLD_PLUGINS[0]), old);
+        }
+    }
+}
+
+/// A symlinked old v2 plugin folder goes by itself, the link only: nothing inside its target is removed, in the
+/// `OpenCode` configuration and in the script directory alike.
+#[test]
+fn a_symlinked_old_v2_plugin_folder_is_unlinked_not_emptied() {
+    let home = Home::new();
+    let config = home.path(".config/opencode");
+    let (plugin, marker) = Version::V2.legacy_plugin(&config);
+    let folder = plugin.parent().unwrap().to_path_buf();
+    let package_folder = hooks::script_dir(&home.env.home).join("opencode/agterm-v2");
+    let mut targets = Vec::new();
+    for (link, name) in [(&folder, "plugin"), (&package_folder, "package")] {
+        let target = home.path(&format!("dotfiles/{name}/agterm-v2"));
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("tui.js"), old_plugin(marker, OUR_DIR)).unwrap();
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        symlink(&target, link).unwrap();
+        targets.push(target);
+    }
+
+    let outcome = home.install_hooks(&OpenCodeStart::Install(Version::V2), Some(&opencode_v2(&config)));
+    assert!(matches!(outcome.opencode, OpenCodeResult::Installed(Version::V2, _)));
+    for link in [&folder, &package_folder] {
+        assert!(!files::entry_exists(link), "{} is unlinked", link.display());
+    }
+    for target in &targets {
+        assert_eq!(
+            fs::read_to_string(target.join("tui.js")).unwrap(),
+            old_plugin(marker, OUR_DIR),
+            "the link's target is left whole"
+        );
+    }
 }
 
 #[test]

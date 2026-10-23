@@ -152,10 +152,12 @@ because every plan task's subagent starts from this branch and must be able to r
    the session server's source, not upstream, and moving `HERDR_REV` is a change of its own that ports into
    `ngterm-session`.
 3. **Vendored copies**: `bash SKILL_DIR/scripts/sync-resources.sh [--upstream DIR] --patches WORK/patches CURRENT TARGET`.
-   It applies upstream's own diff to each copy (`resources/agent-status`, `hud.sh`, themes, `ghostty-defaults.conf`,
-   `LICENSE.upstream`) only where it applies cleanly, so the Linux glue in the copies survives; the
-   agent skill (`resources/skills/ngterm`) is rebuilt as the new upstream tree plus `build/patches/skill-ngterm/` (its
-   `live` names, this build's `ngterm`/`ngtermctl` ones, then the attach contract's `NGTERM_LIVE_*`), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
+   It applies upstream's own diff to each copy (`hud.sh`, `ghostty-defaults.conf`, `LICENSE.upstream`) only where it
+   applies cleanly, so the Linux glue in the copies survives; the agent-status package (`resources/agent-status`) and
+   the agent skill (`resources/skills/ngterm`) are rebuilt as the new upstream tree plus their recorded patches
+   (`build/patches/agent-status/`: the Linux glue, then this build's `ngterm-*` files and `NGTERM_*` variables;
+   `build/patches/skill-ngterm/`: the `live` names, this build's `ngterm`/`ngtermctl` ones, the attach contract's
+   names, then the rest of its identity), and a `conflict` there names the patch to refresh. `conflict` → a plan task to merge it by hand, keeping the Linux glue; the task names the
    upstream diff command (`git -C .upstream/agterm diff CURRENT TARGET -- <path>`), not the temp patch.
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
    `crates/ngterm-app/src/integrations/mod.rs`'s header.

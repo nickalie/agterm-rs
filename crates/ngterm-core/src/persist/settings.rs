@@ -320,6 +320,11 @@ pub struct AppSettings {
 }
 
 impl AppSettings {
+    /// The bundled theme a fresh install of a build from before the rename started on (upstream's `agterm`), which
+    /// this build no longer ships. A one-time migration: remove it, and [`AppSettings::migrate_legacy_theme`], once no
+    /// settings file from before the rename is left to load (the first launch past it has saved one).
+    pub const LEGACY_DEFAULT_THEME: &str = "agterm";
+
     /// The configured restore mode, a legacy boolean included.
     #[must_use]
     pub fn effective_restore_mode(&self) -> RestoreMode {
@@ -335,6 +340,16 @@ impl AppSettings {
     pub fn migrate_restore_mode(&mut self) {
         self.restore_mode = Some(self.effective_restore_mode());
         self.restore_running_command = None;
+    }
+
+    /// Clears a theme slot naming [`AppSettings::LEGACY_DEFAULT_THEME`], so a file a build from before the rename
+    /// seeded loads on ghostty's built-in colors instead of a theme no catalog holds; a save then writes it cleared.
+    pub fn migrate_legacy_theme(&mut self) {
+        for slot in [&mut self.theme, &mut self.dark_theme] {
+            if slot.as_deref() == Some(Self::LEGACY_DEFAULT_THEME) {
+                *slot = None;
+            }
+        }
     }
 
     /// The hidden chrome elements: a default-shown one when listed hidden, a hidden-by-default one unless listed
@@ -477,6 +492,7 @@ impl SettingsStore {
             return AppSettings::default();
         };
         settings.migrate_restore_mode();
+        settings.migrate_legacy_theme();
         settings
     }
 
@@ -535,6 +551,17 @@ mod tests {
         assert_eq!(store.load().theme, None);
         seed(&store, "{ not valid json ]");
         assert_eq!(store.load(), AppSettings::default());
+    }
+
+    #[test]
+    fn a_theme_seeded_before_the_rename_reads_as_ghosttys_built_in() {
+        let (_dir, store) = store();
+        seed(&store, r#"{"theme": "agterm", "darkTheme": "agterm"}"#);
+        let settings = store.load();
+        assert_eq!((settings.theme, settings.dark_theme), (None, None));
+        seed(&store, r#"{"theme": "Nord", "darkTheme": "agterm"}"#);
+        let settings = store.load();
+        assert_eq!((settings.theme.as_deref(), settings.dark_theme), (Some("Nord"), None));
     }
 
     #[test]

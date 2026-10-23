@@ -75,7 +75,11 @@ pub fn is_daemon_name(name: &str) -> bool {
 
 /// The prefix this app's daemons had before the build took its own name, `agterm-`. A server of that time hands its
 /// sessions over to this build's under those names; the importer renames them ([`renamed_legacy_daemon`]), so the
-/// panes that claim them find them again. A one-time migration: remove it, and its call in the handoff's importer,
+/// panes that claim them find them again. When the update handoff fails (or none is asked for: an unstaged build
+/// checks no build), the panes run against that server, which still holds them under the old names: there a session
+/// listed only under its old name stands in for the daemon its pane claims ([`legacy_stand_in`],
+/// [`stood_in_for`]), which `ngterm-session`'s client attaches to and its session host lists, kills, reads and types
+/// to under the pane's own name. A one-time migration: remove it, its call in the handoff's importer and the stand-ins,
 /// once no install still runs a session server from before the rename (the first update past it has run).
 pub const LEGACY_NAME_PREFIX: &str = "agterm-";
 
@@ -85,6 +89,37 @@ pub const LEGACY_NAME_PREFIX: &str = "agterm-";
 pub fn renamed_legacy_daemon(name: &str) -> Option<String> {
     let renamed = format!("{NAME_PREFIX}{}", name.strip_prefix(LEGACY_NAME_PREFIX)?);
     is_daemon_name(&renamed).then_some(renamed)
+}
+
+/// What one of the app's daemons, `name`, was called before the rename ([`LEGACY_NAME_PREFIX`]), the inverse of
+/// [`renamed_legacy_daemon`]; `None` for any other name.
+#[must_use]
+pub fn legacy_daemon(name: &str) -> Option<String> {
+    is_daemon_name(name).then(|| format!("{LEGACY_NAME_PREFIX}{}", &name[NAME_PREFIX.len()..]))
+}
+
+/// The old name ([`legacy_daemon`]) a server whose sessions are `listed` holds the app's daemon `name` under: when it
+/// lists the old name and not `name` itself, a server from before the rename still runs the pane's session
+/// ([`LEGACY_NAME_PREFIX`]). `None` otherwise: `name` is listed, neither is, or `name` is no app daemon.
+#[must_use]
+pub fn legacy_stand_in<'a>(name: &str, listed: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let legacy = legacy_daemon(name)?;
+    let (mut has_legacy, mut has_name) = (false, false);
+    for listed in listed {
+        has_legacy |= listed == legacy;
+        has_name |= listed == name;
+    }
+    (has_legacy && !has_name).then_some(legacy)
+}
+
+/// The app's daemon the listed session `name` stands in for ([`legacy_stand_in`]): its [`renamed_legacy_daemon`] name
+/// when the listing `listed` holds no session of that name beside it. `None` for every other name, an old-named
+/// session whose new name is taken included (no pane claims it then: the one of the new name is the pane's).
+#[must_use]
+pub fn stood_in_for<'a>(name: &str, listed: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let renamed = renamed_legacy_daemon(name)?;
+    let mut listed = listed.into_iter();
+    (!listed.any(|listed| listed == renamed)).then_some(renamed)
 }
 
 /// The socket directory of the instance whose state directory is `state_dir`, named by the FNV-1a 64 of the resolved
@@ -434,5 +469,31 @@ mod tests {
         ] {
             assert_eq!(renamed_legacy_daemon(name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn a_session_listed_only_under_its_old_name_stands_in_for_its_daemon() {
+        let pane = Uuid::parse_str("ABCDEF01-2345-6789-ABCD-EF0123456789").unwrap();
+        let name = daemon_name(pane);
+        let legacy = "agterm-abcdef0123456789abcdef0123456789";
+        assert_eq!(legacy_daemon(&name).as_deref(), Some(legacy));
+        for other in ["ngterm-notes", "agterm-abcdef0123456789abcdef0123456789", "notes"] {
+            assert_eq!(legacy_daemon(other), None, "{other}");
+        }
+        let other = daemon_name(Uuid::from_u128(7));
+        // only the old name listed: it stands in, both ways
+        assert_eq!(
+            legacy_stand_in(&name, [legacy, other.as_str()]).as_deref(),
+            Some(legacy)
+        );
+        assert_eq!(stood_in_for(legacy, [legacy, other.as_str()]), Some(name.clone()));
+        // the new name listed (beside the old one, or alone), or neither: no stand-in
+        for listed in [vec![legacy, name.as_str()], vec![name.as_str()], vec![other.as_str()]] {
+            assert_eq!(legacy_stand_in(&name, listed.iter().copied()), None, "{listed:?}");
+        }
+        assert_eq!(stood_in_for(legacy, [legacy, name.as_str()]), None);
+        // a name of another shape never takes part
+        assert_eq!(legacy_stand_in("ngterm-notes", ["agterm-notes"]), None);
+        assert_eq!(stood_in_for("agterm-notes", ["agterm-notes"]), None);
     }
 }

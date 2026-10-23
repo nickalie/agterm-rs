@@ -1,4 +1,4 @@
-# ngterm (ngterm) — review profile
+# ngterm — review profile
 
 Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformance/README.md`,
 `conformance/docs/rust-build.md`. Where this file and those disagree, they win.

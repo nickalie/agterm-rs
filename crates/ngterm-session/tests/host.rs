@@ -32,6 +32,10 @@ use peer::{Answer, Server, api_peer, calls};
 use support::{PATIENCE, SIZE, TestResult, shell, spec, tagged};
 
 const NAME: &str = "ngterm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// [`NAME`] as a server from before the build's rename named it.
+const LEGACY: &str = "agterm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// A session of no pane.
+const KEEPER: &str = "keeper";
 
 /// A host of `directory`'s namespace, whose executable is this test binary.
 fn host(directory: &std::path::Path) -> TestResult<ServerHost> {
@@ -493,6 +497,102 @@ fn the_host_lists_reads_types_into_and_kills_a_real_session() -> TestResult {
     drop(host);
     assert_eq!(server.stopped()?, StopReason::Idle);
     Ok(())
+}
+
+/// The names the server itself lists, as it holds them.
+fn raw_names(server: &Server) -> TestResult<Vec<String>> {
+    let mut api = Client::new(server.directory()).api()?.ok_or("no server")?;
+    Ok(api.list()?.into_iter().map(|session| session.name).collect())
+}
+
+/// Waits until `name` is typed into and its screen shows it, `tag` naming the line.
+fn typed_through(host: &ServerHost, name: &str, tag: &str) -> TestResult {
+    host.type_input(name, format!("{}\r", tagged(tag)).as_bytes())?;
+    let deadline = Instant::now() + PATIENCE;
+    while !host.screen(name, false)?.text.contains(&format!("got:{tag}")) {
+        assert!(Instant::now() < deadline, "typed input never reached {name}'s screen");
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_session_named_before_the_rename_stands_in_for_its_panes_daemon() -> TestResult {
+    let server = Server::start()?;
+    let host = host(server.directory())?;
+    // keeps the server running while the others come and go
+    create_detached(&server, KEEPER, shell())?;
+    create_detached(&server, LEGACY, shell())?;
+    // listed under the name its pane claims, so the inventory counts it as that pane's
+    let record = listed(&host, NAME)?;
+    assert!(!host.list()?.iter().any(|record| record.name == LEGACY));
+    // the pane's attach, creation spec and all, reaches the running program instead of creating a session
+    let mut attachment = Client::new(server.directory()).attach(AttachRequest {
+        name: NAME.to_owned(),
+        create: Some(shell()),
+        size: SIZE,
+        managed: None,
+        metadata: ReplyMetadata::default(),
+    })?;
+    while !matches!(attachment.reader.recv()?, Some(AttachEvent::SnapshotEnd)) {}
+    raw_until(&server, &[LEGACY, KEEPER])?;
+    assert_eq!(listed_attached(&host)?, (record.leader_pid, Some(1)));
+    attachment.writer.detach()?;
+    while attachment.reader.recv()?.is_some() {}
+    // typed into, read and killed under the pane's name
+    typed_through(&host, NAME, "legacy-1")?;
+    assert!(host.screen(NAME, true)?.text.contains("got:legacy-1"));
+    assert_eq!(host.kill(NAME, true), KillOutcome::Killed);
+    raw_until(&server, &[KEEPER])?;
+    // beside a session of the new name (created first: an attach of the new name would reach the old one) it stands
+    // in for nothing: listed as it is, and the pane's name is the new one's
+    create_detached(&server, NAME, shell())?;
+    create_detached(&server, LEGACY, shell())?;
+    let mut names: Vec<String> = host.list()?.into_iter().map(|record| record.name).collect();
+    names.sort();
+    assert_eq!(names, [LEGACY, KEEPER, NAME]);
+    assert_eq!(host.kill(NAME, true), KillOutcome::Killed);
+    raw_until(&server, &[LEGACY, KEEPER])?;
+    // then it stands in again, for a batch kill too (a closed pane's finalizer)
+    listed(&host, NAME)?;
+    assert!(host.kill_batch(&[NAME.to_owned()]));
+    raw_until(&server, &[KEEPER])?;
+    assert_eq!(
+        host.kill(NAME, true),
+        KillOutcome::StaleSocket,
+        "nothing was left to kill"
+    );
+    assert_eq!(host.kill(KEEPER, true), KillOutcome::Killed);
+    drop(host);
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+/// Waits until the server itself lists exactly `names`, sorted.
+fn raw_until(server: &Server, names: &[&str]) -> TestResult {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let mut raw = raw_names(server)?;
+        raw.sort();
+        if raw == names {
+            return Ok(());
+        }
+        assert!(Instant::now() < deadline, "the server lists {raw:?}, not {names:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The leader and client count of [`NAME`] as the host lists it, once its count is 1.
+fn listed_attached(host: &ServerHost) -> TestResult<(Option<i32>, Option<u32>)> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let record = host.list()?.into_iter().find(|record| record.name == NAME);
+        if let Some(record) = record.filter(|record| record.clients == Some(1)) {
+            return Ok((record.leader_pid, record.clients));
+        }
+        assert!(Instant::now() < deadline, "{NAME} never listed attached");
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The pids of every process whose environment holds `NGTERM_LIVE_DIR=<directory>`, which every process of the

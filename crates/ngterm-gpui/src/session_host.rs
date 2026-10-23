@@ -81,7 +81,8 @@ pub fn install(core: &mut Core, env: &dyn Env) {
 /// or a staged id (an unstaged build checks no build). Before any pane attaches: after a committed handoff each pane's
 /// `ngterm-session attach` finds the staged build and asks for nothing; after a failed one each asks the old server
 /// once more (a process of its own, it never saw this attempt), which answers with the same failure at once and
-/// disconnects nobody, and the pane attaches to it.
+/// disconnects nobody, and the pane attaches to it (to its session the old server holds under the name from before the
+/// build's rename, when it holds that one: `Client::legacy_stand_in`, whose host lists it under the pane's name).
 fn update(runtime: &Runtime, directory: &str, options: &StartOptions) {
     let Some(bundled) = options.build.as_deref() else {
         return;

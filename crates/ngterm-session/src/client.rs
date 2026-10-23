@@ -48,6 +48,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::{fmt, io};
 
+use ngterm_core::live;
+
 use crate::endpoint::{self, Endpoint, Stream, is_connection_closed_error};
 use crate::protocol::{
     ApiCall, ApiError, ApiReply, ApiRequest, ApiResponse, AttachClientMessage, AttachRefusal, AttachRequest,
@@ -224,14 +226,54 @@ impl Client {
         Ok(connected.handoff)
     }
 
+    /// The old name the namespace's server holds the app's daemon `name` under when it lists that and not `name`
+    /// ([`live::legacy_stand_in`]: a server from before the rename, whose update handoff failed); `None` otherwise,
+    /// without a server, or when the listing fails, and then the caller addresses `name` as given. A one-time
+    /// migration, removed with [`live::LEGACY_NAME_PREFIX`].
+    #[must_use]
+    pub fn legacy_stand_in(&self, name: &str) -> Option<String> {
+        self.legacy_stand_ins(&[name.to_owned()])
+            .pop()
+            .map(|(_, legacy)| legacy)
+    }
+
+    /// [`Client::legacy_stand_in`] of each of `names` that has one, as `(name, old name)` pairs, over one listing (none
+    /// when no name is an app daemon's).
+    #[must_use]
+    pub fn legacy_stand_ins(&self, names: &[String]) -> Vec<(String, String)> {
+        if names.iter().all(|name| live::legacy_daemon(name).is_none()) {
+            return Vec::new();
+        }
+        let sessions = match self.call(ApiRequest::List) {
+            Ok(Some(ApiResponse::Sessions(sessions))) => sessions,
+            Ok(None) => return Vec::new(),
+            Ok(Some(other)) => {
+                let error = unexpected("a list", &other);
+                tracing::warn!(%error, "the live sessions could not be listed for their old names");
+                return Vec::new();
+            }
+            Err(error) => {
+                tracing::warn!(%error, "the live sessions could not be listed for their old names");
+                return Vec::new();
+            }
+        };
+        let listed = || sessions.iter().map(|session| session.name.as_str());
+        names
+            .iter()
+            .filter_map(|name| Some((name.clone(), live::legacy_stand_in(name, listed())?)))
+            .collect()
+    }
+
     /// Attaches to a session as `request` says, creating it when the request carries a spec, starting the server
-    /// when the client was given [`StartOptions`].
+    /// when the client was given [`StartOptions`]. An app daemon the server holds only under its old name
+    /// ([`Client::legacy_stand_in`], asked once connected: the connect may have handed the sessions over, renamed) is
+    /// attached under that name, not created anew, so the pane finds its running program.
     ///
     /// # Errors
     ///
     /// [`ClientError::NoServer`] without a server to attach to; [`ClientError::Refused`] for the server's refusal
     /// (gone, the create failed, no snapshot in time); a failed connect or exchange.
-    pub fn attach(&self, request: AttachRequest) -> Result<Attachment, ClientError> {
+    pub fn attach(&self, mut request: AttachRequest) -> Result<Attachment, ClientError> {
         let hello = self.hello(Role::Attach);
         let connected = match &self.start {
             Some(options) => spawn::connect_or_start(&self.endpoint, &hello, options)?,
@@ -239,6 +281,10 @@ impl Client {
                 .connect_existing(Role::Attach, ATTACH_TIMEOUT)?
                 .ok_or_else(|| ClientError::NoServer(self.endpoint.to_string()))?,
         };
+        if let Some(legacy) = self.legacy_stand_in(&request.name) {
+            tracing::info!(name = %request.name, %legacy, "the live session is attached under its name from before the rename");
+            request.name = legacy;
+        }
         let (stream, first) = spawn::exchange_within(connected.stream, ATTACH_TIMEOUT, move |stream| {
             write_message(stream, &AttachClientMessage::Attach(request))?;
             read_frame(stream)?.message::<AttachServerMessage>(PROTOCOL_VERSION)

@@ -402,6 +402,9 @@ fn a_ui_test_launch_needs_the_state_dir_and_the_sentinel() {
         fn passwd_home(&self) -> Option<PathBuf> {
             None
         }
+        fn names(&self) -> Vec<OsString> {
+            self.0.iter().map(OsString::from).collect()
+        }
     }
     assert!(crate::is_ui_test_launch(&Vars(&[
         "NGTERM_STATE_DIR",

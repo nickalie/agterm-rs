@@ -1,0 +1,517 @@
+The agent-status package under this build's own identity (CLAUDE.md > Reference rule): its files are `ngterm-*`
+(the wrappers, the Pi extension, the OpenCode plugins), its markers `ngterm-*`, and every variable it reads or sets
+`NGTERM_*` (`NGTERM_SESSION_ID`, `NGTERM_SOCKET`, `NGTERM_PANE`, `NGTERMCTL`, `NGTERM_AGENT_RE`, ...). Applied after
+0001-linux-glue.patch; an upstream change that brings new agterm names is renamed here the same way.
+
+diff --git a/agterm-agent-status.sh b/ngterm-agent-status.sh
+similarity index 61%
+rename from agterm-agent-status.sh
+rename to ngterm-agent-status.sh
+index 887bab8..24092db 100755
+--- a/agterm-agent-status.sh
++++ b/ngterm-agent-status.sh
+@@ -1,54 +1,54 @@
+ #!/usr/bin/env bash
+-# agterm-agent-status — set the current agterm session's agent-status indicator.
++# ngterm-agent-status — set the current ngterm session's agent-status indicator.
+ #
+-#   agterm-agent-status.sh active            # agent is busy
+-#   agterm-agent-status.sh completed         # agent finished a turn
+-#   agterm-agent-status.sh blocked  --blink  # agent is waiting on you (pulse for attention)
+-#   agterm-agent-status.sh idle              # clear the indicator
++#   ngterm-agent-status.sh active            # agent is busy
++#   ngterm-agent-status.sh completed         # agent finished a turn
++#   ngterm-agent-status.sh blocked  --blink  # agent is waiting on you (pulse for attention)
++#   ngterm-agent-status.sh idle              # clear the indicator
+ #
+ # States: idle | active | completed | blocked. An optional --blink / --auto-reset
+ # (and any further args) is forwarded verbatim to `ngtermctl session status`.
+ #
+-# Outside agterm this is a silent no-op, so it is safe to call from any hook.
++# Outside ngterm this is a silent no-op, so it is safe to call from any hook.
+ #
+ # As a hook it must never interfere with the agent: stdout/stderr are suppressed
+ # (Claude Code injects a UserPromptSubmit/SessionStart hook's stdout into the
+ # prompt context) and it always exits 0 (a non-zero exit can block the turn).
+ #
+ # ngtermctl resolution order (the binary that talks to the control socket):
+-#   1. $AGTERMCTL — an explicit override the caller set.
++#   1. $NGTERMCTL — an explicit override the caller set.
+ #   2. the absolute bundled-binary path the installer bakes in: the installer
+-#      rewrites the AGTERMCTL default below to the app's bundled bin/ngtermctl,
++#      rewrites the NGTERMCTL default below to the app's bundled bin/ngtermctl,
+ #      so the hook fires even when the CLI was never symlinked into PATH.
+ #   3. `ngtermctl` on PATH — the fallback when no override was set and the baked
+ #      path no longer exists, which is what a bundle moved since the install leaves
+ #      behind (installing from the mounted DMG bakes a /Volumes path, dead on eject).
+ set -u
+ 
+-[ -n "${AGTERM_SESSION_ID:-}" ] || exit 0   # not inside agterm: nothing to do
++[ -n "${NGTERM_SESSION_ID:-}" ] || exit 0   # not inside ngterm: nothing to do
+ 
+ # --socket is a SUBCOMMAND option, so it must come AFTER `session status`, not before
+-# it. Pass it only when AGTERM_SOCKET is set (the app injects it alongside the id).
++# it. Pass it only when NGTERM_SOCKET is set (the app injects it alongside the id).
+ state=$1
+ shift
+ 
+ # forward the pane discriminators when the app injected them: each session surface
+-# (main/split/scratch) sets its own AGTERM_PANE (the role) plus AGTERM_PANE_ID (a stable
++# (main/split/scratch) sets its own NGTERM_PANE (the role) plus NGTERM_PANE_ID (a stable
+ # per-surface token). the role can go stale — a split survivor promoted into the main pane
+ # keeps its baked `right` — so we also forward the token as --pane-id, which the app resolves
+ # to the surface's CURRENT slot and lets override the stale role (#199). both are validated
+ # ngtermctl-side, so pass them through verbatim. the ${arr[@]+..} guard keeps the empty-array
+ # expansion safe under `set -u` on bash 3.2.
+ pane_args=()
+-[ -n "${AGTERM_PANE:-}" ] && pane_args+=(--pane "$AGTERM_PANE")
+-[ -n "${AGTERM_PANE_ID:-}" ] && pane_args+=(--pane-id "$AGTERM_PANE_ID")
++[ -n "${NGTERM_PANE:-}" ] && pane_args+=(--pane "$NGTERM_PANE")
++[ -n "${NGTERM_PANE_ID:-}" ] && pane_args+=(--pane-id "$NGTERM_PANE_ID")
+ 
+-if [ -n "${AGTERM_SOCKET:-}" ]; then
+-  "${AGTERMCTL:-ngtermctl}" session status "$state" \
+-    --target "$AGTERM_SESSION_ID" --socket "$AGTERM_SOCKET" \
++if [ -n "${NGTERM_SOCKET:-}" ]; then
++  "${NGTERMCTL:-ngtermctl}" session status "$state" \
++    --target "$NGTERM_SESSION_ID" --socket "$NGTERM_SOCKET" \
+     "${pane_args[@]+"${pane_args[@]}"}" "$@" >/dev/null 2>&1 || true
+ else
+-  "${AGTERMCTL:-ngtermctl}" session status "$state" \
+-    --target "$AGTERM_SESSION_ID" "${pane_args[@]+"${pane_args[@]}"}" "$@" >/dev/null 2>&1 || true
++  "${NGTERMCTL:-ngtermctl}" session status "$state" \
++    --target "$NGTERM_SESSION_ID" "${pane_args[@]+"${pane_args[@]}"}" "$@" >/dev/null 2>&1 || true
+ fi
+ exit 0
+diff --git a/agterm-claude-status.sh b/ngterm-claude-status.sh
+similarity index 90%
+rename from agterm-claude-status.sh
+rename to ngterm-claude-status.sh
+index 26c0bd7..0560a8c 100755
+--- a/agterm-claude-status.sh
++++ b/ngterm-claude-status.sh
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env bash
+-# Claude Code status adapter installed by agterm's Help ▸ Install Agent Status Hooks command.
++# Claude Code status adapter installed by ngterm's Help ▸ Install Agent Status Hooks command.
+ #
+ # A worker agent spawned from inside a session (headless `claude -p` from a tool call, a second CLI
+-# agent) inherits the spawner's AGTERM_* environment, so its own hooks would repaint the SPAWNER's
++# agent) inherits the spawner's NGTERM_* environment, so its own hooks would repaint the SPAWNER's
+ # row. This adapter keeps that ownership question inside the installed hook package: decide from
+ # process topology, not terminal state. The hook is a descendant of the agent that fired it, so
+ # exactly one agent between here and the pane means "I am the pane's agent"; a second one means
+@@ -28,18 +28,18 @@
+ # (`\"background_tasks\"`), so the match cannot hit the last assistant message.
+ set -u
+ 
+-[ -n "${AGTERM_SESSION_ID:-}" ] || exit 0
++[ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+ 
+ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+-status_wrapper=${AGTERM_STATUS_WRAPPER:-"$script_dir/agterm-agent-status.sh"}
++status_wrapper=${NGTERM_STATUS_WRAPPER:-"$script_dir/ngterm-agent-status.sh"}
+ 
+ # exact names, not a glob: `claude*` also matches wrapper scripts such as claude-opus-worker.
+-# The list is the union of the hook-driven agents and shell/integration.sh's AGTERM_AGENT_RE
++# The list is the union of the hook-driven agents and shell/integration.sh's NGTERM_AGENT_RE
+ # default — one agent set split by detection mechanism, and the walk must count all of it: an
+ # integration-driven agent (say gemini) that spawns `claude -p` is a spawner too, and missing it
+ # here would let the worker's reset repaint the gemini pane. Keep the two lists in sync.
+ #
+-# An overridden AGTERM_AGENT_RE (integration.sh documents the export) extends the set beyond the
++# An overridden NGTERM_AGENT_RE (integration.sh documents the export) extends the set beyond the
+ # literals, matched against the same argv[0] basename the literal list sees — not the typed command
+ # line the shell integration matched, so an override that inspects arguments won't extend the walk.
+ # The expression is evaluated as ERE; zsh under RE_MATCH_PCRE and fish read the same value as PCRE,
+@@ -47,8 +47,8 @@ status_wrapper=${AGTERM_STATUS_WRAPPER:-"$script_dir/agterm-agent-status.sh"}
+ # agent" and keeps the walk fail-open; the redirect swallows bash's complaint about the expression.
+ is_agent() {
+   case "$1" in claude | codex | kimi | opencode | pi | gemini | cursor-agent | aider | crush | goose) return 0 ;; esac
+-  if [ -n "${AGTERM_AGENT_RE:-}" ]; then
+-    [[ $1 =~ $AGTERM_AGENT_RE ]] 2>/dev/null && return 0
++  if [ -n "${NGTERM_AGENT_RE:-}" ]; then
++    [[ $1 =~ $NGTERM_AGENT_RE ]] 2>/dev/null && return 0
+   fi
+   return 1
+ }
+@@ -85,7 +85,7 @@ for _ in 1 2 3 4 5 6 7 8; do
+     prev_agent=
+   fi
+   [ "$agents" -gt 1 ] && exit 0        # a second agent above mine: I am a worker, not the pane's agent
+-  case "$base" in login | agterm) break ;; esac # reached the pane boundary
++  case "$base" in login | ngterm) break ;; esac # reached the pane boundary
+   p=$ppid
+ done
+ 
+diff --git a/agterm-codex-status.sh b/ngterm-codex-status.sh
+similarity index 83%
+rename from agterm-codex-status.sh
+rename to ngterm-codex-status.sh
+index 89ffaf0..a9543b7 100755
+--- a/agterm-codex-status.sh
++++ b/ngterm-codex-status.sh
+@@ -1,26 +1,26 @@
+ #!/usr/bin/env bash
+-# Codex lifecycle hook installed by agterm's Help ▸ Install Agent Status Hooks command.
++# Codex lifecycle hook installed by ngterm's Help ▸ Install Agent Status Hooks command.
+ #
+ # Codex fires PermissionRequest before Auto Review decides whether a person must approve. Treating
+ # that raw event as blocked therefore false-flags automatically reviewed tools. This hook keeps the
+-# agent-specific workaround inside the installed hook package: one watcher per agterm pane reads the
++# agent-specific workaround inside the installed hook package: one watcher per ngterm pane reads the
+ # live visible footer for dialogs, while Stop checks the final assistant message for a question.
+ set -u
+ 
+-[ -n "${AGTERM_SESSION_ID:-}" ] || exit 0
++[ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+ 
+ action=${1:-}
+ [ -n "$action" ] || exit 0
+ shift
+ 
+ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+-status_wrapper=${AGTERM_STATUS_WRAPPER:-"$script_dir/agterm-agent-status.sh"}
++status_wrapper=${NGTERM_STATUS_WRAPPER:-"$script_dir/ngterm-agent-status.sh"}
+ 
+ pane_args=()
+-[ -n "${AGTERM_PANE_ID:-}" ] && pane_args+=(--pane-id "$AGTERM_PANE_ID")
+-[ -n "${AGTERM_PANE:-}" ] && pane_args+=(--pane "$AGTERM_PANE")
++[ -n "${NGTERM_PANE_ID:-}" ] && pane_args+=(--pane-id "$NGTERM_PANE_ID")
++[ -n "${NGTERM_PANE:-}" ] && pane_args+=(--pane "$NGTERM_PANE")
+ socket_args=()
+-[ -n "${AGTERM_SOCKET:-}" ] && socket_args=(--socket "$AGTERM_SOCKET")
++[ -n "${NGTERM_SOCKET:-}" ] && socket_args=(--socket "$NGTERM_SOCKET")
+ 
+ report_status() {
+   "$status_wrapper" "$@" >/dev/null 2>&1 || true
+@@ -28,7 +28,7 @@ report_status() {
+ 
+ assistant_message_contains_question() {
+   local message prose question quoted_mark
+-  # agterm-rs's Linux changes to this script: with no plutil, python3 or jq reads the payload's field, and awk, sed,
++  # ngterm's Linux changes to this script: with no plutil, python3 or jq reads the payload's field, and awk, sed,
+   # tr and tail are found on PATH (NixOS, Guix and a non-merged /usr have no /usr/bin copies)
+   if [ -x /usr/bin/plutil ]; then
+     message=$(/usr/bin/plutil -extract last_assistant_message raw -o - - 2>/dev/null) || return 1
+@@ -59,21 +59,21 @@ sys.stdout.write(value)
+ }
+ 
+ read_visible_screen() {
+-  "${AGTERMCTL:-ngtermctl}" session text \
+-    --target "$AGTERM_SESSION_ID" \
++  "${NGTERMCTL:-ngtermctl}" session text \
++    --target "$NGTERM_SESSION_ID" \
+     "${socket_args[@]+"${socket_args[@]}"}" \
+     "${pane_args[@]+"${pane_args[@]}"}" 2>/dev/null
+ }
+ 
+ watch_file_path() {
+-  if [ -n "${AGTERM_CODEX_WATCH_FILE:-}" ]; then
+-    printf '%s' "$AGTERM_CODEX_WATCH_FILE"
++  if [ -n "${NGTERM_CODEX_WATCH_FILE:-}" ]; then
++    printf '%s' "$NGTERM_CODEX_WATCH_FILE"
+     return
+   fi
+   local key pane_key
+-  pane_key=${AGTERM_PANE_ID:-${AGTERM_PANE:-left}}
+-  key=$(printf '%s-%s' "$AGTERM_SESSION_ID" "$pane_key" | tr -c 'A-Za-z0-9._-' '_')
+-  printf '%s/agterm-codex-watch-%s-%s' "${TMPDIR:-/tmp}" "${UID:-0}" "$key"
++  pane_key=${NGTERM_PANE_ID:-${NGTERM_PANE:-left}}
++  key=$(printf '%s-%s' "$NGTERM_SESSION_ID" "$pane_key" | tr -c 'A-Za-z0-9._-' '_')
++  printf '%s/ngterm-codex-watch-%s-%s' "${TMPDIR:-/tmp}" "${UID:-0}" "$key"
+ }
+ 
+ stop_watcher() {
+@@ -92,8 +92,8 @@ watch_for_blocker() {
+   local token=${1:-} token_file=${2:-}
+   [ -n "$token" ] && [ -n "$token_file" ] || return 0
+ 
+-  local max_checks=${AGTERM_CODEX_WATCH_MAX_CHECKS:-21600}
+-  local interval=${AGTERM_CODEX_WATCH_INTERVAL:-0.5}
++  local max_checks=${NGTERM_CODEX_WATCH_MAX_CHECKS:-21600}
++  local interval=${NGTERM_CODEX_WATCH_INTERVAL:-0.5}
+   case "$max_checks" in ''|*[!0-9]*) max_checks=21600 ;; esac
+ 
+   local checks=0 prompt_was_visible=0 current_token screen footer
+diff --git a/opencode/agterm-status.js b/opencode/ngterm-status.js
+similarity index 94%
+rename from opencode/agterm-status.js
+rename to opencode/ngterm-status.js
+index c4001bf..64f7a23 100644
+--- a/opencode/agterm-status.js
++++ b/opencode/ngterm-status.js
+@@ -1,7 +1,7 @@
+-// agterm-opencode-status-plugin
++// ngterm-opencode-status-plugin
+ //
+-// OpenCode lifecycle plugin installed by agterm's Help ▸ Install Agent Status Hooks… command.
+-// Reports agent status through the installed agterm wrapper; a clean no-op outside agterm.
++// OpenCode lifecycle plugin installed by ngterm's Help ▸ Install Agent Status Hooks… command.
++// Reports agent status through the installed ngterm wrapper; a clean no-op outside ngterm.
+ //
+ // IMPORTANT: this module must export ONLY plugin function(s). OpenCode's legacy loader treats
+ // every export as a plugin and throws "Plugin export is not a function" on non-functions.
+@@ -29,7 +29,7 @@ const ABORT_ERROR_NAMES = new Set(["MessageAbortedError", "AbortError"]);
+ const OVERFLOW_ERROR_NAME = "ContextOverflowError";
+ 
+ function defaultWrapperPath() {
+-  return join(homedir(), ".config", "ngterm", "agent-status", "agterm-agent-status.sh");
++  return join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
+ }
+ 
+ function errorName(error) {
+@@ -84,7 +84,7 @@ function spawnReport(wrapper, args) {
+  * OpenCode plugin entry. Named export — OpenCode loads plugins from ~/.config/opencode/plugins/.
+  * This must remain the only export from this file.
+  *
+- * Every session of one OpenCode instance reports into the SAME agterm pane, so the three Sets below
++ * Every session of one OpenCode instance reports into the SAME ngterm pane, so the three Sets below
+  * track them together rather than per-session:
+  * - `active`: sessionIDs that have seen busy/retry. Idle for one id is ignored until that id was
+  *   busy; COMPLETED fires only when the set is empty after removing the id, so a task subagent's
+@@ -97,12 +97,12 @@ function spawnReport(wrapper, args) {
+  *   event — busy means auto-compaction resumed (no blocked), idle means the turn ended (blocked).
+  * Abort/interrupt is never latched, so Esc ends on completed --auto-reset, which self-clears.
+  */
+-export const AgtermStatusPlugin = async () => {
+-  if (!process.env.AGTERM_SESSION_ID) {
++export const NgtermStatusPlugin = async () => {
++  if (!process.env.NGTERM_SESSION_ID) {
+     return {};
+   }
+ 
+-  const wrapper = process.env.AGTERM_STATUS_WRAPPER || defaultWrapperPath();
++  const wrapper = process.env.NGTERM_STATUS_WRAPPER || defaultWrapperPath();
+   const enqueue = createReportQueue((args) => spawnReport(wrapper, args));
+   const active = new Set();
+   const errored = new Set();
+diff --git a/opencode/agterm-v2/tui.js b/opencode/ngterm-v2/tui.js
+similarity index 95%
+rename from opencode/agterm-v2/tui.js
+rename to opencode/ngterm-v2/tui.js
+index 3cd1a88..7171a63 100644
+--- a/opencode/agterm-v2/tui.js
++++ b/opencode/ngterm-v2/tui.js
+@@ -1,9 +1,9 @@
+-// agterm-opencode-v2-status-plugin
++// ngterm-opencode-v2-status-plugin
+ //
+-// OpenCode v2 CLI plugin installed by agterm's Help ▸ Install Agent Status Hooks… command.
+-// Reports agent status through the installed agterm wrapper; a clean no-op outside agterm.
++// OpenCode v2 CLI plugin installed by ngterm's Help ▸ Install Agent Status Hooks… command.
++// Reports agent status through the installed ngterm wrapper; a clean no-op outside ngterm.
+ //
+-// Runs in the terminal client, not the shared server: only the client has this pane's AGTERM_* env.
++// Runs in the terminal client, not the shared server: only the client has this pane's NGTERM_* env.
+ 
+ import { spawn } from "node:child_process";
+ import { homedir } from "node:os";
+@@ -15,7 +15,7 @@ const COMPLETED = ["completed", "--auto-reset"];
+ const IDLE = ["idle"];
+ 
+ function defaultWrapperPath() {
+-  return join(homedir(), ".config", "ngterm", "agent-status", "agterm-agent-status.sh");
++  return join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
+ }
+ 
+ /** Serialize reports so a slow spawn cannot reorder status; failures must never reject into OpenCode. */
+@@ -179,13 +179,13 @@ const EVENTS = new Set([
+  * `generation` keeps queued reports from a previous selection or plugin lifetime off this pane.
+  */
+ export default {
+-  id: "agterm.status",
++  id: "ngterm.status",
+   setup(ctx) {
+-    if (!process.env.AGTERM_SESSION_ID) {
++    if (!process.env.NGTERM_SESSION_ID) {
+       return;
+     }
+     const env = { ...process.env };
+-    const wrapper = env.AGTERM_STATUS_WRAPPER || defaultWrapperPath();
++    const wrapper = env.NGTERM_STATUS_WRAPPER || defaultWrapperPath();
+     let states = new Map();
+     let selected;
+     let generation = 0;
+diff --git a/pi/agterm-status.ts b/pi/ngterm-status.ts
+similarity index 74%
+rename from pi/agterm-status.ts
+rename to pi/ngterm-status.ts
+index ba60277..0a5bdf3 100644
+--- a/pi/agterm-status.ts
++++ b/pi/ngterm-status.ts
+@@ -1,18 +1,18 @@
+-// agterm-pi-status-extension
++// ngterm-pi-status-extension
+ //
+-// Pi lifecycle extension installed by agterm's Help ▸ Install Agent Status Hooks… command.
+-// It uses the installed agterm wrapper for session, pane, socket, and CLI resolution, so it is
+-// a harmless no-op outside agterm.
++// Pi lifecycle extension installed by ngterm's Help ▸ Install Agent Status Hooks… command.
++// It uses the installed ngterm wrapper for session, pane, socket, and CLI resolution, so it is
++// a harmless no-op outside ngterm.
+ 
+ import { homedir } from "node:os";
+ import { join } from "node:path";
+ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ 
+ export default function (pi: ExtensionAPI) {
+-  const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "agterm-agent-status.sh");
++  const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
+ 
+   async function report(args: string[]): Promise<void> {
+-    if (!process.env.AGTERM_SESSION_ID) return;
++    if (!process.env.NGTERM_SESSION_ID) return;
+     try {
+       await pi.exec(wrapper, args, { timeout: 1_000 });
+     } catch {
+diff --git a/shell/integration.fish b/shell/integration.fish
+index f7490bb..41e2cf6 100644
+--- a/shell/integration.fish
++++ b/shell/integration.fish
+@@ -1,49 +1,49 @@
+-# agterm-agent-status — shell integration for fish.
+-# Sets the agterm session's agent-status indicator to `active` while a coding
++# ngterm-agent-status — shell integration for fish.
++# Sets the ngterm session's agent-status indicator to `active` while a coding
+ # agent runs as a foreground command, and back to `idle` at the next prompt.
+ # Source this from your ~/.config/fish/config.fish.
+ #
+ # Which commands count as agents is a regex, override before sourcing to taste:
+-#   set -gx AGTERM_AGENT_RE '^(gemini|cursor-agent|my-agent)([[:space:]]|$)'
++#   set -gx NGTERM_AGENT_RE '^(gemini|cursor-agent|my-agent)([[:space:]]|$)'
+ #
+ # Claude Code, Codex, Pi, and OpenCode are intentionally NOT in the default list —
+ # their own hooks/extensions/plugins drive finer per-turn state, which the coarse
+ # process-level active/idle here would only fight. Add any of them here if you
+ # rely on the shell integration alone for it.
+ #
+-# Every entry point is best-effort and a clean no-op outside agterm (guarded by
+-# $AGTERM_SESSION_ID), so sourcing it from a non-agterm shell does nothing.
++# Every entry point is best-effort and a clean no-op outside ngterm (guarded by
++# $NGTERM_SESSION_ID), so sourcing it from a non-ngterm shell does nothing.
+ 
+-if not set -q AGTERM_SESSION_ID
++if not set -q NGTERM_SESSION_ID
+     return 0 2>/dev/null
+ end
+ 
+-# Locate agterm-agent-status.sh relative to this file
++# Locate ngterm-agent-status.sh relative to this file
+ set -l _ags_dir (dirname (dirname (status filename)))
+-if not set -q AGTERM_AGENT_BIN
+-    set -g AGTERM_AGENT_BIN "$_ags_dir/agterm-agent-status.sh"
++if not set -q NGTERM_AGENT_BIN
++    set -g NGTERM_AGENT_BIN "$_ags_dir/ngterm-agent-status.sh"
+ end
+ 
+ # exported, unlike the shell-local state below: the Claude adapter reads an overridden value from
+ # its process environment, and a `set -g` would keep it invisible outside this shell. BOTH branches
+ # export — the one carrying an override set before sourcing (the value the adapter needs, and the
+ # form this file documented as `set -g` until now) as much as the default
+-if set -q AGTERM_AGENT_RE
+-    set -gx AGTERM_AGENT_RE $AGTERM_AGENT_RE
++if set -q NGTERM_AGENT_RE
++    set -gx NGTERM_AGENT_RE $NGTERM_AGENT_RE
+ else
+-    set -gx AGTERM_AGENT_RE '^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)'
++    set -gx NGTERM_AGENT_RE '^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)'
+ end
+ 
+ function _ags_preexec --on-event fish_preexec
+-    if string match -r -q $AGTERM_AGENT_RE $argv[1]
+-        $AGTERM_AGENT_BIN active --blink
++    if string match -r -q $NGTERM_AGENT_RE $argv[1]
++        $NGTERM_AGENT_BIN active --blink
+         set -g _ags_active 1
+     end
+ end
+ 
+ function _ags_precmd --on-event fish_prompt
+     if set -q _ags_active
+-        $AGTERM_AGENT_BIN idle
++        $NGTERM_AGENT_BIN idle
+         set -e _ags_active
+     end
+ end
+diff --git a/shell/integration.sh b/shell/integration.sh
+index 0419e93..f05913b 100755
+--- a/shell/integration.sh
++++ b/shell/integration.sh
+@@ -1,23 +1,23 @@
+-# agterm-agent-status — shell integration for bash and zsh.
+-# Sets the agterm session's agent-status indicator to `active` while a coding
++# ngterm-agent-status — shell integration for bash and zsh.
++# Sets the ngterm session's agent-status indicator to `active` while a coding
+ # agent runs as a foreground command, and back to `idle` at the next prompt.
+ # Source this from your ~/.zshrc and/or ~/.bashrc.
+ #
+ # Which commands count as agents is a regex, override before sourcing to taste:
+-#   export AGTERM_AGENT_RE='^(gemini|cursor-agent|my-agent)([[:space:]]|$)'
++#   export NGTERM_AGENT_RE='^(gemini|cursor-agent|my-agent)([[:space:]]|$)'
+ #
+ # Claude Code, Codex, Pi, and OpenCode are intentionally NOT in the default list —
+ # their own hooks/extensions/plugins drive finer per-turn state, which the coarse
+ # process-level active/idle here would only fight. Add any of them here if you
+ # rely on the shell integration alone for it.
+ #
+-# Every entry point is best-effort and a clean no-op outside agterm (guarded by
+-# $AGTERM_SESSION_ID), so sourcing it from a non-agterm shell does nothing.
++# Every entry point is best-effort and a clean no-op outside ngterm (guarded by
++# $NGTERM_SESSION_ID), so sourcing it from a non-ngterm shell does nothing.
+ 
+-[ -n "${AGTERM_SESSION_ID:-}" ] || return 0 2>/dev/null
++[ -n "${NGTERM_SESSION_ID:-}" ] || return 0 2>/dev/null
+ 
+-# Locate agterm-agent-status.sh relative to this file (layout is preserved on
+-# install: shell/integration.sh sits next to agterm-agent-status.sh's dir).
++# Locate ngterm-agent-status.sh relative to this file (layout is preserved on
++# install: shell/integration.sh sits next to ngterm-agent-status.sh's dir).
+ if [ -n "${ZSH_VERSION:-}" ]; then
+   _ags_self="${(%):-%x}"
+   _ags_dir="${_ags_self:a:h:h}"
+@@ -25,15 +25,15 @@ else
+   _ags_self="${BASH_SOURCE[0]}"
+   _ags_dir="$(cd "$(dirname "$_ags_self")/.." >/dev/null 2>&1 && pwd)"
+ fi
+-: "${AGTERM_AGENT_BIN:=$_ags_dir/agterm-agent-status.sh}"
+-: "${AGTERM_AGENT_RE:=^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)}"
++: "${NGTERM_AGENT_BIN:=$_ags_dir/ngterm-agent-status.sh}"
++: "${NGTERM_AGENT_RE:=^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)}"
+ 
+ if [ -n "${ZSH_VERSION:-}" ]; then
+   autoload -Uz add-zsh-hook
+   # the redirect stays on the match, not the whole hook: an override valid as the PCRE fish and
+   # RE_MATCH_PCRE zsh accept can be invalid here, and zsh prints the compile error once per prompt
+-  _ags_preexec() { [[ "$1" =~ $AGTERM_AGENT_RE ]] 2>/dev/null && { "$AGTERM_AGENT_BIN" active --blink; _ags_active=1; }; }
+-  _ags_precmd()  { [[ -n "${_ags_active:-}" ]] && { "$AGTERM_AGENT_BIN" idle; unset _ags_active; }; }
++  _ags_preexec() { [[ "$1" =~ $NGTERM_AGENT_RE ]] 2>/dev/null && { "$NGTERM_AGENT_BIN" active --blink; _ags_active=1; }; }
++  _ags_precmd()  { [[ -n "${_ags_active:-}" ]] && { "$NGTERM_AGENT_BIN" idle; unset _ags_active; }; }
+   add-zsh-hook preexec _ags_preexec
+   add-zsh-hook precmd  _ags_precmd
+ 
+@@ -42,12 +42,12 @@ elif [ -n "${BASH_VERSION:-}" ]; then
+     local cmd="${1:-$BASH_COMMAND}"               # bash-preexec passes the command as $1; a raw DEBUG trap uses $BASH_COMMAND
+     [ -n "${COMP_LINE:-}" ] && return             # ignore tab-completion
+     case "$cmd" in _ags_*) return ;; esac
+-    if [[ "$cmd" =~ $AGTERM_AGENT_RE ]] 2>/dev/null; then
+-      "$AGTERM_AGENT_BIN" active --blink
++    if [[ "$cmd" =~ $NGTERM_AGENT_RE ]] 2>/dev/null; then
++      "$NGTERM_AGENT_BIN" active --blink
+       _ags_active=1
+     fi
+   }
+-  _ags_precmd() { [ -n "${_ags_active:-}" ] && { "$AGTERM_AGENT_BIN" idle; unset _ags_active; }; }
++  _ags_precmd() { [ -n "${_ags_active:-}" ] && { "$NGTERM_AGENT_BIN" idle; unset _ags_active; }; }
+ 
+   if [ -n "${bash_preexec_imported:-}${__bp_imported:-}" ]; then
+     # bash-preexec is active: register into its additive arrays so we don't clobber other consumers
+@@ -59,7 +59,7 @@ elif [ -n "${BASH_VERSION:-}" ]; then
+     case "$(trap -p DEBUG 2>/dev/null)" in
+       "")             trap '_ags_preexec' DEBUG ;;   # nothing there: safe to install
+       *_ags_preexec*) : ;;                            # already ours: idempotent
+-      *) printf '%s\n' "agterm agent-status: an existing bash DEBUG trap is set; skipping the active-state hook (use bash-preexec, or wire a preexec yourself)." >&2 ;;
++      *) printf '%s\n' "ngterm agent-status: an existing bash DEBUG trap is set; skipping the active-state hook (use bash-preexec, or wire a preexec yourself)." >&2 ;;
+     esac
+     # precmd via PROMPT_COMMAND is additive and safe regardless of any DEBUG trap
+     case "${PROMPT_COMMAND:-}" in

@@ -1,7 +1,7 @@
-# ngterm cookbook
+# agterm cookbook
 
-The cookbook is a directory of installable `ngtermctl` workflows kept in the ngterm repository, one
-directory per recipe. It is NOT bundled with this skill, so unless the session sits in an ngterm
+The cookbook is a directory of installable `ngtermctl` workflows kept in the agterm repository, one
+directory per recipe. It is NOT bundled with this skill, so unless the session sits in an agterm
 checkout it has to be fetched.
 
 Two uses, same acquisition path:
@@ -27,7 +27,7 @@ download, which is one archive fetch, not one per file — ask before it.
 
 Fetch `https://raw.githubusercontent.com/umputun/agterm/master/cookbook/README.md` and report it as it
 stands. It groups recipes by what they
-are for and gives each one's minimum ngterm version and its dependencies. Answer "what can I install"
+are for and gives each one's minimum agterm version and its dependencies. Answer "what can I install"
 from that fetch alone — no recipe directory is needed to list.
 
 ## Acquiring one
@@ -50,14 +50,14 @@ you resolved in step 1, and nothing else is ever interpolated:
 6. Read the payload itself before copying or binding it. A script copied unread is a script the user
    runs on the next keypress.
 
-A local checkout is used instead only when the session sits in an actual ngterm repository: a git
+A local checkout is used instead only when the session sits in an actual agterm repository: a git
 repo whose root holds `cookbook/` alongside `agtermCore/` and `project.yml`, not merely a directory
 containing `cookbook/`. State the path and whether the tree is dirty before using anything out of it.
 A dirty tree is not a blocker: testing a local edit is a normal case.
 
 ## Requirements
 
-Every recipe states a minimum ngterm version. `ngtermctl version` reports the version of the app
+Every recipe states a minimum agterm version. `ngtermctl version` reports the version of the app
 serving the socket — but **address the socket explicitly**, because `ngtermctl` never reads
 `NGTERM_SOCKET` and a bare invocation resolves the default path, which may be a DIFFERENT app than the
 one that spawned this session:

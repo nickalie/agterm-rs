@@ -17,7 +17,9 @@
 //!   [`ngterm_session::launch::login_shell`] is a full path, often under `C:\Program Files`), anything else (the
 //!   config's `command`) is split on whitespace as Ghostty splits it, quotes and all. No shell
 //!   integration is injected there (the zsh, bash and fish ones are POSIX shells'); `PATH` takes `;`.
-//! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed; the terminal
+//! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed, and every inherited
+//!   `AGTERM_*` and `ZMX_*` variable (an agterm or its zmx the app was started under, which `agtermctl`, its hooks and
+//!   the agents in the pane would otherwise act on; the app's own `NGTERM_*` ones stay); the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
 //!   ([`ngterm_core::live::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
 //!   own variables; `PWD` for a working directory. On Windows, whose names ignore case, a later step's key replaces
@@ -77,6 +79,10 @@ const SYSTEM_RESOURCES: &str = "/usr/share/ghostty";
 /// Variables a pane never inherits from the app (libghostty's own log switch, and VTE's, which would make programs
 /// take the terminal for a VTE one).
 const NOT_INHERITED: [&str; 2] = ["GHOSTTY_LOG", "VTE_VERSION"];
+/// The prefixes of the variables a pane never inherits from the app: an outer agterm's pane identity and socket, and
+/// its zmx session's, which name another terminal (the session server strips the same from its own environment, with
+/// `NGTERM_` besides, `ngterm_session::server::spawn`). Compared ignoring case where names do (Windows).
+const FOREIGN_PREFIXES: [&str; 2] = ["AGTERM_", "ZMX_"];
 /// The largest `input = path:` file libghostty sends (10 MB).
 const INPUT_FILE_LIMIT: u64 = 10 * 1024 * 1024;
 
@@ -165,6 +171,9 @@ impl Host {
         let mut vars = Vars::default();
         for name in NOT_INHERITED {
             vars.remove(name);
+        }
+        for name in foreign_names(env, vars.fold_case) {
+            vars.remove(&name);
         }
         self.identity(env, &mut vars);
         match self.shell_features.env_value(self.cursor_blink) {
@@ -380,6 +389,28 @@ enum Integration {
     Detect,
     /// As this shell's, whatever the program's name.
     As(LoginShell),
+}
+
+/// The names of `env` under one of [`FOREIGN_PREFIXES`] (ignoring case when `ignore_case`), sorted.
+fn foreign_names(env: &dyn Env, ignore_case: bool) -> Vec<String> {
+    let mut names: Vec<String> = env
+        .names()
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| {
+            FOREIGN_PREFIXES.iter().any(|prefix| {
+                name.get(..prefix.len()).is_some_and(|start| {
+                    if ignore_case {
+                        start.eq_ignore_ascii_case(prefix)
+                    } else {
+                        start == *prefix
+                    }
+                })
+            })
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 /// Variables set over the app's environment, and removed from it. Where names ignore case (Windows), a key replaces
@@ -948,6 +979,124 @@ mod tests {
             &set(&kitty.prepare(&Launch::default(), &env)),
             &[("TERM", "xterm-kitty")],
         );
+    }
+
+    /// An app started inside an outer agterm's pane, which runs on its zmx: its environment.
+    fn inside_an_outer_agterm() -> MapEnv {
+        MapEnv::new()
+            .with("AGTERM_ENABLED", "1")
+            .with("AGTERM_SESSION_ID", "OUTER")
+            .with("AGTERM_SOCKET", "/outer/agterm.sock")
+            .with("ZMX_SESSION", "outer")
+            .with("NGTERM_STATE_DIR", "/dev/state")
+            .with("NGTERM_SESSION_ID", "INHERITED")
+            .with("PATH", "/usr/bin")
+    }
+
+    /// A session pane's launch: its `NGTERM_*` identity, then `extra`.
+    fn session_pane(extra: &[(&str, &str)]) -> Launch {
+        Launch {
+            env: [
+                ("NGTERM_ENABLED", "1"),
+                ("NGTERM_SESSION_ID", "PANE"),
+                ("NGTERM_SOCKET", "/dev/ngterm.sock"),
+            ]
+            .iter()
+            .chain(extra)
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect(),
+            ..Launch::default()
+        }
+    }
+
+    #[test]
+    fn an_outer_agterms_and_its_zmxs_variables_reach_no_pane() {
+        let env = inside_an_outer_agterm();
+        let pane = session_pane;
+        let prepared = host(None).prepare(&pane(&[]), &env);
+        // first, after the two named ones (the terminal identity's removals follow)
+        assert_eq!(
+            removed(&prepared)[..6],
+            [
+                "GHOSTTY_LOG",
+                "VTE_VERSION",
+                "AGTERM_ENABLED",
+                "AGTERM_SESSION_ID",
+                "AGTERM_SOCKET",
+                "ZMX_SESSION"
+            ]
+        );
+        let vars = set(&prepared);
+        expect(
+            &vars,
+            &[
+                ("NGTERM_ENABLED", "1"),
+                ("NGTERM_SESSION_ID", "PANE"),
+                ("NGTERM_SOCKET", "/dev/ngterm.sock"),
+            ],
+        );
+        assert!(
+            !vars
+                .keys()
+                .any(|key| key.starts_with("AGTERM_") || key.starts_with("ZMX_"))
+        );
+        // the app's own variables are inherited: a dev instance's state dir keeps `ngtermctl` on its socket
+        assert!(!removed(&prepared).contains(&"NGTERM_STATE_DIR".to_owned()));
+        // a later step's own setting wins
+        let config = Host {
+            env: vec![("ZMX_SESSION".to_owned(), "config".to_owned())],
+            ..host(None)
+        };
+        let prepared = config.prepare(&pane(&[("AGTERM_SOCKET", "launch")]), &env);
+        expect(
+            &set(&prepared),
+            &[("ZMX_SESSION", "config"), ("AGTERM_SOCKET", "launch")],
+        );
+        assert!(
+            !removed(&prepared)
+                .iter()
+                .any(|key| key == "ZMX_SESSION" || key == "AGTERM_SOCKET")
+        );
+    }
+
+    #[test]
+    fn a_live_panes_session_is_created_without_an_outer_agterms_variables() {
+        let dir = std::env::temp_dir().join("ngterm-live-test");
+        let dir = dir.to_string_lossy();
+        let live = host(None).prepare(
+            &session_pane(&[("NGTERM_LIVE_DIR", &dir), ("NGTERM_LIVE_SESSION", "")]),
+            &inside_an_outer_agterm(),
+        );
+        let attach = LiveAttach {
+            executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
+            session: "ngterm-0123".to_owned(),
+            argv: Vec::new(),
+        };
+        let app: Vec<(String, String)> = [
+            ("AGTERM_SESSION_ID", "OUTER"),
+            ("ZMX_SESSION", "outer"),
+            ("NGTERM_STATE_DIR", "/dev/state"),
+            ("PATH", "/usr/bin"),
+        ]
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .to_vec();
+        let session = crate::session_io::resolve(&attach, &live.command, app, None).unwrap();
+        let lookup = |name| ngterm_session::cli::variable(&session.spec.env, name);
+        assert_eq!(lookup("AGTERM_SESSION_ID"), None);
+        assert_eq!(lookup("ZMX_SESSION"), None);
+        assert_eq!(lookup("NGTERM_STATE_DIR"), Some("/dev/state"));
+        assert_eq!(lookup("NGTERM_SESSION_ID"), Some("PANE"));
+    }
+
+    #[test]
+    fn foreign_variables_are_matched_ignoring_case_where_names_do() {
+        let env = MapEnv::new()
+            .with("agterm_socket", "a")
+            .with("Zmx_Dir", "b")
+            .with("AGTERMX", "c")
+            .with("NGTERM_SOCKET", "d");
+        assert_eq!(foreign_names(&env, true), ["Zmx_Dir", "agterm_socket"]);
+        assert!(foreign_names(&env, false).is_empty());
     }
 
     #[test]

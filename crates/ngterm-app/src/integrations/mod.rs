@@ -13,8 +13,8 @@
 //! agents' own configs live where upstream puts them.
 //!
 //! The payloads under the repository's `resources/` are upstream v0.36.0's `agterm/Resources/agent-status` and
-//! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`; the skill keeps its directory,
-//! `resources/skills/ngterm`), with these deviations:
+//! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
+//! `resources/skills/ngterm` (the skill's directory renamed with the skill), with these deviations:
 //!
 //! - the Codex adapter reads the hook payload with `python3` or `jq` where macOS has `plutil`;
 //! - the Claude adapter reads a `completed` call's payload and reports a `Stop` whose `background_tasks` lists work in
@@ -22,12 +22,20 @@
 //!   `SessionEnd` → `completed --auto-reset`, so that claim cannot outlive the agent ([`hooks_config`]);
 //! - every script and plugin calls `ngtermctl` where upstream's calls `agtermctl` (the wrappers' default, their
 //!   comments and the shell integration's);
+//! - the agent-status package is under this build's names: its wrappers, Pi extension and `OpenCode` plugins are
+//!   `ngterm-*` (`ngterm-agent-status.sh`, `ngterm-claude-status.sh`, `ngterm-codex-status.sh`, `ngterm-status.ts`,
+//!   `ngterm-status.js`, `ngterm-v2/tui.js`, whose plugin id is `ngterm.status`), their ownership markers and the rc
+//!   and Codex block markers name ngterm (`// ngterm-pi-status-extension`, `# >>> ngterm agent-status >>>`, …), and
+//!   the variables they read and set are `NGTERM_*` (`NGTERM_SESSION_ID`, `NGTERM_PANE_ID`, `NGTERM_SOCKET`,
+//!   `NGTERMCTL`, `NGTERM_AGENT_BIN`, `NGTERM_AGENT_RE`, …); a reinstall moves an install under the old names onto
+//!   these ([`hooks::Leftovers`]);
 //! - the Pi extension and both `OpenCode` plugins call the wrapper in `~/.config/ngterm/agent-status`;
 //! - the skill speaks of the `live` group and the attach contract's `NGTERM_LIVE_*` variables where upstream's names
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a
-//!   remote attach included (`remote::tree::REMOTE_CLI`): all are patches over upstream's tree
-//!   (`build/patches/skill-ngterm`).
+//!   remote attach included (`remote::tree::REMOTE_CLI`), and the rest of it is under this build's identity too (its
+//!   prose, `NGTERM_*` variables, HTML bridge, installed file names, docs and bug links: `0004-ngterm-identity.patch`):
+//!   all are patches over upstream's tree (`build/patches/skill-ngterm`).
 
 pub mod cli;
 pub mod files;

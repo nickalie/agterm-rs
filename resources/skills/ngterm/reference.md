@@ -1721,8 +1721,8 @@ a terminal: open `ghostty.conf` in `$EDITOR`, then `ngtermctl config reload`.
 
 ## theme
 
-The app's out-of-the-box default theme is the bundled **ngterm** theme (a fresh install opens on it).
-A separate **default ghostty** entry means "no theme" — ghostty's own built-in colors (`theme` absent).
+The app's out-of-the-box default is the **default ghostty** entry: "no theme", ghostty's own built-in
+colors (`theme` absent); a fresh install opens on it. The bundled themes are Ghostty's catalog.
 
 `ngtermctl theme list` — list the bundled theme names; returns `result.themes` (the names),
 `result.theme` (the current plain theme, absent = ghostty's built-in / "default ghostty"), and

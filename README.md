@@ -22,7 +22,10 @@ Linux; the terminal core, the pane core and the live-session server under it (li
 - The binaries are `ngterm`, `ngtermctl` and `ngterm-session`, the crates `ngterm-*`, and every variable the app sets
   or reads is `NGTERM_*` (a pane's `NGTERM_SESSION_ID`, `NGTERM_SOCKET`, `NGTERM_PANE_ID`, the attach contract's
   `NGTERM_LIVE_*`; upstream's and the fork's are `AGTERM_*`). A reinstall of the agent-status hooks or the skill over
-  one made before the build took these names moves it onto them.
+  one made before the build took these names moves it onto them: the rc and Codex blocks, the Claude hooks, this
+  build's old Pi and OpenCode plugins (the fork's, at the same paths, stay) and the skill's marker. The old
+  `agterm-*` wrappers stay in the package, since shells started before the update and configs the merge could not
+  repoint still call them.
 - The CLI is `ngtermctl` (upstream's and the fork's is `agtermctl`), and the Help menu's installers use this build's
   names too: Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (the fork's
   `~/.local/bin/agtermctl` is left alone, and it resolves the fork's socket), and Install Agent Skill… installs the
@@ -32,7 +35,8 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
   (`resources/shell-integration/pwsh`), since Ghostty has none.
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
-  Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row).
+  Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
+  and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.
 - One behavior taken from the GTK fork instead of upstream: restore is lazy. A launch (or a window reopened from its
   file) spawns only each window's selected session; every other restored session starts its shell, re-runs its
   command or attaches to its live session once it is first shown (selected, zoomed, in the dashboard) or a command
@@ -340,8 +344,9 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   server, and the app offers the Live sessions reset.
 - Across the rename: a server from before the build took the name ngterm runs as `agterm-session`, its sessions named
   `agterm-<id>`; the handoff to `ngterm-session` renames them `ngterm-<id>`, so the panes find them. Their programs
-  keep the environment they started with (`AGTERM_*`), so agent status in a shell started before the update resumes
-  in its next shell. A one-time migration (`ngterm_core::live::LEGACY_NAME_PREFIX`).
+  keep the environment they started with (`AGTERM_*`), and the shells among them keep reporting agent status
+  through the old wrappers a reinstall leaves in place. A one-time migration
+  (`ngterm_core::live::LEGACY_NAME_PREFIX`).
 
 ## Test
 

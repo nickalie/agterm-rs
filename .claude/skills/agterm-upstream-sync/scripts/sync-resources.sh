@@ -4,13 +4,13 @@
 #   sync-resources.sh [--upstream DIR] [--check] [--patches DIR] OLD_TAG NEW_TAG
 #
 # Each copy gets upstream's own diff, applied with `git apply --directory`, so the Linux glue a copy carries (the
-# Codex adapter's python3/jq reader in ngterm-codex-status.sh, the Linux chords in ghostty-defaults.conf) survives
-# wherever upstream did not touch the same lines. Nothing is applied partially: a diff that does not apply cleanly
+# Linux chords in ghostty-defaults.conf) survives wherever upstream did not touch the same lines. Nothing is applied partially: a diff that does not apply cleanly
 # is left out whole, saved under --patches DIR (default: a temp dir, printed), and reported as `conflict` for a plan
 # task to merge by hand. --check applies nothing.
 #
 # A copy listed in PATCHED is instead upstream's NEW tree with the repository's own patches reapplied in order (the
-# bundled skill's `live` names, build/patches/skill-ngterm), so it carries nothing else: a patch that no longer
+# agent-status package's Linux glue and ngterm names, build/patches/agent-status; the bundled skill's `live` and
+# ngterm names, build/patches/skill-ngterm), so it carries nothing else, its renamed files included: a patch that no longer
 # applies is a `conflict` naming it, to be refreshed by hand. `--check TAG TAG` (the pinned tag twice) verifies that
 # such a copy still equals the pinned upstream tree plus its patches: `unchanged` when it does, `would-apply` when not.
 #
@@ -47,6 +47,7 @@ MAPPINGS=(
 
 # the repository's copy | its patch directory: the copy is upstream's NEW tree plus these patches, in name order
 PATCHED=(
+  "resources/agent-status|build/patches/agent-status"
   "resources/skills/ngterm|build/patches/skill-ngterm"
 )
 

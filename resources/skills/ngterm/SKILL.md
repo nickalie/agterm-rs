@@ -1,8 +1,8 @@
 ---
 name: ngterm
 description: >
-  Drive ngterm (ngterm in Rust, a GPUI terminal; this skill calls it ngterm throughout) via the ngtermctl CLI.
-  Use in an ngterm or ngterm session when asked to control it: create, rename, close, select or
+  Drive ngterm (upstream agterm in Rust, a GPUI terminal) via the ngtermctl CLI.
+  Use in an ngterm session when asked to control it: create, rename, close, select or
   reorder sessions and workspaces; split panes; toggle the scratch terminal; run overlay programs
   and read their exit status; create and show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
   post a HUD/caption or notification; show a picker or question dialog; show an image inline; type
@@ -14,7 +14,7 @@ description: >
   attaching a session from another Mac, cookbook recipes, running version, diagnosing
   problems and filing a bug or feature request.
 when_to_use: >
-  Trigger on: ngterm, ngtermctl, ngterm, NGTERM_SESSION_ID, and, from inside a session, plain requests such as
+  Trigger on: ngterm, ngtermctl, NGTERM_SESSION_ID, and, from inside a session, plain requests such as
   split the pane, close the overlay, show a message over the session, show a question dialog, ngtermctl ask,
   show an image inline, show this HTML page or artifact, make an HTML page or explainer for this and show
   it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, run my custom command, tell me when the selected session changes, attach a session from another Mac, copy this to the clipboard, what recipes are there,
@@ -637,8 +637,8 @@ with `--error-position POS` and `--error-pane left|right`; see
 **theme** — `theme list` (bundled themes, current marked `*`) · `theme set [name]` — set + persist the
 terminal theme app-wide, per slot: a NAME sets the light/single theme (a dark theme, if set, is kept);
 `theme set --dark <name>` sets the dark theme, which makes the terminal track the macOS Light/Dark
-appearance automatically; `theme set --dark none` stops tracking. The app default is the bundled
-**ngterm** theme; omit the name for ghostty's built-in default ("default ghostty"); an unknown name errors.
+appearance automatically; `theme set --dark none` stops tracking. The app default is ghostty's
+built-in colors ("default ghostty", no theme), which omitting the name restores; an unknown name errors.
 
 **restore** - `restore capture` - capture every pane's running command now, into the slot the quit-time
 capture fills, so an exit that never reaches a clean quit (a force quit, a crash, a hard reset) still

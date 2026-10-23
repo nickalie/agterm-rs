@@ -20,6 +20,13 @@
 //!   `could not read the live session screen of <name>`, `commands::surface`'s and `commands::typing`'s read and typing
 //!   refusals, `commands::restart_live`'s kill outcomes), which the suite asserts through its vocabulary
 //!   (`conformance/agterm_conformance/vocabulary.py`); only the fakes' own test reads a fake's text.
+//! - **Sessions named before the rename.** A server from before the build's rename whose update handoff failed still
+//!   holds the panes' sessions as `agterm-<id>` (`ngterm_core::live::LEGACY_NAME_PREFIX`). The host lists such a
+//!   session under the name its pane claims, `ngterm-<id>`, when no session of that name runs beside it
+//!   ([`live::stood_in_for`]), so the core's inventory, reap and prune count it as that pane's; a kill, screen read
+//!   or typing of `ngterm-<id>` that finds no such session is sent once more under the old name when the server lists
+//!   that one in its place ([`Client::legacy_stand_ins`]), a refusal being no unclear failure. A one-time migration,
+//!   removed with the prefix.
 //! - **The foreground job** of a killed session's shell is hung up by the server (`server::api`), so the host does not
 //!   sweep after a kill as `ZmxClient` did. A restart's own job calls ([`SessionHost::foreground_job`],
 //!   [`SessionHost::job_running`], [`SessionHost::end_job`]) read and signal this machine's process table directly
@@ -30,12 +37,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ngterm_core::live::support::is_executable_file;
+use ngterm_core::live::{self, support::is_executable_file};
 use ngterm_host::{HostError, KillOutcome, LiveScreen, LiveSessionRecord, ProcessRecord, SessionHost};
 
 use crate::client::{Client, ClientError, unexpected};
 use crate::job::{Signal, Sweeper};
-use crate::protocol::{ApiRequest, ApiResponse, KillResult};
+use crate::protocol::{ApiErrorKind, ApiRequest, ApiResponse, KillResult, SessionRecord};
 
 /// The session host over the server of one namespace.
 pub struct ServerHost {
@@ -89,6 +96,76 @@ impl ServerHost {
             Some(other) => Err(unexpected("a kill", &other)),
         }
     }
+
+    /// The kill of `names` ([`ServerHost::kill_names`]), each name the server found nothing of killed once more
+    /// under the old name it holds that session by ([`Client::legacy_stand_ins`]); the results keep the names asked.
+    fn kill_standing_in(&self, names: Vec<String>, force: bool) -> Result<Option<Vec<KillResult>>, ClientError> {
+        let gone = |result: &KillResult| result.outcome == crate::protocol::KillOutcome::Gone;
+        let Some(mut results) = self.kill_names(names, force)? else {
+            return Ok(None);
+        };
+        let missing: Vec<String> = results
+            .iter()
+            .filter(|result| gone(result))
+            .map(|result| result.name.clone())
+            .collect();
+        let stand_ins = self.client.legacy_stand_ins(&missing);
+        if stand_ins.is_empty() {
+            return Ok(Some(results));
+        }
+        let legacy = stand_ins.iter().map(|(_, legacy)| legacy.clone()).collect();
+        for again in self.kill_names(legacy, force)?.unwrap_or_default() {
+            let name = stand_ins
+                .iter()
+                .find(|(_, legacy)| *legacy == again.name)
+                .map(|(name, _)| name);
+            let result = results
+                .iter_mut()
+                .find(|result| Some(&result.name) == name && gone(result));
+            if let Some(result) = result {
+                result.outcome = again.outcome;
+            }
+        }
+        Ok(Some(results))
+    }
+
+    /// `call(name)`, and once more under the old name the server holds `name`'s session by
+    /// ([`Client::legacy_stand_in`]) when it answered that no session of `name` runs.
+    fn call_standing_in(
+        &self,
+        name: &str,
+        call: impl Fn(String) -> ApiRequest,
+    ) -> Result<Option<ApiResponse>, ClientError> {
+        match self.client.call(call(name.to_owned())) {
+            Err(ClientError::Api(error)) if error.kind == ApiErrorKind::NoSuchSession => {
+                match self.client.legacy_stand_in(name) {
+                    Some(legacy) => self.client.call(call(legacy)),
+                    None => Err(ClientError::Api(error)),
+                }
+            }
+            answer => answer,
+        }
+    }
+}
+
+/// `sessions` as their panes claim them: a session named before the rename under the name of the daemon it stands in
+/// for ([`live::stood_in_for`]).
+fn as_claimed(sessions: Vec<SessionRecord>) -> Vec<LiveSessionRecord> {
+    let renamed: Vec<Option<String>> = sessions
+        .iter()
+        .map(|session| live::stood_in_for(&session.name, sessions.iter().map(|listed| listed.name.as_str())))
+        .collect();
+    sessions
+        .into_iter()
+        .zip(renamed)
+        .map(|(session, renamed)| {
+            let mut record = LiveSessionRecord::from(session);
+            if let Some(renamed) = renamed {
+                record.name = renamed;
+            }
+            record
+        })
+        .collect()
 }
 
 /// `error` as the host's error for `operation` (`list`, `screen`, `type`), logged.
@@ -105,7 +182,7 @@ impl SessionHost for ServerHost {
     fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError> {
         match self.client.call(ApiRequest::List) {
             Ok(None) => Ok(Vec::new()),
-            Ok(Some(ApiResponse::Sessions(sessions))) => Ok(sessions.into_iter().map(Into::into).collect()),
+            Ok(Some(ApiResponse::Sessions(sessions))) => Ok(as_claimed(sessions)),
             Ok(Some(other)) => Err(failed("list", None, &unexpected("a list", &other))),
             Err(error) => Err(failed("list", None, &error)),
         }
@@ -113,7 +190,7 @@ impl SessionHost for ServerHost {
 
     /// One session killed; without a server, or without a session of that name, nothing was left to kill.
     fn kill(&self, name: &str, force: bool) -> KillOutcome {
-        match self.kill_names(vec![name.to_owned()], force) {
+        match self.kill_standing_in(vec![name.to_owned()], force) {
             Ok(None) => KillOutcome::StaleSocket,
             Ok(Some(results)) => results.into_iter().find(|result| result.name == name).map_or_else(
                 || KillOutcome::Failed(format!("the live session server answered no kill result for {name}")),
@@ -138,7 +215,7 @@ impl SessionHost for ServerHost {
         if unique.is_empty() {
             return true;
         }
-        match self.kill_names(unique, true) {
+        match self.kill_standing_in(unique, true) {
             Ok(None) => true,
             Ok(Some(results)) => {
                 let failed: Vec<&KillResult> = results
@@ -158,11 +235,7 @@ impl SessionHost for ServerHost {
     }
 
     fn screen(&self, name: &str, all: bool) -> Result<LiveScreen, HostError> {
-        let request = ApiRequest::Screen {
-            name: name.to_owned(),
-            all,
-        };
-        match self.client.call(request) {
+        match self.call_standing_in(name, |name| ApiRequest::Screen { name, all }) {
             Ok(Some(ApiResponse::Screen(screen))) => Ok(screen.into()),
             Ok(None) => Err(failed(
                 "screen",
@@ -176,11 +249,11 @@ impl SessionHost for ServerHost {
 
     /// `Ok` means the server queued the bytes, not that the program read them.
     fn type_input(&self, name: &str, bytes: &[u8]) -> Result<(), HostError> {
-        let request = ApiRequest::Type {
-            name: name.to_owned(),
+        let request = |name| ApiRequest::Type {
+            name,
             data: bytes.to_vec(),
         };
-        match self.client.call(request) {
+        match self.call_standing_in(name, request) {
             Ok(Some(ApiResponse::Done)) => Ok(()),
             Ok(None) => Err(failed(
                 "type",

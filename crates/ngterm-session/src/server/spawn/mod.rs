@@ -1130,6 +1130,7 @@ mod tests {
             ("PATH", "/usr/bin"),
             ("NGTERM_LIVE_DIR", "/tmp/ngterm-live-x"),
             ("NGTERM_SESSION_ID", "1"),
+            ("AGTERM_SOCKET", "/live/agterm.sock"),
             ("ZMX_SESSION", "s"),
             ("HOME", "/home/u"),
             ("XAGTERM_KEEP", "1"),
@@ -1149,6 +1150,9 @@ mod tests {
     fn variable_names_are_matched_ignoring_case_where_the_os_does() {
         assert!(is_stripped(OsStr::new("ngterm_live_dir"), true));
         assert!(is_stripped(OsStr::new("Zmx_Dir"), true));
+        assert!(is_stripped(OsStr::new("agterm_socket"), true));
+        assert!(!is_stripped(OsStr::new("agterm_socket"), false));
+        assert!(is_stripped(OsStr::new("AGTERM_SOCKET"), false));
         assert!(!is_stripped(OsStr::new("ngterm_live_dir"), false));
         assert!(is_stripped(OsStr::new("NGTERM_LIVE_DIR"), false));
         assert!(!is_stripped(OsStr::new("NGTERM"), true));

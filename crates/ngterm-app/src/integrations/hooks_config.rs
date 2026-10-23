@@ -33,8 +33,10 @@ pub const RC_MARKER_END: &str = "# <<< ngterm agent-status <<<";
 
 /// The markers, wrappers and Pi extension an install made before the build took its own name wrote (the fork's
 /// install wrote the same markers): a reinstall takes their blocks and entries over under the current names and
-/// removes the old files. A one-time migration: remove these, and what reads them, once no install from before the
-/// rename is left to migrate (the first reinstall past it has run).
+/// removes the old Pi extension and `OpenCode` plugins that are this build's; the old wrappers stay for the shells and
+/// configs that still call them (`hooks::LEGACY_PACKAGE_ENTRIES`). A one-time migration: remove these, and what reads
+/// them, once no install from before the rename is left to migrate (the first reinstall past it has run) and no shell
+/// or config from before it can still call the old wrappers.
 pub const LEGACY_RC_MARKER_BEGIN: &str = "# >>> agterm agent-status >>>";
 pub const LEGACY_RC_MARKER_END: &str = "# <<< agterm agent-status <<<";
 pub const LEGACY_WRAPPER_NAME: &str = "agterm-agent-status.sh";
@@ -42,6 +44,14 @@ pub const LEGACY_CODEX_WRAPPER_NAME: &str = "agterm-codex-status.sh";
 pub const LEGACY_CLAUDE_WRAPPER_NAME: &str = "agterm-claude-status.sh";
 pub const LEGACY_PI_EXTENSION_NAME: &str = "agterm-status.ts";
 pub const LEGACY_PI_EXTENSION_MARKER: &str = "// agterm-pi-status-extension";
+
+/// How the Pi extension and the `OpenCode` plugins this build installed before the rename name its script directory,
+/// `~/.config/ngterm/agent-status`: as the segments of their `join(homedir(), …)` call, or as one path. Upstream's and
+/// the fork's, under the same names and markers, name their own directory, so this tells ours from theirs.
+pub const LEGACY_PLUGIN_SCRIPT_DIRS: [&str; 2] = [
+    "\".config\", \"ngterm\", \"agent-status\"",
+    ".config/ngterm/agent-status",
+];
 
 /// The Claude Code hook events the merge installs, each with its matcher and the state (plus flags) it reports.
 /// `PostToolUse` re-asserts `active` after every tool, so a status returns to active when work resumes after a
